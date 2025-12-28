@@ -1,17 +1,27 @@
 from __future__ import annotations
-from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
-from app.ledger.models import SourceRegistry, EventLog, EventEntityIndex, AuditLog
-from app.core.security import verify_api_key
-from datetime import datetime, timezone
+
 import uuid
+from datetime import datetime, timezone
+
+from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
+
+from app.ledger.models import (
+    SourceRegistry,
+    EventLog,
+    EventEntityIndex,
+    AuditLog,
+)
+from app.core.security import verify_api_key
 
 
 class LedgerRepository:
     def __init__(self, db: Session):
         self.db = db
 
-    # -------- Source Registry --------
+    # -------------------------
+    # SOURCE / AUTH
+    # -------------------------
 
     def get_source_by_api_key(self, raw_api_key: str) -> SourceRegistry | None:
         sources = self.db.query(SourceRegistry).all()
@@ -24,7 +34,9 @@ class LedgerRepository:
         if not source.is_active:
             raise PermissionError("Source is disabled")
 
-    # -------- Audit --------
+    # -------------------------
+    # AUDIT
+    # -------------------------
 
     def audit(
         self,
@@ -39,38 +51,14 @@ class LedgerRepository:
             actor_id=actor_id,
             action=action,
             target=target,
-            at=datetime.utcnow(),
-        )
-        self.db.add(entry)
-        self.db.commit()
-
-class LedgerRepository:
-    def __init__(self, db: Session):
-        self.db = db
-
-    def get_source_by_api_key(self, raw_api_key: str) -> SourceRegistry | None:
-        # MVP O(n). Later replace with indexed lookup or HMAC key id.
-        sources = self.db.query(SourceRegistry).all()
-        for src in sources:
-            if verify_api_key(raw_api_key, src.api_key_hash):
-                return src
-        return None
-
-    def ensure_source_active(self, source: SourceRegistry):
-        if not source.is_active:
-            raise PermissionError("Source is disabled")
-
-    def audit(self, actor_type: str, actor_id: str, action: str, target: str | None = None):
-        entry = AuditLog(
-            id=str(uuid.uuid4()),
-            actor_type=actor_type,
-            actor_id=actor_id,
-            action=action,
-            target=target,
             at=datetime.now(timezone.utc),
         )
         self.db.add(entry)
         self.db.commit()
+
+    # -------------------------
+    # EVENT LEDGER (APPEND ONLY)
+    # -------------------------
 
     def insert_event_append_only(
         self,
@@ -86,10 +74,17 @@ class LedgerRepository:
         payload: dict,
     ) -> tuple[str, str]:
         """
-        Append-only insert.
-        Returns: (event_hash, status) where status in {"accepted", "duplicate"}.
+        Append-only insert with explicit idempotency and correct FK ordering.
         """
-        now = datetime.now(timezone.utc)
+
+        # 1) Explicit duplicate check
+        exists = (
+            self.db.query(EventLog)
+            .filter(EventLog.event_hash == event_hash)
+            .first()
+        )
+        if exists:
+            return event_hash, "duplicate"
 
         row = EventLog(
             event_hash=event_hash,
@@ -97,7 +92,6 @@ class LedgerRepository:
             source_id=source_id,
             classification=classification,
             occurred_at=occurred_at,
-            received_at=now,
             schema_version=schema_version,
             signature_valid=signature_valid,
             anchors_json=anchors,
@@ -105,18 +99,26 @@ class LedgerRepository:
         )
 
         try:
+            # 2) Insert parent row FIRST
             self.db.add(row)
-            # index anchors into event_entity_index
+            self.db.flush()  # <-- THIS IS THE CRITICAL FIX
+
+            # 3) Insert child index rows AFTER parent exists
             for k, v in anchors.items():
-                if v is None:
+                if not v:
                     continue
                 entity_key = f"{k}:{v}"
-                self.db.add(EventEntityIndex(event_hash=event_hash, entity_key=entity_key))
+                self.db.add(
+                    EventEntityIndex(
+                        event_hash=event_hash,
+                        entity_key=entity_key,
+                    )
+                )
 
+            # 4) Commit atomically
             self.db.commit()
             return event_hash, "accepted"
 
-        except IntegrityError:
-            # event_hash already exists => idempotent duplicate
+        except IntegrityError as e:
             self.db.rollback()
-            return event_hash, "duplicate"
+            raise RuntimeError(f"Ledger insert failed: {e}")
