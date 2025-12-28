@@ -1,72 +1,78 @@
 # app/campaign/engine.py
 from __future__ import annotations
 
-from datetime import datetime, timedelta
-from typing import Dict
+from datetime import datetime, timedelta, timezone
+from typing import List
 
 from sqlalchemy.orm import Session
 
 from app.campaign.repository import CampaignRepository
-from app.campaign.rules import derive_primary_keys, extract_entities_for_stats
+from app.campaign.detectors import Signal
 
 
-DEFAULT_WINDOW = timedelta(minutes=30)  # tune per key type later
+DEFAULT_WINDOW = timedelta(hours=6)  # MVP: campaign stays active if seen within this window
 
 
 class CampaignEngine:
-    def __init__(self, db: Session, *, window: timedelta = DEFAULT_WINDOW):
+    """
+    Stateful campaign updater.
+    - Applies one event's signals to Postgres
+    - Uses your existing repository + scoring
+    """
+
+    def __init__(self, db: Session):
         self.db = db
         self.repo = CampaignRepository(db)
-        self.window = window
 
-    def apply_event(
+    def apply_signals(
         self,
         *,
         event_hash: str,
         occurred_at: datetime,
-        anchors: Dict,
-    ) -> None:
-        decision = derive_primary_keys(anchors)
-        entities = extract_entities_for_stats(anchors)
+        signals: List[Signal],
+        window: timedelta = DEFAULT_WINDOW,
+    ) -> int:
+        now = datetime.now(timezone.utc)
+        updated = 0
 
-        # no primary keys => no campaign work
-        if not decision.primary_keys:
-            return
-
-        now = occurred_at  # use occurred_at as campaign time reference
-        for pk in decision.primary_keys:
-            # 1) find or create active campaign stream for this primary key
-            camp = self.repo.find_active_campaign(primary_key=pk, window=self.window, now=now)
-            if not camp:
-                camp = self.repo.create_campaign(
-                    type="INFRA_REUSE",
-                    primary_key=pk,
+        for sig in signals:
+            # 1) find or create campaign
+            campaign = self.repo.find_active_campaign(
+                primary_key=sig.primary_key,
+                window=window,
+                now=now,
+            )
+            if not campaign:
+                campaign = self.repo.create_campaign(
+                    type=sig.type,
+                    primary_key=sig.primary_key,
                     occurred_at=occurred_at,
                 )
 
-            # 2) attach event evidence (idempotent per campaign)
+            # 2) link event (idempotent)
             inserted = self.repo.upsert_campaign_event(
-                campaign_id=camp.id,
+                campaign_id=campaign.id,
                 event_hash=event_hash,
                 occurred_at=occurred_at,
             )
             if not inserted:
-                # same event already attached to this campaign
+                # already processed this event for this campaign
                 continue
 
-            # 3) update counters
-            self.repo.update_campaign_counters(campaign=camp, occurred_at=occurred_at)
-
-            # 4) upsert entities
-            for etype, ekey in entities:
+            # 3) update entities
+            for entity_type, entity_key in sig.entities:
                 self.repo.upsert_entity(
-                    campaign_id=camp.id,
-                    entity_type=etype,
-                    entity_key=ekey,
+                    campaign_id=campaign.id,
+                    entity_type=entity_type,
+                    entity_key=entity_key,
                     seen_at=occurred_at,
                 )
 
-            # 5) deterministic score + stats
-            self.repo.recompute_and_store_stats(campaign=camp)
+            # 4) counters + score
+            self.repo.update_campaign_counters(campaign=campaign, occurred_at=occurred_at)
+            self.repo.recompute_and_store_stats(campaign=campaign)
+
+            updated += 1
 
         self.db.commit()
+        return updated

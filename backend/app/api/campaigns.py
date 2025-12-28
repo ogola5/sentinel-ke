@@ -1,41 +1,42 @@
 # app/api/campaigns.py
 from __future__ import annotations
 
-from datetime import datetime, timedelta
 from typing import Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, HTTPException
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 
-from app.ledger.db import SessionLocal
+from app.ledger.db import get_db
 from app.campaign.models import Campaign, CampaignEvent, CampaignEntity
-
 
 router = APIRouter(prefix="/v1/campaigns", tags=["campaigns"])
 
 
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
-
+# -------------------------------------------------------------------
+# List campaigns (frontend list view)
+# -------------------------------------------------------------------
 @router.get("")
 def list_campaigns(
-    status: str = "active",
+    status: Optional[str] = Query(
+        default=None,
+        description="Filter by status: active | dormant | closed",
+    ),
     limit: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
 ):
+    q = db.query(Campaign)
+
+    if status:
+        q = q.filter(Campaign.status == status)
+
     rows = (
-        db.query(Campaign)
-        .filter(Campaign.status == status)
-        .order_by(Campaign.last_seen.desc())
+        q.order_by(Campaign.last_seen.desc())
         .limit(limit)
         .all()
     )
+
     return {
         "count": len(rows),
         "items": [
@@ -55,17 +56,44 @@ def list_campaigns(
     }
 
 
+# -------------------------------------------------------------------
+# Campaign detail (summary + entities)
+# -------------------------------------------------------------------
 @router.get("/{campaign_id}")
-def get_campaign(campaign_id: UUID, db: Session = Depends(get_db)):
-    c = db.query(Campaign).filter(Campaign.id == campaign_id).first()
+def get_campaign(
+    campaign_id: UUID,
+    db: Session = Depends(get_db),
+):
+    c = (
+        db.query(Campaign)
+        .filter(Campaign.id == campaign_id)
+        .first()
+    )
+
     if not c:
         raise HTTPException(status_code=404, detail="campaign_not_found")
 
-    # top entities (cheap summary)
+    # Deterministic entity listing
     entities = (
-        db.query(CampaignEntity.entity_type, CampaignEntity.entity_key)
+        db.query(
+            CampaignEntity.entity_type,
+            CampaignEntity.entity_key,
+            CampaignEntity.last_seen,
+        )
         .filter(CampaignEntity.campaign_id == campaign_id)
+        .order_by(CampaignEntity.last_seen.desc())
         .limit(200)
+        .all()
+    )
+
+    # Entity cardinalities (for UI charts / badges)
+    counts = (
+        db.query(
+            CampaignEntity.entity_type,
+            func.count().label("count"),
+        )
+        .filter(CampaignEntity.campaign_id == campaign_id)
+        .group_by(CampaignEntity.entity_type)
         .all()
     )
 
@@ -79,27 +107,52 @@ def get_campaign(campaign_id: UUID, db: Session = Depends(get_db)):
         "first_seen": c.first_seen.isoformat(),
         "last_seen": c.last_seen.isoformat(),
         "stats": c.stats,
-        "entities": [{"type": t, "key": k} for (t, k) in entities],
+        "entity_counts": {t: n for (t, n) in counts},
+        "entities": [
+            {
+                "type": t,
+                "key": k,
+                "last_seen": ls.isoformat(),
+            }
+            for (t, k, ls) in entities
+        ],
     }
 
 
+# -------------------------------------------------------------------
+# Campaign events (timeline / drill-down)
+# -------------------------------------------------------------------
 @router.get("/{campaign_id}/events")
 def campaign_events(
     campaign_id: UUID,
     limit: int = Query(default=100, ge=1, le=500),
+    before: Optional[str] = Query(
+        default=None,
+        description="ISO timestamp cursor for pagination",
+    ),
     db: Session = Depends(get_db),
 ):
-    rows = (
+    q = (
         db.query(CampaignEvent)
         .filter(CampaignEvent.campaign_id == campaign_id)
-        .order_by(CampaignEvent.occurred_at.desc())
+    )
+
+    if before:
+        q = q.filter(CampaignEvent.occurred_at < before)
+
+    rows = (
+        q.order_by(CampaignEvent.occurred_at.desc())
         .limit(limit)
         .all()
     )
+
     return {
         "count": len(rows),
         "items": [
-            {"event_hash": r.event_hash, "occurred_at": r.occurred_at.isoformat()}
+            {
+                "event_hash": r.event_hash,
+                "occurred_at": r.occurred_at.isoformat(),
+            }
             for r in rows
         ],
     }
