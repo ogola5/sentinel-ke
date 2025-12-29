@@ -1,10 +1,8 @@
 from datetime import datetime, timezone
 from sqlalchemy import Column, String, Boolean, DateTime, ForeignKey, Index
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.orm import declarative_base
-# from app.ledger.infra_clusters import InfraCluster, InfraClusterMember  # noqa: F401
-# from app.ledger.infra_evidence import InfraClusterEvidence  # noqa: F401
-Base = declarative_base()
+
+from app.db.base import Base   # ✅ SINGLE BASE
 
 
 def utcnow():
@@ -14,8 +12,8 @@ def utcnow():
 class SourceRegistry(Base):
     __tablename__ = "source_registry"
 
-    source_id = Column(String, primary_key=True)  # safaricom, kcb, kra
-    source_type = Column(String, nullable=False)  # telco | bank | gov | isp | osint
+    source_id = Column(String, primary_key=True)
+    source_type = Column(String, nullable=False)
 
     classification_level = Column(String, nullable=False, default="RESTRICTED")
     api_key_hash = Column(String, nullable=False, unique=True)
@@ -27,7 +25,7 @@ class SourceRegistry(Base):
 class EventLog(Base):
     __tablename__ = "event_log"
 
-    event_hash = Column(String, primary_key=True)  # SHA256 hex
+    event_hash = Column(String, primary_key=True)
     event_type = Column(String, nullable=False)
 
     source_id = Column(
@@ -59,10 +57,10 @@ class EventEntityIndex(Base):
 
     event_hash = Column(
         String,
-        ForeignKey("event_log.event_hash", ondelete="RESTRICT"),
+        ForeignKey("event_log.event_hash", ondelete="CASCADE"),
         primary_key=True,
     )
-    entity_key = Column(String, primary_key=True)  # ip:1.2.3.4, domain:x.tld, phone_h:...
+    entity_key = Column(String, primary_key=True)
 
     __table_args__ = (
         Index("ix_event_entity_entity_key", "entity_key"),
@@ -73,15 +71,10 @@ class AuditLog(Base):
     __tablename__ = "audit_log"
 
     id = Column(String, primary_key=True)
-    actor_type = Column(String, nullable=False)  # source | user | system
+    actor_type = Column(String, nullable=False)
     actor_id = Column(String, nullable=False)
 
     action = Column(String, nullable=False)
     target = Column(String, nullable=True)
 
     at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
-
-    __table_args__ = (
-        Index("ix_audit_actor_time", "actor_id", "at"),
-        Index("ix_audit_action_time", "action", "at"),
-    )

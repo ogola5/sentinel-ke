@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
-
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 
@@ -24,8 +23,7 @@ class LedgerRepository:
     # -------------------------
 
     def get_source_by_api_key(self, raw_api_key: str) -> SourceRegistry | None:
-        sources = self.db.query(SourceRegistry).all()
-        for src in sources:
+        for src in self.db.query(SourceRegistry).all():
             if verify_api_key(raw_api_key, src.api_key_hash):
                 return src
         return None
@@ -45,15 +43,16 @@ class LedgerRepository:
         action: str,
         target: str | None = None,
     ):
-        entry = AuditLog(
-            id=str(uuid.uuid4()),
-            actor_type=actor_type,
-            actor_id=actor_id,
-            action=action,
-            target=target,
-            at=datetime.now(timezone.utc),
+        self.db.add(
+            AuditLog(
+                id=str(uuid.uuid4()),
+                actor_type=actor_type,
+                actor_id=actor_id,
+                action=action,
+                target=target,
+                at=datetime.now(timezone.utc),
+            )
         )
-        self.db.add(entry)
         self.db.commit()
 
     # -------------------------
@@ -73,49 +72,36 @@ class LedgerRepository:
         anchors: dict,
         payload: dict,
     ) -> tuple[str, str]:
-        """
-        Append-only insert with explicit idempotency and correct FK ordering.
-        """
 
-        # 1) Explicit duplicate check
-        exists = (
-            self.db.query(EventLog)
-            .filter(EventLog.event_hash == event_hash)
-            .first()
-        )
-        if exists:
+        # Idempotency
+        if self.db.get(EventLog, event_hash):
             return event_hash, "duplicate"
 
-        row = EventLog(
-            event_hash=event_hash,
-            event_type=event_type,
-            source_id=source_id,
-            classification=classification,
-            occurred_at=occurred_at,
-            schema_version=schema_version,
-            signature_valid=signature_valid,
-            anchors_json=anchors,
-            payload_json=payload,
-        )
-
         try:
-            # 2) Insert parent row FIRST
-            self.db.add(row)
-            self.db.flush()  # <-- THIS IS THE CRITICAL FIX
-
-            # 3) Insert child index rows AFTER parent exists
-            for k, v in anchors.items():
-                if not v:
-                    continue
-                entity_key = f"{k}:{v}"
-                self.db.add(
-                    EventEntityIndex(
-                        event_hash=event_hash,
-                        entity_key=entity_key,
-                    )
+            self.db.add(
+                EventLog(
+                    event_hash=event_hash,
+                    event_type=event_type,
+                    source_id=source_id,
+                    classification=classification,
+                    occurred_at=occurred_at,
+                    schema_version=schema_version,
+                    signature_valid=signature_valid,
+                    anchors_json=anchors,
+                    payload_json=payload,
                 )
+            )
+            self.db.flush()  # guarantees FK parent exists
 
-            # 4) Commit atomically
+            for k, v in anchors.items():
+                if v:
+                    self.db.add(
+                        EventEntityIndex(
+                            event_hash=event_hash,
+                            entity_key=f"{k}:{v}",
+                        )
+                    )
+
             self.db.commit()
             return event_hash, "accepted"
 

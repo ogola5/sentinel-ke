@@ -37,13 +37,6 @@ def _get_payload(event: CanonicalEvent, name: str) -> Optional[str]:
 
 
 def _strip_repeated_prefix(prefix: str, value: Optional[str]) -> Optional[str]:
-    """
-    Convert values that may be sent as raw or already-prefixed to a RAW id.
-    Examples:
-      value="demo1"                 -> "demo1"
-      value="person_h:demo1"        -> "demo1"
-      value="person_h:person_h:x"   -> "x"
-    """
     if not value:
         return None
     v = str(value).strip()
@@ -58,17 +51,11 @@ def _strip_repeated_prefix(prefix: str, value: Optional[str]) -> Optional[str]:
 
 
 def _norm_key(prefix: str, value: Optional[str]) -> Optional[str]:
-    """
-    Normalize to a SINGLE prefixed key.
-    Examples:
-      value="demo1"                -> "person_h:demo1"
-      value="person_h:demo1"       -> "person_h:demo1"
-      value="person_h:person_h:x"  -> "person_h:x"
-    """
     raw = _strip_repeated_prefix(prefix, value)
     if not raw:
         return None
     return f"{prefix}:{raw}"
+
 
 
 def _add_minimal_indicator_nodes(
@@ -78,10 +65,6 @@ def _add_minimal_indicator_nodes(
     domain: Optional[str],
     url: Optional[str],
 ) -> None:
-    """
-    MVP policy: always emit at least indicator nodes when present.
-    Ensures IP-only events still produce a meaningful delta.
-    """
     if ip:
         nodes.append(make_node(NodeRef("IP", ip)))
     if domain:
@@ -130,9 +113,15 @@ def project_event_to_delta(*, event: CanonicalEvent, event_hash: str) -> GraphDe
 
     device_id = _get_anchor(event, "device_id")
     service_id = _get_anchor(event, "service_id")
-    endpoint = _get_anchor(event, "endpoint") or _get_payload(event, "endpoint")
+    endpoint_raw = _get_anchor(event, "endpoint") or _get_payload(event, "endpoint")
     provider_id = _get_anchor(event, "provider_id")  # optional for now
 
+    # Stable endpoint identity (prevents cross-service collisions)
+    endpoint = (
+        f"{service_id}:{endpoint_raw}"
+        if service_id and endpoint_raw
+        else endpoint_raw
+    )
     # Minimal indicator nodes (applies to ALL events)
     _add_minimal_indicator_nodes(nodes=nodes, ip=ip, domain=domain, url=url)
 
@@ -140,31 +129,23 @@ def project_event_to_delta(*, event: CanonicalEvent, event_hash: str) -> GraphDe
     # Event-specific projections
     # ============================================================
 
-    if et == "LOGIN_EVENT":
-        # Person -> IP, Person -> Device, IP -> Endpoint -> Service
-        person_ref = NodeRef("Person", person_h) if person_h else None
-        if person_ref:
-            nodes.append(make_node(person_ref))
-
-            if ip:
-                ip_ref = NodeRef("IP", ip)
-                edges.append(make_edge("LOGGED_IN_FROM", person_ref, ip_ref, evidence=ev))
-
-            if device_id:
-                dev_ref = NodeRef("Device", device_id)
-                nodes.append(make_node(dev_ref))
-                edges.append(make_edge("USED_DEVICE", person_ref, dev_ref, evidence=ev))
-
+    if et == "DDOS_SIGNAL_EVENT":
         if ip and endpoint:
             ip_ref = NodeRef("IP", ip)
             ep_ref = NodeRef("Endpoint", endpoint)
             nodes.append(make_node(ep_ref))
-            edges.append(make_edge("ACCESSED_ENDPOINT", ip_ref, ep_ref, evidence=ev))
+            edges.append(make_edge("TARGETS", ip_ref, ep_ref, evidence=ev))
 
             if service_id:
                 svc_ref = NodeRef("Service", service_id)
                 nodes.append(make_node(svc_ref))
                 edges.append(make_edge("PART_OF_SERVICE", ep_ref, svc_ref, evidence=ev))
+
+        if ip and provider_id:
+            ip_ref = NodeRef("IP", ip)
+            p_ref = NodeRef("Provider", provider_id)
+            nodes.append(make_node(p_ref))
+            edges.append(make_edge("BELONGS_TO", ip_ref, p_ref, evidence=ev))
 
     elif et == "SIM_SWAP_EVENT":
         # Phone -> Device
