@@ -10,6 +10,7 @@ from sqlalchemy.dialects.postgresql import insert
 
 from app.campaign.models import Campaign, CampaignEntity, CampaignEvent
 from app.campaign.rules import compute_score
+from app.campaign.models import CampaignEvidence
 
 
 class CampaignRepository:
@@ -72,23 +73,38 @@ class CampaignRepository:
         # rowcount is 1 on insert, 0 on no-op
         return bool(res.rowcount)
 
-    def upsert_entity(self, *, campaign_id: UUID, entity_type: str, entity_key: str, seen_at: datetime) -> bool:
+    def upsert_entity(
+        self,
+        *,
+        campaign_id: UUID,
+        entity_type: str,
+        entity_key: str,
+        role: str,
+        seen_at: datetime,
+    ) -> None:
         """
-        Returns True if newly inserted distinct entity, False if existed (but updates last_seen).
+        Inserts or updates an entity with role.
+        Role is upgraded if previously unknown.
         """
+
         stmt = insert(CampaignEntity).values(
             campaign_id=campaign_id,
             entity_key=entity_key,
             entity_type=entity_type,
+            role=role,
             last_seen=seen_at,
         ).on_conflict_do_update(
             index_elements=["campaign_id", "entity_key"],
-            set_={"last_seen": seen_at}
+            set_={
+                "last_seen": seen_at,
+                # promote role only if previously unknown
+                "role": CampaignEntity.role
+                if role == "unknown"
+                else role,
+            },
         )
-        res = self.db.execute(stmt)
-        # With DO UPDATE, rowcount isn't a clean "new vs old".
-        # For MVP, treat as "not sure". We'll recompute cardinalities via COUNT(*) by type when needed.
-        return True
+
+        self.db.execute(stmt)
 
     def update_campaign_counters(
         self,
@@ -127,3 +143,28 @@ class CampaignRepository:
             "distinct_persons": persons,
             "distinct_devices": devices,
         }
+    def insert_evidence(
+        self,
+        *,
+        campaign_id: UUID,
+        event_hash: str,
+        signal_type: str,
+        primary_key: str,
+        created_at: datetime,
+    ) -> bool:
+        """
+        Returns True if inserted, False if duplicate.
+        Evidence is immutable.
+        """
+        stmt = insert(CampaignEvidence).values(
+            campaign_id=campaign_id,
+            event_hash=event_hash,
+            signal_type=signal_type,
+            primary_key=primary_key,
+            created_at=created_at,
+        ).on_conflict_do_nothing(
+            index_elements=["campaign_id", "event_hash"]
+        )
+
+        res = self.db.execute(stmt)
+        return bool(res.rowcount)

@@ -60,13 +60,15 @@ class CampaignEngine:
                 continue
 
             # 3) update entities
-            for entity_type, entity_key in sig.entities:
+            for entity_type, entity_key, role in sig.entities:
                 self.repo.upsert_entity(
                     campaign_id=campaign.id,
                     entity_type=entity_type,
                     entity_key=entity_key,
+                    role=role,
                     seen_at=occurred_at,
                 )
+
 
             # 4) counters + score
             self.repo.update_campaign_counters(campaign=campaign, occurred_at=occurred_at)

@@ -27,7 +27,7 @@ from app.graph.repository import GraphDeltaRepository
 
 # Phase 2.5 — Redpanda/Kafka internal buses (best-effort)
 from app.streaming.messages import build_event_message, build_graph_delta_message
-from app.streaming.producer import producer
+from app.streaming.producer import get_producer
 
 
 @dataclass(frozen=True)
@@ -164,6 +164,28 @@ class IngestionService:
             anchors=event.anchors,
             payload=event.payload,
         )
+        # ------------------------------
+        # DEV MODE: synchronous campaigns
+        # ------------------------------
+        from app.campaign.engine import CampaignEngine
+        from app.campaign.detectors import build_signals_from_event
+
+        if status == "accepted":
+            signals = build_signals_from_event(
+                event_hash=event_hash,
+                event_doc={
+                    "event_type": event.event_type,
+                    "anchors": event.anchors,
+                    "payload": event.payload,
+                },
+            )
+
+            CampaignEngine(self.db).apply_signals(
+                event_hash=event_hash,
+                occurred_at=event.occurred_at,
+                signals=signals,
+            )
+
 
         # 8) Audit (always)
         self.ledger.audit(
@@ -238,7 +260,7 @@ class IngestionService:
                         },
                         event=event_doc,
                     )
-                    producer.publish(
+                    get_producer.publish(
                         topic=settings.kafka_events_topic,
                         key=event_hash,
                         value=msg,
@@ -249,7 +271,7 @@ class IngestionService:
                         nodes=nodes_payload,
                         edges=edges_payload,
                     )
-                    producer.publish(
+                    get_producer.publish(
                         topic=settings.kafka_graph_topic,
                         key=event_hash,
                         value=gmsg,

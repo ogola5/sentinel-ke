@@ -57,22 +57,60 @@ class CampaignEvent(Base):
 
 class CampaignEntity(Base):
     """
-    Tracks distinct entities seen in a campaign (for fast cardinalities).
-    entity_key examples:
-      person_h:demo1
-      device_id:device-001
-      endpoint:/api/login
-      service_id:eCitizen
-      ip:8.8.8.8
+    Tracks distinct entities seen in a campaign with investigative role.
     """
+
     __tablename__ = "campaign_entity"
 
-    campaign_id = Column(UUID(as_uuid=True), ForeignKey("campaign.id", ondelete="CASCADE"), primary_key=True)
+    campaign_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("campaign.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+
     entity_key = Column(String, primary_key=True)
-    entity_type = Column(String, nullable=False)  # Person|Device|Endpoint|Service|IP|Domain|URL|Provider
+    entity_type = Column(String, nullable=False)  
+    # Person | Device | Endpoint | Service | IP | Domain | URL | Provider
+
+    role = Column(
+        String,
+        nullable=False,
+        default="unknown",
+    )
+    # attacker | target | context | unknown
 
     last_seen = Column(DateTime(timezone=True), nullable=False)
 
     __table_args__ = (
         Index("ix_campaign_entity_type", "entity_type"),
+        Index("ix_campaign_entity_role", "role"),
+    )
+
+
+class CampaignEvidence(Base):
+    """
+    Immutable evidence explaining WHY an event is linked to a campaign.
+    Investigation-grade: deterministic, replayable.
+    """
+
+    __tablename__ = "campaign_evidence"
+
+    campaign_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("campaign.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+
+    event_hash = Column(String, primary_key=True)
+
+    # rule / signal metadata
+    signal_type = Column(String, nullable=False)     # e.g. DDOS_ENDPOINT_FANIN
+    primary_key = Column(String, nullable=False)     # e.g. endpoint:/api/login
+
+    created_at = Column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        Index("ix_campaign_evidence_campaign", "campaign_id"),
+        Index("ix_campaign_evidence_event", "event_hash"),
+        Index("ix_campaign_evidence_signal", "signal_type"),
     )

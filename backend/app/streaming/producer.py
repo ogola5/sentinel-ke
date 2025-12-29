@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from typing import Any, Dict, Optional
 
 from kafka import KafkaProducer
@@ -12,27 +13,74 @@ from app.core.config import settings
 
 log = logging.getLogger("sentinel.kafka")
 
+# ------------------------------------------------------------------------------
+# helpers
+# ------------------------------------------------------------------------------
 
 def _json_dumps(obj: Any) -> bytes:
-    return json.dumps(obj, separators=(",", ":"), sort_keys=True, default=str).encode("utf-8")
+    return json.dumps(
+        obj,
+        separators=(",", ":"),
+        sort_keys=True,
+        default=str,
+    ).encode("utf-8")
 
+
+# ------------------------------------------------------------------------------
+# lazy singleton (CRITICAL FIX)
+# ------------------------------------------------------------------------------
+
+_lock = threading.Lock()
+_instance: Optional["SentinelProducer"] = None
+
+
+def get_producer() -> Optional["SentinelProducer"]:
+    """
+    Lazy accessor.
+    Never connects to Kafka at import time.
+    Safe if broker is unavailable.
+    """
+    global _instance
+
+    if not settings.kafka_enabled:
+        return None
+
+    if _instance is not None:
+        return _instance
+
+    with _lock:
+        if _instance is None:
+            try:
+                _instance = SentinelProducer()
+            except Exception as e:
+                # Do NOT crash FastAPI if Kafka is unavailable
+                log.error("Kafka producer init failed (non-fatal): %s", e)
+                _instance = None
+
+    return _instance
+
+
+# ------------------------------------------------------------------------------
+# producer
+# ------------------------------------------------------------------------------
 
 class SentinelProducer:
     """
     Thin wrapper around kafka-python producer.
-    Non-fatal: publish failures should not break ingestion in MVP.
+
+    IMPORTANT:
+    - No Kafka connection at import time
+    - Non-fatal on failures
     """
 
     def __init__(self) -> None:
-        self.enabled = bool(settings.kafka_enabled)
         self._producer: Optional[KafkaProducer] = None
 
-        if not self.enabled:
-            log.warning("Kafka disabled (KAFKA_ENABLED=false)")
-            return
+        brokers = settings.redpanda_brokers.split(",")
+        log.info("Initializing Kafka producer brokers=%s", brokers)
 
         self._producer = KafkaProducer(
-            bootstrap_servers=settings.redpanda_brokers.split(","),
+            bootstrap_servers=brokers,
             client_id=settings.kafka_client_id,
             acks=settings.kafka_acks,
             linger_ms=settings.kafka_linger_ms,
@@ -42,12 +90,19 @@ class SentinelProducer:
         )
 
     def publish(self, *, topic: str, key: str, value: Dict[str, Any]) -> None:
-        if not self.enabled or not self._producer:
+        if not self._producer:
             return
+
         try:
             fut = self._producer.send(topic, key=key, value=value)
-            # do not block; we can optionally ensure send() accepted by client:
-            fut.add_errback(lambda exc: log.error("Kafka publish failed topic=%s key=%s err=%s", topic, key, exc))
+            fut.add_errback(
+                lambda exc: log.error(
+                    "Kafka publish failed topic=%s key=%s err=%s",
+                    topic,
+                    key,
+                    exc,
+                )
+            )
         except KafkaError as e:
             log.error("Kafka error topic=%s key=%s err=%s", topic, key, e)
         except Exception as e:
@@ -67,7 +122,3 @@ class SentinelProducer:
                 self._producer.close(timeout=1.0)
             except Exception:
                 pass
-
-
-# global singleton for FastAPI process
-producer = SentinelProducer()
