@@ -1,6 +1,6 @@
 # sentinel-ke
 # Sentinel-KE — Layer 1 (Backend & Ingestion Layer)
-**Status: COMPLETE (100%)**  
+**Status: ✅ COMPLETE (100%)**  
 **Scope: Evidence-grade ingestion, immutability, provenance, streaming, search**
 
 ---
@@ -58,42 +58,33 @@ Layer 1 **only guarantees truth, structure, and replayability**.
 
 ```mermaid
 flowchart LR
-    SRC[External Source] -->|API Key| INGEST[/v1/ingest/event]
-    INGEST --> NORM[Normalize + Validate]
-    NORM --> HASH[Compute event_hash]
-    HASH --> LEDGER[(Postgres Ledger)]
-    HASH --> OS[(OpenSearch)]
-    HASH --> KAFKA[Redpanda / Kafka]
-    HASH --> GRAPH[(Graph Delta Log)]
-
-# 🔗 Layer 2 — Infra → Graph Projection (Neo4j)
-
-**Status:** ✅ COMPLETE · 🔒 LOCKED  
-**Layer:** 2 / 4  
-**Role:** Deterministic projection of InfraClusters from PostgreSQL into Neo4j
-
----
-
-## 1. What Layer 2 Does (In One Sentence)
-
-Layer 2 **projects infrastructure clusters derived from PostgreSQL into Neo4j as a deterministic, idempotent graph**, without Neo4j ever becoming a source of truth.
-
----
-
-## 2. Architectural Position
-
-Layer 2 sits **between the ledger (Postgres)** and **graph intelligence (Neo4j)**.
-
-```mermaid
+    SRC["External Source"] -->|API Key| INGEST["POST /v1/ingest/event"]
+    INGEST --> NORM["Normalize + Validate"]
+    NORM --> HASH["Compute event_hash"]
+    HASH --> LEDGER[("Postgres Ledger")]
+    HASH --> OS[("OpenSearch")]
+    HASH --> KAFKA["Redpanda / Kafka"]
+    HASH --> GRAPH[("Graph Delta Log")]
+🔗 Layer 2 — Infra → Graph Projection (Neo4j)
+Status: ✅ COMPLETE · 🔒 LOCKED
+Layer: 2 / 4
+Role: Deterministic projection of InfraClusters from PostgreSQL into Neo4j
+1. What Layer 2 Does (In One Sentence)
+Layer 2 projects infrastructure clusters derived from PostgreSQL into Neo4j as a deterministic, idempotent graph, without Neo4j ever becoming a source of truth.
+2. Architectural Position
+Layer 2 sits between the ledger (Postgres) and graph intelligence (Neo4j).
+code
+Mermaid
 flowchart LR
-    A[Event Ledger<br/>PostgreSQL] --> B[Infra Clustering<br/>Layer 1]
-    B --> C[Graph Projection<br/>Layer 2]
-    C --> D[Neo4j Graph]
-    D --> E[Investigations / UI / Analytics]
+    A["Event Ledger (Postgres)"] --> B["Infra Clustering (Layer 1)"]
+    B --> C["Graph Projection (Layer 2)"]
+    C --> D[("Neo4j Graph")]
+    D --> E["Investigations / UI / Analytics"]
 
     style C fill:#e3f2fd,stroke:#1565c0,stroke-width:2px
-
-
+3. Projection Sequence
+code
+Mermaid
 sequenceDiagram
     participant API as FastAPI
     participant PG as PostgreSQL
@@ -105,44 +96,40 @@ sequenceDiagram
     P->>P: Build deterministic GraphDelta
     API->>N4J: Apply GraphDelta (MERGE)
     N4J-->>API: Acknowledged
-
-
-GraphDelta(
-    event_hash: str,
-    nodes: list[Node],
-    edges: list[Edge]
-)
-
+4. Data Structures
+GraphDelta Object:
+code
+JSON
+{
+    "event_hash": "sha256_hash",
+    "nodes": ["List[Node]"],
+    "edges": ["List[Edge]"]
+}
+Class Diagram:
+code
+Mermaid
 classDiagram
     class InfraCluster {
         key: cluster_id
-        kind
-        confidence
-        member_count
+        kind: string
+        confidence: float
+        member_count: int
     }
 
     class IP {
         key: ip_address
     }
+    
+    class Event {
+        key: event_hash
+    }
 
     IP --> InfraCluster : MEMBER_OF
-
-
+    Event --> InfraCluster : EVIDENCED_BY
+5. Validated Edge Whitelist
 All edges are validated and whitelisted:
 MEMBER_OF
 USES_INFRA
 SUPPORTED_BY
 EVIDENCED_BY
 TARGETS
-
-
----
-
-### Next time
-When you’re ready, we’ll proceed to **Layer 3** with:
-- Graph algorithms
-- Temporal reasoning
-- Campaign expansion
-- Analyst queries
-
-…without touching a single line of Layer 2.
