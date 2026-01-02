@@ -4,7 +4,7 @@ Sentinel-KE is an end-to-end cyber intelligence platform built in three layers:
 
 - Layer 1: Evidence-grade ingestion into Postgres (canonical truth) + OpenSearch indexing
 - Layer 2: Deterministic graph projection to Neo4j (derived view)
-- Layer 3: Analytics workers (DDoS, VPN/infra correlation, claims, mitigations)
+- Layer 3: Analytics workers (DDoS, VPN/infra correlation, fraud/mule campaigns, claims, mitigations, AI features)
 
 The system is deterministic, explainable, and replayable. Postgres is always the source of truth.
 
@@ -64,8 +64,10 @@ docs/RUNBOOK.md
 - GraphDelta logging and Neo4j projection worker
 - DDoS alert worker (structural signals)
 - VPN/infra cluster worker (endpoint overlap + provider/time overlap)
+- Fraud demo + mule-ring campaign worker (SIM swap -> login -> transfers -> cashout)
 - Campaign claims + risk suggestions
 - Mitigation/IOC bundles + export
+- AI feature snapshots + embeddings + predictions + explanations (lightweight, deterministic)
 - Metrics + readiness endpoints
 
 ## Repository Layout

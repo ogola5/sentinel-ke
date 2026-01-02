@@ -109,6 +109,18 @@ services:
       - ./backend:/app
     restart: unless-stopped
 
+  mule-campaign-worker:
+    build: ./backend
+    container_name: sentinel-mule-campaign-worker
+    command: /bin/sh -c "while true; do python -m app.analytics.layer3.mule_campaign_worker --minutes 180 --min-senders 2 --min-tx 4; sleep 300; done"
+    depends_on:
+      - postgres
+    env_file:
+      - .env
+    volumes:
+      - ./backend:/app
+    restart: unless-stopped
+
 
 volumes:
   postgres_data:

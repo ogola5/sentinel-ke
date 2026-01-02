@@ -8,6 +8,8 @@ This runbook lists the common commands for demos, workers, and API usage.
 docker compose up -d
 ```
 
+Compose includes a background mule campaign worker (`sentinel-mule-campaign-worker`).
+
 ## 2) Seed sources (API keys)
 
 ```
@@ -44,6 +46,24 @@ PYTHONPATH=backend \
 python simulator/run.py --scenario fraud_chain
 ```
 
+Inside docker (quick demo):
+```
+docker compose run --rm --no-deps -e PYTHONPATH=/app backend \
+  python -m app.demo.run_demo --seed-sources --scenario ddos_vpn
+```
+
+Inside docker (DDoS + VPN + fraud):
+```
+docker compose run --rm --no-deps -e PYTHONPATH=/app backend \
+  python -m app.demo.run_demo --seed-sources --scenario ddos_vpn_fraud
+```
+
+Inside docker (Kafka demo, uses sentinel.ingest topic):
+```
+docker compose run --rm --no-deps -e PYTHONPATH=/app backend \
+  python -m app.demo.run_demo --seed-sources --scenario ddos_vpn --mode kafka --topic sentinel.ingest
+```
+
 ## 4) Run workers
 
 Graph projection:
@@ -66,11 +86,22 @@ Campaign detection (coordination from shared infra):
 docker compose run --rm --no-deps -e PYTHONPATH=/app backend python -m app.analytics.layer3.campaign_detect_worker
 ```
 
+Mule-ring campaign detection (SIM swap -> transfers -> cashout):
+```
+docker compose run --rm --no-deps -e PYTHONPATH=/app backend python -m app.analytics.layer3.mule_campaign_worker --minutes 180 --min-senders 2 --min-tx 4
+```
+
 Campaign claims + projection (optional):
 ```
 docker compose run --rm --no-deps -e PYTHONPATH=/app backend python -m app.analytics.claims_worker
 ```
 
+AI pipeline (features -> embeddings -> predictions):
+```
+docker compose run --rm --no-deps -e PYTHONPATH=/app backend python -m app.analytics.layer3.graph_feature_worker
+docker compose run --rm --no-deps -e PYTHONPATH=/app backend python -m app.analytics.layer3.embedding_worker --window-key Wmid
+docker compose run --rm --no-deps -e PYTHONPATH=/app backend python -m app.analytics.layer3.ai_inference_worker --window-key Wmid
+```
 ## 5) Validate DB state (optional)
 
 ```
@@ -149,8 +180,9 @@ Cases + STIX:
 ```
 POST /v1/cases/from-campaign/{campaign_id}
 GET  /v1/cases/{case_id}
-GET  /v1/stix/case/{case_id}
+GET  /v1/stix/case/{campaign_id}
 GET  /v1/stix/campaign/{campaign_id}
+GET  /v1/stix/mitigations?kind=DDOS
 ```
 
 Metrics:
