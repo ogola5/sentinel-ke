@@ -64,13 +64,14 @@ def _add_minimal_indicator_nodes(
     ip: Optional[str],
     domain: Optional[str],
     url: Optional[str],
+    node_props: dict,
 ) -> None:
     if ip:
-        nodes.append(make_node(NodeRef("IP", ip)))
+        nodes.append(make_node(NodeRef("IP", ip), **node_props))
     if domain:
-        nodes.append(make_node(NodeRef("Domain", domain)))
+        nodes.append(make_node(NodeRef("Domain", domain), **node_props))
     if url:
-        nodes.append(make_node(NodeRef("URL", url)))
+        nodes.append(make_node(NodeRef("URL", url), **node_props))
 
 
 # ============================================================
@@ -100,6 +101,9 @@ def project_event_to_delta(*, event: CanonicalEvent, event_hash: str) -> GraphDe
     ev = [event_hash]
 
     et = (event.event_type or "").upper()
+    occurred_iso = event.occurred_at.isoformat()
+    node_props = {"first_seen": occurred_iso, "last_seen": occurred_iso}
+    edge_props = {"first_seen": occurred_iso, "last_seen": occurred_iso, "count": 1}
 
     # Common anchors (anchors take precedence, payload fallback)
     ip = _get_anchor(event, "ip") or _get_payload(event, "ip")
@@ -123,7 +127,7 @@ def project_event_to_delta(*, event: CanonicalEvent, event_hash: str) -> GraphDe
         else endpoint_raw
     )
     # Minimal indicator nodes (applies to ALL events)
-    _add_minimal_indicator_nodes(nodes=nodes, ip=ip, domain=domain, url=url)
+    _add_minimal_indicator_nodes(nodes=nodes, ip=ip, domain=domain, url=url, node_props=node_props)
 
     # ============================================================
     # Event-specific projections
@@ -133,38 +137,38 @@ def project_event_to_delta(*, event: CanonicalEvent, event_hash: str) -> GraphDe
         if ip and endpoint:
             ip_ref = NodeRef("IP", ip)
             ep_ref = NodeRef("Endpoint", endpoint)
-            nodes.append(make_node(ep_ref))
-            edges.append(make_edge("TARGETS", ip_ref, ep_ref, evidence=ev))
+            nodes.append(make_node(ep_ref, **node_props))
+            edges.append(make_edge("TARGETS", ip_ref, ep_ref, evidence=ev, **edge_props))
 
             if service_id:
                 svc_ref = NodeRef("Service", service_id)
-                nodes.append(make_node(svc_ref))
-                edges.append(make_edge("PART_OF_SERVICE", ep_ref, svc_ref, evidence=ev))
+                nodes.append(make_node(svc_ref, **node_props))
+                edges.append(make_edge("PART_OF_SERVICE", ep_ref, svc_ref, evidence=ev, **edge_props))
 
         if ip and provider_id:
             ip_ref = NodeRef("IP", ip)
             p_ref = NodeRef("Provider", provider_id)
-            nodes.append(make_node(p_ref))
-            edges.append(make_edge("BELONGS_TO", ip_ref, p_ref, evidence=ev))
+            nodes.append(make_node(p_ref, **node_props))
+            edges.append(make_edge("USES_INFRA", ip_ref, p_ref, evidence=ev, **edge_props))
 
     elif et == "SIM_SWAP_EVENT":
         # Phone -> Device
         phone_ref = NodeRef("Phone", phone_h) if phone_h else None
         if phone_ref:
-            nodes.append(make_node(phone_ref))
+            nodes.append(make_node(phone_ref, **node_props))
 
             if device_id:
                 dev_ref = NodeRef("Device", device_id)
-                nodes.append(make_node(dev_ref))
-                edges.append(make_edge("SIM_SWAPPED_TO", phone_ref, dev_ref, evidence=ev))
+                nodes.append(make_node(dev_ref, **node_props))
+                edges.append(make_edge("SIM_SWAPPED_TO", phone_ref, dev_ref, evidence=ev, **edge_props))
 
         # Optional: Person -> Phone
         if person_h and phone_h:
             person_ref = NodeRef("Person", person_h)
             phone_ref = NodeRef("Phone", phone_h)
-            nodes.append(make_node(person_ref))
-            nodes.append(make_node(phone_ref))
-            edges.append(make_edge("HAS_SIM", person_ref, phone_ref, evidence=ev))
+            nodes.append(make_node(person_ref, **node_props))
+            nodes.append(make_node(phone_ref, **node_props))
+            edges.append(make_edge("HAS_SIM", person_ref, phone_ref, evidence=ev, **edge_props))
 
     elif et == "TRANSACTION_EVENT":
         a_from = _get_anchor(event, "account_h_from") or _get_payload(event, "account_h_from")
@@ -177,66 +181,66 @@ def project_event_to_delta(*, event: CanonicalEvent, event_hash: str) -> GraphDe
         n_to = NodeRef("Account", to_key) if to_key else None
 
         if n_from:
-            nodes.append(make_node(n_from))
+            nodes.append(make_node(n_from, **node_props))
         if n_to:
-            nodes.append(make_node(n_to))
+            nodes.append(make_node(n_to, **node_props))
         if n_from and n_to:
-            edges.append(make_edge("TRANSFERRED_TO", n_from, n_to, evidence=ev))
+            edges.append(make_edge("TRANSFERRED_TO", n_from, n_to, evidence=ev, **edge_props))
 
     elif et == "DOMAIN_REG_EVENT":
         if domain:
             d_ref = NodeRef("Domain", domain)
-            nodes.append(make_node(d_ref))
+            nodes.append(make_node(d_ref, **node_props))
 
             if provider_id:
                 p_ref = NodeRef("Provider", provider_id)
-                nodes.append(make_node(p_ref))
-                edges.append(make_edge("HOSTED_ON", d_ref, p_ref, evidence=ev))
+                nodes.append(make_node(p_ref, **node_props))
+                edges.append(make_edge("HOSTED_ON", d_ref, p_ref, evidence=ev, **edge_props))
 
     elif et == "DNS_RESOLUTION_EVENT":
         if domain and ip:
             d_ref = NodeRef("Domain", domain)
             ip_ref = NodeRef("IP", ip)
-            edges.append(make_edge("RESOLVES_TO", d_ref, ip_ref, evidence=ev))
+            edges.append(make_edge("RESOLVES_TO", d_ref, ip_ref, evidence=ev, **edge_props))
 
     elif et == "PHISHING_MESSAGE_EVENT":
         # Domain/URL -> Service (if present)
         svc_ref = NodeRef("Service", service_id) if service_id else None
         if svc_ref:
-            nodes.append(make_node(svc_ref))
+            nodes.append(make_node(svc_ref, **node_props))
 
         if domain and svc_ref:
             d_ref = NodeRef("Domain", domain)
-            edges.append(make_edge("PHISHES", d_ref, svc_ref, evidence=ev))
+            edges.append(make_edge("PHISHES", d_ref, svc_ref, evidence=ev, **edge_props))
 
         if url and svc_ref:
             u_ref = NodeRef("URL", url)
-            edges.append(make_edge("PHISHES", u_ref, svc_ref, evidence=ev))
+            edges.append(make_edge("PHISHES", u_ref, svc_ref, evidence=ev, **edge_props))
 
     elif et == "DDOS_SIGNAL_EVENT":
         # IP -> Endpoint -> Service, IP -> Provider (optional)
         if ip and endpoint:
             ip_ref = NodeRef("IP", ip)
             ep_ref = NodeRef("Endpoint", endpoint)
-            nodes.append(make_node(ep_ref))
-            edges.append(make_edge("TARGETS", ip_ref, ep_ref, evidence=ev))
+            nodes.append(make_node(ep_ref, **node_props))
+            edges.append(make_edge("TARGETS", ip_ref, ep_ref, evidence=ev, **edge_props))
 
             if service_id:
                 svc_ref = NodeRef("Service", service_id)
-                nodes.append(make_node(svc_ref))
-                edges.append(make_edge("PART_OF_SERVICE", ep_ref, svc_ref, evidence=ev))
+                nodes.append(make_node(svc_ref, **node_props))
+                edges.append(make_edge("PART_OF_SERVICE", ep_ref, svc_ref, evidence=ev, **edge_props))
 
         if ip and provider_id:
             ip_ref = NodeRef("IP", ip)
             p_ref = NodeRef("Provider", provider_id)
-            nodes.append(make_node(p_ref))
-            edges.append(make_edge("USES_INFRA", ip_ref, p_ref, evidence=ev))
+            nodes.append(make_node(p_ref, **node_props))
+            edges.append(make_edge("USES_INFRA", ip_ref, p_ref, evidence=ev, **edge_props))
 
     elif et == "SERVICE_HEALTH_EVENT":
         # Store health metrics on Service node
         if service_id:
             svc_ref = NodeRef("Service", service_id)
-            nodes.append(make_node(svc_ref, health=event.payload))
+            nodes.append(make_node(svc_ref, **node_props, health=event.payload))
 
     else:
         # Unknown event types: deterministic nodes only from known anchors
@@ -270,7 +274,7 @@ def project_event_to_delta(*, event: CanonicalEvent, event_hash: str) -> GraphDe
             else:
                 continue
 
-            nodes.append(make_node(ref))
+            nodes.append(make_node(ref, **node_props))
 
     return GraphDelta(
         event_hash=event_hash,

@@ -1,0 +1,125 @@
+{
+  "name": "full_demo",
+  "description": "DDoS + VPN + fraud combined demo.",
+  "source_api_key": "kpa-secret-key",
+  "base_time": "now",
+  "events": [
+    {
+      "event_type": "DDOS_SIGNAL_EVENT",
+      "offset_sec": -900,
+      "repeat": 20,
+      "repeat_every_sec": 30,
+      "ip_pool_prefix": "203.0.113.",
+      "ip_pool_count": 15,
+      "anchors": {
+        "service_id": "kplc",
+        "endpoint": "kplc:/login:POST"
+      },
+      "payload": {
+        "service_id": "kplc",
+        "endpoint": "/login",
+        "req_rate": 90,
+        "unique_ips_count": 15,
+        "error_rate": 0.02,
+        "avg_latency_ms": 70,
+        "endpoint_convergence": 0.4,
+        "asn_concentration": 0.3
+      }
+    },
+    {
+      "event_type": "DDOS_SIGNAL_EVENT",
+      "offset_sec": -120,
+      "repeat": 300,
+      "repeat_every_sec": 1,
+      "ip_pool_prefix": "203.0.113.",
+      "ip_pool_count": 200,
+      "anchors": {
+        "service_id": "kplc",
+        "endpoint": "kplc:/login:POST"
+      },
+      "payload": {
+        "service_id": "kplc",
+        "endpoint": "/login",
+        "req_rate": 1200,
+        "unique_ips_count": 200,
+        "error_rate": 0.08,
+        "avg_latency_ms": 250,
+        "endpoint_convergence": 0.8,
+        "asn_concentration": 0.7
+      }
+    },
+    {
+      "event_type": "LOGIN_EVENT",
+      "offset_sec": -1800,
+      "repeat": 30,
+      "repeat_every_sec": 40,
+      "ip_pool_prefix": "102.168.1.",
+      "ip_pool_count": 6,
+      "anchors": {
+        "endpoint": "portal:/login:POST",
+        "device_id": "device-demo-1"
+      },
+      "payload": {
+        "username": "demo-user",
+        "outcome": "success",
+        "user_agent": "Mozilla/5.0",
+        "provider": "demo-vpn"
+      }
+    },
+    {
+      "event_type": "SIM_SWAP_EVENT",
+      "offset_sec": -3600,
+      "repeat": 3,
+      "repeat_every_sec": 600,
+      "anchors": {
+        "phone_h": "254700000001",
+        "device_id": "sim-device-1"
+      },
+      "payload": {
+        "phone": "254700000001",
+        "prev_sim_id": "sim-001",
+        "new_sim_id": "sim-002",
+        "reason": "re-issue"
+      }
+    },
+    {
+      "event_type": "LOGIN_EVENT",
+      "offset_sec": -3300,
+      "repeat": 6,
+      "repeat_every_sec": 300,
+      "ip_pool_prefix": "41.90.1.",
+      "ip_pool_count": 3,
+      "anchors": {
+        "device_id": "sim-device-1",
+        "endpoint": "bank:/login:POST"
+      },
+      "payload": {
+        "username": "user-001",
+        "outcome": "success",
+        "user_agent": "Mozilla/5.0",
+        "device_id": "sim-device-1",
+        "provider": "cellular"
+      }
+    },
+    {
+      "event_type": "TRANSACTION_EVENT",
+      "offset_sec": -3000,
+      "repeat": 6,
+      "repeat_every_sec": 300,
+      "ip_pool_prefix": "41.90.1.",
+      "ip_pool_count": 3,
+      "anchors": {
+        "device_id": "sim-device-1",
+        "account_h": "acct-0001"
+      },
+      "payload": {
+        "account_from": "acct-0001",
+        "account_to": "acct-9001",
+        "amount": 5000,
+        "currency": "KES",
+        "channel": "MOBILE",
+        "device_id": "sim-device-1"
+      }
+    }
+  ]
+}

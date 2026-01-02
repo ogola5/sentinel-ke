@@ -1,0 +1,689 @@
+LAYER 3/4 — AI + ANALYTICS SPEC 
+0) Mission of Layer 3
+Layer 3 turns the graph and time series into campaign intelligence:
+Detect emerging campaigns (cluster + confidence)
+
+
+Rank the most important entities (risk + roles)
+
+
+Do early warning for DDoS (structure before volume)
+
+
+Correlate attackers across VPN/IP rotation (operator inference)
+
+
+Generate explainable reasons (evidence, not “model said”)
+
+
+This is where Sentinel-Ke beats “100 solutions.”
+
+1) The AI doctrine (what you claim, and what you do NOT claim)
+You claim (judge-proof)
+We use AI to learn normal behavior, detect deviations, discover campaigns, and estimate risk trajectories.
+
+
+We do correlation and inference across changing identifiers (IPs, domains) using structure and timing.
+
+
+You do NOT claim
+We “unmask VPN real IP.”
+
+
+We break encryption or intercept content.
+
+
+We do surveillance.
+
+
+Key phrase: “We infer operator similarity from infrastructure reuse and behavioral fingerprints.”
+
+2) Analytics architecture (pipelines + schedules)
+Layer 3 runs as workers consuming events and querying Neo4j/OpenSearch.
+Worker W1 — Baseline & Anomaly Worker (time series AI)
+Frequency: every 1–5 minutes (configurable)
+
+
+Input: OpenSearch time aggregations + event ledger summary
+
+
+Output: anomaly scores, indicators, pre-attack warnings
+
+
+Worker W2 — Graph Feature Worker (structural analytics)
+Frequency: every 5–10 minutes
+
+
+Input: Neo4j subgraphs (last 24h / rolling window)
+
+
+Output: node centralities, bridge nodes, graph metrics
+
+
+Worker W3 — Campaign Detection Worker (clustering + confidence)
+Frequency: every 5–10 minutes (or event-triggered)
+
+
+Input: graph features + anomaly signals + temporal sequences
+
+
+Output: campaigns, membership, confidence, roles, blast radius
+
+
+Worker W4 — VPN/Infra Correlation Worker (operator inference)
+Frequency: every 5–10 minutes
+
+
+Input: IPs/domains/endpoints, providers/ASNs, signatures
+
+
+Output: infra clusters (vpn exits, ddos infra, phishing infra) + explanations
+
+
+Worker W5 — Case Packet Composer (operational output)
+Trigger: when campaign crosses thresholds
+
+
+Output: case packet + STIX exportable objects
+
+
+
+3) Data windows (important for correctness)
+You need three rolling windows:
+Wshort = 10 minutes (DDoS burst detection, rehearsal detection)
+
+
+Wmid = 24 hours (fraud rings, phishing campaigns)
+
+
+Wlong = 30 days (infra reuse, repeat campaigns, reputation build)
+
+
+Layer 3 should compute everything relative to these windows.
+
+4) Feature engineering (what signals you compute)
+4.1 Time-series indicators (OpenSearch-derived)
+For each service_id and endpoint_id per time bucket:
+DDoS indicators (must-have)
+req_rate (requests/min)
+
+
+unique_ip_count
+
+
+new_ip_ratio = new IPs in window / total IPs
+
+
+ua_entropy (lower = more uniform clients → suspicious)
+
+
+asn_concentration (share of traffic from top ASN/provider)
+
+
+endpoint_convergence (share of traffic hitting 1–2 endpoints)
+
+
+error_rate (4xx/5xx)
+
+
+latency_p95 (if simulated)
+
+
+Credential/fraud indicators
+failed_login_rate
+
+
+login_geo_shift_score (if simulated)
+
+
+txn_fanout (unique recipients per sender)
+
+
+txn_burstiness (sudden increase vs baseline)
+
+
+sim_swap_to_txn_latency (time delta between sim swap and cash-out)
+
+
+4.2 Graph structural features (Neo4j-derived)
+For each entity node:
+degree (total connections)
+
+
+weighted_degree (count-weighted edges)
+
+
+pagerank (importance)
+
+
+betweenness (bridge/connector)
+
+
+community_id (cluster assignment)
+
+
+ego_net_size (size of neighborhood in k hops)
+
+
+path_to_known_bad (distance to flagged entity/campaign)
+
+
+These features support “kingpin/mule/controller” inference.
+4.3 Behavioral fingerprints (for VPN/operator correlation)
+You build a request signature vector (even if simulated):
+user_agent_family
+
+
+endpoint_set (top endpoints targeted)
+
+
+request_timing_pattern (bucketed histogram)
+
+
+domain_path_patterns
+
+
+provider/asn
+
+
+ttl/cert_fingerprint (optional in MVP; can be stubbed)
+
+
+
+5) AI modules (the exact algorithms and why)
+This is the core of the “AI requirement.” Use simple, explainable, correct methods first.
+
+AI Module M1 — Baseline Learning + Anomaly Detection (Unsupervised)
+Goal: learn normalcy per source/service and flag deviations.
+Input
+Time-series indicators (req_rate, unique_ip_count, etc.) per endpoint/service.
+Method (MVP choice)
+Pick one:
+Option A (fast + explainable): Robust Z-score / EWMA + Isolation Forest
+Robust statistics for seasonality-lite
+
+
+Isolation Forest on feature vectors per bucket
+
+
+Option B (more “AI” feel): Autoencoder
+Train on “normal” windows, detect high reconstruction error
+
+
+Output
+anomaly_score ∈ [0,1]
+
+
+anomaly_reason_codes (top contributing features)
+
+
+Where stored
+OpenSearch: anomaly docs per time bucket
+
+
+Postgres: anomaly summary table per service/endpoint
+
+
+Neo4j: optionally annotate Service/Endpoint risk
+
+
+Judge value: Kenya lacks labels; unsupervised is realistic.
+
+AI Module M2 — DDoS Early Warning Engine (Structure-before-volume)
+Goal: detect DDoS as coordination campaign.
+Key idea
+DDoS early warning triggers on structure:
+unique IP growth + endpoint convergence + UA uniformity + ASN concentration
+ even before service is “down.”
+
+
+DDoS Risk Score (R_ddos)
+Compute a score per endpoint/service per Wshort bucket:
+S1 = normalize(unique_ip_growth_rate)
+
+
+S2 = normalize(endpoint_convergence)
+
+
+S3 = 1 - normalize(ua_entropy) (uniformity)
+
+
+S4 = normalize(asn_concentration)
+
+
+S5 = normalize(error_rate or latency_p95) (impact)
+
+
+Then:
+R_ddos = w1*S1 + w2*S2 + w3*S3 + w4*S4 + w5*S5
+
+
+Interpretation
+High R_ddos = coordinated campaign likely.
+
+
+Output
+DDOS_ALERT objects with:
+
+
+service/endpoint
+
+
+risk score
+
+
+early/rehearsal/active stage classification
+
+
+suspected infra clusters (from Module M4)
+
+
+recommended mitigations by stakeholder
+
+
+Storage
+Postgres ddos_alerts
+
+
+Neo4j Campaign(type=DDOS_CAMPAIGN) created/updated
+
+
+OpenSearch time-series for visualization
+
+
+Judge value: This is the differentiator—other teams only show traffic.
+
+AI Module M3 — Campaign Detection (Graph + Time clustering)
+Goal: turn events into campaigns.
+Input
+Graph edges in Wmid/Wlong
+
+
+Anomaly flags from M1/M2
+
+
+Sequence patterns (e.g., simswap→login→txn)
+
+
+Approach: Two-stage clustering (fast + strong)
+Stage 1 — Candidate community detection (graph)
+Run Louvain/Leiden community detection on a subgraph:
+
+
+include entities and relationships active in window
+
+
+weight edges by count and recency
+ Outputs:
+
+
+community_id per node
+
+
+candidate campaign groups
+
+
+Stage 2 — Refine with temporal coherence (ML clustering)
+For each community, compute:
+event density over time
+
+
+average path length
+
+
+entity type mix (domain+ip+account suggests campaign)
+
+
+infra reuse signals
+
+
+Use HDBSCAN (or rule-based refine) to split noisy clusters.
+Campaign Confidence (C_campaign)
+Compute confidence ∈ [0,1] using:
+C1 = structural_cohesion (density, modularity)
+
+
+C2 = temporal_coherence (events tightly grouped in time)
+
+
+C3 = infra_reuse_signal (same provider/domain patterns)
+
+
+C4 = anomaly_support (M1/M2 high)
+
+
+C5 = sequence_match (known kill-chain patterns)
+
+
+C = sigmoid( a1*C1 + a2*C2 + a3*C3 + a4*C4 + a5*C5 )
+Campaign Typing (classification)
+Do NOT use a black-box classifier first.
+ Use rule-based typing based on entity mix + sequences:
+SIM swap ring: SIM_SWAP + TXN + phone/account + short latency
+
+
+Phishing: new domains + URLs + login anomalies
+
+
+DDoS: service/endpoint + traffic anomalies + infra clusters
+
+
+Outputs
+Campaign node (Neo4j)
+
+
+Campaign record (Postgres) with:
+
+
+confidence, type, severity, status
+
+
+top entities and roles
+
+
+recommended actions pointers
+
+
+membership edges (Campaign)-[:INVOLVES]->(Entity) in Neo4j
+
+
+Judge value: You show campaigns “emerging” with confidence rising.
+
+AI Module M4 — VPN/Infra Correlation (Operator inference)
+Goal: connect attacks across changing IPs.
+Input
+IPs, providers/ASNs, endpoints targeted, timing, UA, domain reuse
+
+
+Graph edges: IP→Endpoint, Domain→IP, IP→Provider
+
+
+Infra Cluster similarity score
+For two IPs (or IP sets), compute similarity:
+J_endpoint = Jaccard(endpoint sets)
+
+
+J_domain = Jaccard(domain sets)
+
+
+S_provider = 1 if same provider/asn else 0
+
+
+S_time = overlap score on active windows
+
+
+S_ua = similarity on UA families
+
+
+Sim = b1*J_endpoint + b2*J_domain + b3*S_provider + b4*S_time + b5*S_ua
+Cluster IPs into InfraCluster(kind=vpn_exit or ddos) using:
+hierarchical clustering or HDBSCAN on similarity matrix
+
+
+Output
+InfraCluster nodes
+
+
+membership edges (InfraCluster)-[:INCLUDES]->(IP)
+
+
+explanation object stored in Postgres:
+
+
+top reasons: provider match, endpoint overlap, domain overlap, time overlap
+
+
+campaigns link to infra clusters
+
+
+Judge value: You “work VPN” honestly and powerfully.
+
+AI Module M5 — Risk Propagation (Who is at risk next?)
+Goal: estimate near-future risk to entities/services.
+Input
+campaign memberships
+
+
+node risk signals
+
+
+neighbor risk
+
+
+recency weighting
+
+
+Simple propagation rule (MVP)
+Define base risk r0(node) from anomalies + involvement.
+Then propagate:
+r(node) = r0(node) + λ * sum( w(edge)*r(neighbor) )
+ Where:
+
+
+w(edge) uses count + recency
+
+
+λ controls propagation strength
+
+
+Output
+updated risk_score per entity
+
+
+“blast radius” list per campaign:
+
+
+top 20 at-risk nodes not yet involved
+
+
+Judge value: This gives proactive posture without hype.
+
+AI Module M6 — Explainability Layer (Non-negotiable)
+Goal: every output must have reasons tied to evidence.
+For each campaign:
+top 5 “reason codes”
+
+
+supporting event hashes
+
+
+evidence paths (shortest paths + key bridges)
+
+
+infra reuse explanation (cluster reasons)
+
+
+Reason code examples
+NEW_DOMAIN_LT_24H
+
+
+SIMSWAP_TO_TXN_LT_30MIN
+
+
+TXN_FANOUT_HIGH
+
+
+UA_UNIFORMITY_HIGH
+
+
+ASN_CONCENTRATION_HIGH
+
+
+VPN_EXIT_REUSE
+
+
+ENDPOINT_CONVERGENCE
+
+
+Output format
+explanations object attached to campaign and infra cluster records in Postgres
+
+
+UI reads and displays it
+
+
+Judge value: defensible, investigable, non-black-box.
+
+6) How results are written to each store (contracts)
+Neo4j writes
+Campaign nodes
+
+
+InfraCluster nodes
+
+
+relationships:
+
+
+campaign involves entity (with roles)
+
+
+infra cluster includes IP
+
+
+campaign uses infra cluster
+
+
+optionally annotate risk_score on entities
+
+
+Postgres writes
+campaign metadata (canonical)
+
+
+confidence history (for “confidence rising” demo)
+
+
+explanations objects
+
+
+case packets
+
+
+thresholds and configuration used (auditability)
+
+
+OpenSearch writes
+anomalies per time bucket
+
+
+ddos indicator time series
+
+
+campaign event timeline documents (optional)
+
+
+
+7) DDoS “thwarting” logic (what you output, not traffic blocking)
+You must output mitigation plans by stakeholder.
+DDoS recommended actions template
+ISP actions
+rate-limit source ASNs
+
+
+apply RTBH (blackhole) suggestion
+
+
+upstream filtering triggers
+
+
+notify peering points (if simulated)
+
+
+App team actions
+enable WAF rules
+
+
+throttle endpoints under attack
+
+
+cache static content aggressively
+
+
+degrade non-critical endpoints
+
+
+require proof-of-work/captcha (optional mention)
+
+
+National SOC/NCSC actions
+cross-service early warning
+
+
+publish IOC bundle (domains/IPs/providers)
+
+
+coordinate communications
+
+
+This is what makes “thwarting” credible in a hackathon: you produce an operational plan + infra clusters.
+
+8) Dummy data requirements for Layer 3 (so AI behaves realistically)
+To make AI outputs believable, your simulator must generate:
+normal baseline traffic for services/endpoints (steady)
+
+
+rehearsal bursts (small, structured)
+
+
+attack bursts (large, structured)
+
+
+IP rotation across VPN providers
+
+
+stable infrastructure reuse patterns (domains/endpoints)
+
+
+And for fraud:
+sim swap events
+
+
+short latencies to login/txn
+
+
+mule fan-out then consolidation
+
+
+Layer 3 needs this realism to make scores and campaigns “click.”
+
+9) Acceptance tests (what “Layer 3 done” means)
+Layer 3 is complete when you can demonstrate:
+Baseline learns and flags anomalies without labels (M1)
+
+
+DDoS early warning triggers before peak volume (M2)
+
+
+Campaign clusters appear and confidence rises (M3)
+
+
+VPN IP rotation still stays in same infra cluster (M4)
+
+
+Risk propagation yields a “blast radius” list (M5)
+
+
+Every campaign/cluster has reason codes + evidence refs (M6)
+
+
+
+10) MVP algorithm choices (final recommendations)
+To maximize build success and judge credibility:
+Anomaly: Isolation Forest (fast, explainable) + robust stats
+
+
+DDoS early warning: weighted structural score (as specified)
+
+
+Graph communities: Leiden/Louvain via iGraph
+
+
+Infra clustering: HDBSCAN on similarity features
+
+
+Risk propagation: simple graph propagation (λ-weighted)
+
+
+GNNs can be mentioned as roadmap, but MVP should win without them.
+

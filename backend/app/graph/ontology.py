@@ -99,7 +99,7 @@ def dedupe_nodes(nodes: list[GraphNode]) -> list[GraphNode]:
 
 
 def dedupe_edges(edges: list[GraphEdge]) -> list[GraphEdge]:
-    # O(n) dedupe by (type, src, dst). Merge evidence lists.
+    # O(n) dedupe by (type, src, dst). Merge evidence lists and basic props.
     m: Dict[Tuple[str, str, str], GraphEdge] = {}
     for e in edges:
         k = (e.type, e.src, e.dst)
@@ -107,11 +107,37 @@ def dedupe_edges(edges: list[GraphEdge]) -> list[GraphEdge]:
             m[k] = e
         else:
             merged_ev = sorted(set(m[k].evidence + e.evidence))
+            # Merge props: sum counts, min first_seen, max last_seen, carry other keys from latest.
+            p_old = m[k].props or {}
+            p_new = e.props or {}
+            count = (p_old.get("count", 0) or 0) + (p_new.get("count", 0) or 0)
+
+            def _min_iso(a: str | None, b: str | None) -> str | None:
+                if a and b:
+                    return a if a <= b else b
+                return a or b
+
+            def _max_iso(a: str | None, b: str | None) -> str | None:
+                if a and b:
+                    return a if a >= b else b
+                return a or b
+
+            first_seen = _min_iso(p_old.get("first_seen"), p_new.get("first_seen"))
+            last_seen = _max_iso(p_old.get("last_seen"), p_new.get("last_seen"))
+
+            merged_props = dict(p_old)
+            merged_props.update(p_new)
+            merged_props["count"] = count or 1
+            if first_seen:
+                merged_props["first_seen"] = first_seen
+            if last_seen:
+                merged_props["last_seen"] = last_seen
+
             m[k] = GraphEdge(
                 type=e.type,
                 src=e.src,
                 dst=e.dst,
                 evidence=merged_ev,
-                props=m[k].props or e.props or {},
+                props=merged_props,
             )
     return list(m.values())

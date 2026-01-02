@@ -1,0 +1,63 @@
+{
+  "name": "fraud_chain",
+  "description": "SIM swap -> login -> transaction chain.",
+  "source_api_key": "safaricom-secret-key",
+  "base_time": "now",
+  "events": [
+    {
+      "event_type": "SIM_SWAP_EVENT",
+      "offset_sec": -3600,
+      "repeat": 3,
+      "repeat_every_sec": 600,
+      "anchors": {
+        "phone_h": "254700000001",
+        "device_id": "sim-device-1"
+      },
+      "payload": {
+        "phone": "254700000001",
+        "prev_sim_id": "sim-001",
+        "new_sim_id": "sim-002",
+        "reason": "re-issue"
+      }
+    },
+    {
+      "event_type": "LOGIN_EVENT",
+      "offset_sec": -3300,
+      "repeat": 6,
+      "repeat_every_sec": 300,
+      "ip_pool_prefix": "41.90.1.",
+      "ip_pool_count": 3,
+      "anchors": {
+        "device_id": "sim-device-1",
+        "endpoint": "bank:/login:POST"
+      },
+      "payload": {
+        "username": "user-001",
+        "outcome": "success",
+        "user_agent": "Mozilla/5.0",
+        "device_id": "sim-device-1",
+        "provider": "cellular"
+      }
+    },
+    {
+      "event_type": "TRANSACTION_EVENT",
+      "offset_sec": -3000,
+      "repeat": 6,
+      "repeat_every_sec": 300,
+      "ip_pool_prefix": "41.90.1.",
+      "ip_pool_count": 3,
+      "anchors": {
+        "device_id": "sim-device-1",
+        "account_h": "acct-0001"
+      },
+      "payload": {
+        "account_from": "acct-0001",
+        "account_to": "acct-9001",
+        "amount": 5000,
+        "currency": "KES",
+        "channel": "MOBILE",
+        "device_id": "sim-device-1"
+      }
+    }
+  ]
+}

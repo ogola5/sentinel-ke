@@ -1,0 +1,722 @@
+LAYER 2/4 — DATA + GRAPH LAYER SPEC (NO CODE)
+0) Mission of Layer 2
+Layer 2 must make Sentinel-Ke structurally intelligent.
+It must support:
+building a unified threat graph from signals
+
+
+time-aware relationship analysis
+
+
+evidence paths (why)
+
+
+campaign modeling (what)
+
+
+infrastructure clustering (how)
+
+
+stakeholder actions (so what)
+
+
+It must be rebuildable from the immutable ledger (Postgres) and searchable via OpenSearch timeline.
+
+1) Data model philosophy (non-negotiables)
+Principle P1 — Graph is a projection, not the source of truth
+Postgres event ledger is canonical.
+
+
+Neo4j graph is derived (rebuild anytime).
+
+
+Every node/edge in Neo4j must point back to:
+
+
+event_hash(es) that created it
+
+
+source_id provenance
+
+
+confidence and timestamps
+
+
+Principle P2 — No PII, only pseudonymous anchors
+phone_h, account_h, person_h are hashed upstream.
+
+
+Backend enforces that raw PII never enters Neo4j.
+
+
+Principle P3 — Time is first-class
+Every relation must support:
+first_seen
+
+
+last_seen
+
+
+count (frequency)
+
+
+last_event_hash
+ This enables temporal patterns and “campaign emergence.”
+
+
+Principle P4 — Stable IDs
+All entities must have deterministic keys:
+entity_key = f"{type}:{value}" (e.g., ip:41.90.x.x, domain:ecitizen-ke-login.com, phone_h:abc...)
+
+
+
+2) Ontology (node types)
+This is the minimal but powerful ontology for MVP.
+2.1 Core Entity Nodes (things in the world)
+Phone
+
+
+(:Phone {phone_h, first_seen, last_seen, risk_score?})
+
+
+Person
+
+
+(:Person {person_h, first_seen, last_seen, risk_score?})
+
+
+Account
+
+
+(:Account {account_h, account_type(bank|wallet), first_seen, last_seen})
+
+
+Device
+
+
+(:Device {device_id, first_seen, last_seen})
+
+
+IP
+
+
+(:IP {ip, first_seen, last_seen})
+
+
+Domain
+
+
+(:Domain {domain, first_seen, last_seen, domain_age_hours?})
+
+
+URL
+
+
+(:URL {url, path, first_seen, last_seen})
+
+
+Service
+
+
+(:Service {service_id, owner_type(gov|bank|telco|private), first_seen, last_seen})
+ Examples:
+
+
+service_id=eCitizen
+
+
+service_id=KPLC_tokens
+
+
+service_id=BankPortal_X
+
+
+Endpoint
+
+
+(:Endpoint {endpoint_id, method, route, first_seen, last_seen})
+ Example:
+
+
+endpoint_id=eCitizen:/login:POST
+
+
+ASN/Provider
+
+
+(:Provider {provider_id, asn, name, category(vpn|hosting|isp)})
+
+
+
+2.2 Derived Intelligence Nodes (things Sentinel-Ke infers)
+Campaign
+
+
+(:Campaign {campaign_id, type, confidence, status, first_seen, last_seen})
+
+
+InfraCluster
+
+
+(:InfraCluster {cluster_id, kind(ddos|vpn|phishing|mule), confidence, first_seen, last_seen})
+
+
+TemplateFamily (optional but strong)
+
+
+(:TemplateFamily {template_id, channel(sms|email|whatsapp), confidence})
+
+
+CasePacket
+
+
+(:Case {case_id, created_at, confidence, severity})
+
+
+Event Node (optional in Neo4j)
+ For MVP you can avoid creating event nodes for every event (graph bloat).
+ But you should store event references on relationships.
+
+
+If you do create:
+(:Event {event_hash, event_type, occurred_at, source_id})
+
+
+Recommendation:
+Keep events in Postgres/OpenSearch and store event_hash arrays/pointers on edges.
+
+
+
+3) Relationship types (edges) and required properties
+Every edge must have:
+first_seen, last_seen, count
+
+
+confidence (0–1)
+
+
+sources (set/list of source_ids)
+
+
+evidence (list of event_hash references; cap length to avoid bloat)
+
+
+3.1 Identity & access relationships
+Person uses Device
+
+
+(Person)-[:USES_DEVICE]->(Device)
+
+
+Person logs in from IP
+
+
+(Person)-[:LOGGED_IN_FROM]->(IP)
+
+
+Device connects to IP
+
+
+(Device)-[:CONNECTED_VIA]->(IP)
+
+
+Phone associated with Person (only if you can justify safely)
+
+
+(Phone)-[:ASSOCIATED_WITH]->(Person)
+
+
+3.2 Financial relationships
+Account sends to Account
+
+
+(Account)-[:SENDS_TO]->(Account)
+ Properties:
+
+
+amount_bucket stats
+
+
+frequency
+
+
+last_amount_bucket
+
+
+Phone linked to Account (wallet binding)
+
+
+(Phone)-[:LINKED_TO]->(Account) (if simulated)
+
+
+3.3 OSINT / phishing relationships
+Domain resolves to IP
+
+
+(Domain)-[:RESOLVES_TO]->(IP)
+
+
+Domain hosted on Provider
+
+
+(Domain)-[:HOSTED_ON]->(Provider) (via ASN mapping)
+
+
+URL belongs to Domain
+
+
+(URL)-[:BELONGS_TO]->(Domain)
+
+
+Person/Phone clicked URL (if simulated)
+
+
+(Phone)-[:CLICKED]->(URL) or (Person)-[:CLICKED]->(URL)
+
+
+TemplateFamily uses Domain
+
+
+(TemplateFamily)-[:USES_DOMAIN]->(Domain)
+
+
+3.4 DDoS relationships
+IP targets Endpoint
+
+
+(IP)-[:TARGETS]->(Endpoint) with burst metrics
+
+
+Endpoint part of Service
+
+
+(Endpoint)-[:PART_OF]->(Service)
+
+
+IP belongs to Provider
+
+
+(IP)-[:BELONGS_TO]->(Provider)
+
+
+InfraCluster includes IP
+
+
+(InfraCluster)-[:INCLUDES]->(IP)
+
+
+InfraCluster targets Service
+
+
+(InfraCluster)-[:TARGETS_SERVICE]->(Service)
+
+
+3.5 Campaign relationships
+Campaign involves Entity
+
+
+(Campaign)-[:INVOLVES {role}]->(Entity)
+ Where Entity can be IP/Domain/Account/Device/Phone/Service etc.
+
+
+Campaign supported by InfraCluster
+
+
+(Campaign)-[:USES_INFRA]->(InfraCluster)
+
+
+Case built from Campaign
+
+
+(Case)-[:DERIVED_FROM]->(Campaign)
+
+
+
+4) Graph construction rules (how events become nodes/edges)
+This is the “compiler” from events to graph.
+4.1 Deterministic node creation
+When an event arrives:
+create/merge all anchor entities
+
+
+update their first_seen/last_seen
+
+
+4.2 Deterministic edge creation
+For each event type, create edges:
+SIM_SWAP_EVENT
+Phone -> Device (USES_DEVICE) or Phone -> SIM_SWAP proxy relation
+
+
+Optional: Phone -> Account if wallet binding exists in scenario
+
+
+LOGIN_EVENT
+Person -> Device (USES_DEVICE)
+
+
+Person -> IP (LOGGED_IN_FROM)
+
+
+Device -> IP (CONNECTED_VIA)
+
+
+TRANSACTION_EVENT
+Account -> Account (SENDS_TO) with freq/count
+
+
+DOMAIN_REG_EVENT
+create Domain node
+
+
+Domain -> Provider if registrar/provider info exists
+
+
+DNS_RESOLUTION_EVENT
+Domain -> IP (RESOLVES_TO)
+
+
+IP -> Provider (BELONGS_TO)
+
+
+PHISHING_MESSAGE_EVENT
+create TemplateFamily from message hash features (optional)
+
+
+connect TemplateFamily -> Domain
+
+
+connect Phone/Person -> URL if you simulate clicks
+
+
+DDOS_SIGNAL_EVENT
+IP -> Endpoint (TARGETS) with burst metrics
+
+
+Endpoint -> Service (PART_OF)
+
+
+IP -> Provider (BELONGS_TO)
+
+
+Important:
+store event_hash references on the edge evidence list
+
+
+
+5) Indexing and constraints (Neo4j performance + correctness)
+5.1 Constraints (uniqueness)
+Phone.phone_h unique
+
+
+Person.person_h unique
+
+
+Account.account_h unique
+
+
+Device.device_id unique
+
+
+IP.ip unique
+
+
+Domain.domain unique
+
+
+URL.url unique
+
+
+Service.service_id unique
+
+
+Endpoint.endpoint_id unique
+
+
+Provider.provider_id unique
+
+
+Campaign.campaign_id unique
+
+
+InfraCluster.cluster_id unique
+
+
+Case.case_id unique
+
+
+5.2 Indexes
+Indexes on:
+last_seen for “recent activity”
+
+
+risk_score if you store it in graph
+
+
+campaign confidence
+
+
+provider.asn
+
+
+domain_age_hours
+
+
+service.owner_type
+
+
+This ensures “active campaigns” queries are fast.
+
+6) Campaign representation in the graph (what it must support)
+A campaign is not just a label. It must support:
+6.1 Campaign attributes (required)
+type: DDOS_CAMPAIGN | SIM_SWAP_RING | PHISHING_CLUSTER | MULE_RING
+
+
+confidence (0–1)
+
+
+status: emerging | active | contained | closed
+
+
+first_seen / last_seen
+
+
+severity (low/med/high/critical)
+
+
+recommended_actions summary pointer (stored in Postgres)
+
+
+6.2 Campaign entity roles
+Each involved entity must have a role:
+for DDoS:
+
+
+bot_source, exit_node, target_endpoint, target_service, provider
+
+
+for fraud:
+
+
+victim, mule, hub, drop_account, controller_device, phish_domain
+
+
+This enables “investigation-grade” narrative.
+
+7) DDoS graph intelligence (how Layer 2 makes DDoS unbeatable)
+This is where you outclass other teams.
+7.1 Model DDoS as infra clusters + bursts
+Instead of 1,000 raw IPs, you create:
+InfraCluster(kind=ddos) nodes that represent coordinated groups
+
+
+connect IPs to clusters based on:
+
+
+ASN/provider concentration
+
+
+similar request signatures
+
+
+same endpoints in same time windows
+
+
+high co-occurrence in bursts
+
+
+7.2 Key DDoS graph queries you must support
+“Which providers are powering the attack?”
+
+
+“Which endpoints are converged on?”
+
+
+“Are we seeing rehearsal bursts?”
+
+
+“Has this infra cluster appeared before?” (reuse detection)
+
+
+“What other services share exposure to this provider/cluster?” (blast radius)
+
+
+7.3 “Pre-attack signal” modeling (graph-friendly)
+Create derived metrics per Endpoint and time window:
+unique IP growth
+
+
+ASN concentration
+
+
+UA uniformity
+
+
+request signature similarity
+
+
+These become attributes on relationships (IP->Endpoint) and/or stored in Postgres/OpenSearch and surfaced.
+
+8) VPN correlation representation (Layer 2 model)
+You must be judge-proof and explicit.
+8.1 What we claim
+Not “real IP behind VPN”
+
+
+Yes “operator-level correlation across changing IPs”
+
+
+8.2 Graph representation
+InfraCluster(kind=vpn_exit) groups IPs that are likely the same VPN/provider infrastructure
+
+
+(IP)-[:BELONGS_TO]->(Provider{category=vpn})
+
+
+(InfraCluster)-[:INCLUDES]->(IP) for exit nodes
+
+
+Then:
+campaign links to infra cluster rather than to a single IP:
+
+
+(Campaign)-[:USES_INFRA]->(InfraCluster)
+
+
+8.3 Evidence attributes (why we linked)
+Store a small “why linked” object in Postgres and reference it by ID:
+ASN/provider match
+
+
+time overlap score
+
+
+endpoint overlap score
+
+
+request signature similarity
+
+
+domain/URL reuse
+
+
+UA similarity
+
+
+Graph edges store:
+evidence_ref_id to backend store (avoids graph bloat)
+
+
+
+9) Evidence paths (investigation-grade explainability)
+This layer must support “show me why.”
+9.1 Required evidence capabilities
+shortest path between:
+
+
+victim → mule
+
+
+domain → IP → provider → other domains
+
+
+IPs → endpoints → services
+
+
+“top connectors” (bridge nodes):
+
+
+high betweenness centrality nodes
+
+
+“what changed recently”:
+
+
+nodes/edges updated in last N minutes
+
+
+9.2 Evidence design rule
+Every path shown must cite:
+the edge evidence event_hash list (or evidence_ref pointer)
+
+
+the sources contributing to those edges
+ This makes it defensible.
+
+
+
+10) How Layer 2 integrates with Postgres and OpenSearch
+10.1 Postgres integration
+Postgres stores:
+full events (truth)
+
+
+evidence payloads
+
+
+cluster evidence explanations
+
+
+campaign metadata
+
+
+case packets
+
+
+Neo4j stores:
+derived entities/edges
+
+
+campaign membership
+
+
+cluster membership
+
+
+minimal evidence pointers
+
+
+10.2 OpenSearch integration
+OpenSearch stores:
+time-searchable event documents
+
+
+ddos metrics time-series
+
+
+timeline queries for UI
+
+
+Graph uses time for structure; OpenSearch uses time for exploration.
+
+11) Layer 2 acceptance tests (what “done” means)
+Layer 2 is complete when you can:
+Build/merge all core entity nodes deterministically.
+
+
+Create edges with first_seen/last_seen/count/evidence references.
+
+
+Query:
+
+
+“show campaign subgraph”
+
+
+“show evidence paths”
+
+
+“show infra clusters”
+
+
+Represent DDoS as infra clusters targeting endpoints/services.
+
+
+Represent VPN exits as provider/cluster-driven infrastructure.
+
+
+Rebuild the graph entirely from Postgres events (replay).
+
+
+

@@ -9,7 +9,9 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 
 from app.ledger.db import get_db
+from app.api.deps import pagination_params
 from app.campaign.models import Campaign, CampaignEvent, CampaignEntity
+from app.campaign.risk import CampaignRisk
 
 router = APIRouter(prefix="/v1/campaigns", tags=["campaigns"])
 
@@ -23,7 +25,7 @@ def list_campaigns(
         default=None,
         description="Filter by status: active | dormant | closed",
     ),
-    limit: int = Query(default=50, ge=1, le=200),
+    pagination: dict = Depends(pagination_params),
     db: Session = Depends(get_db),
 ):
     q = db.query(Campaign)
@@ -31,14 +33,12 @@ def list_campaigns(
     if status:
         q = q.filter(Campaign.status == status)
 
-    rows = (
-        q.order_by(Campaign.last_seen.desc())
-        .limit(limit)
-        .all()
-    )
+    rows = q.order_by(Campaign.last_seen.desc()).offset(pagination["offset"]).limit(pagination["limit"]).all()
 
     return {
         "count": len(rows),
+        "limit": pagination["limit"],
+        "offset": pagination["offset"],
         "items": [
             {
                 "campaign_id": str(c.id),
@@ -125,7 +125,7 @@ def get_campaign(
 @router.get("/{campaign_id}/events")
 def campaign_events(
     campaign_id: UUID,
-    limit: int = Query(default=100, ge=1, le=500),
+    pagination: dict = Depends(pagination_params),
     before: Optional[str] = Query(
         default=None,
         description="ISO timestamp cursor for pagination",
@@ -140,18 +140,51 @@ def campaign_events(
     if before:
         q = q.filter(CampaignEvent.occurred_at < before)
 
-    rows = (
-        q.order_by(CampaignEvent.occurred_at.desc())
-        .limit(limit)
-        .all()
-    )
+    rows = q.order_by(CampaignEvent.occurred_at.desc()).offset(pagination["offset"]).limit(pagination["limit"]).all()
 
     return {
         "count": len(rows),
+        "limit": pagination["limit"],
+        "offset": pagination["offset"],
         "items": [
             {
                 "event_hash": r.event_hash,
                 "occurred_at": r.occurred_at.isoformat(),
+            }
+            for r in rows
+        ],
+    }
+
+
+# -------------------------------------------------------------------
+# Campaign risk (blast radius)
+# -------------------------------------------------------------------
+@router.get("/{campaign_id}/risk")
+def campaign_risk(
+    campaign_id: UUID,
+    pagination: dict = Depends(pagination_params),
+    db: Session = Depends(get_db),
+):
+    rows = (
+        db.query(CampaignRisk)
+        .filter(CampaignRisk.campaign_id == campaign_id)
+        .order_by(CampaignRisk.score.desc(), CampaignRisk.created_at.desc())
+        .offset(pagination["offset"])
+        .limit(pagination["limit"])
+        .all()
+    )
+    return {
+        "count": len(rows),
+        "limit": pagination["limit"],
+        "offset": pagination["offset"],
+        "items": [
+            {
+                "entity_key": r.entity_key,
+                "entity_type": r.entity_type,
+                "score": r.score,
+                "reason_codes": r.reason_codes,
+                "details": r.details_json,
+                "created_at": r.created_at.isoformat(),
             }
             for r in rows
         ],

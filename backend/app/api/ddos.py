@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Depends
 from opensearchpy import OpenSearch
 
 from app.analytics.ddos_windows import bucket_interval, window_last_minutes
@@ -12,6 +12,10 @@ from app.analytics.ddos_indicators import convergence_index, robust_z, classify_
 from app.search.opensearch import get_client  # your existing OpenSearch client factory
 from app.core.config import settings       # your existing settings
 from app.analytics.ddos_stages import classify_ddos_stage
+from app.analytics.ddos_alerts import DDoSAlert
+from app.ledger.db import get_db
+from sqlalchemy.orm import Session
+from app.api.deps import pagination_params
 
 router = APIRouter(prefix="/v1/ddos", tags=["ddos"])
 
@@ -165,6 +169,43 @@ def ddos_indicators(
         "series": window_series,
     }
 
+
+@router.get("/alerts")
+def list_ddos_alerts(
+    pagination: dict = Depends(pagination_params),
+    db: Session = Depends(get_db),
+):
+    rows = (
+        db.query(DDoSAlert)
+        .order_by(DDoSAlert.window_end.desc(), DDoSAlert.risk.desc())
+        .offset(pagination["offset"])
+        .limit(pagination["limit"])
+        .all()
+    )
+    return {
+        "limit": pagination["limit"],
+        "offset": pagination["offset"],
+        "items": [
+            {
+                "id": str(r.id),
+                "service_id": r.service_id,
+                "endpoint": r.endpoint,
+                "window_start": r.window_start.isoformat(),
+                "window_end": r.window_end.isoformat(),
+                "stage": r.stage,
+                "risk": r.risk,
+                "spike_z": r.spike_z,
+                "unique_ip_growth_z": r.unique_ip_growth_z,
+                "convergence": r.convergence,
+                "errors_up": r.errors_up,
+                "latency_up": r.latency_up,
+                "reason_codes": r.reason_codes,
+                "indicators": r.indicators,
+                "created_at": r.created_at.isoformat(),
+            }
+            for r in rows
+        ]
+    }
 
 @router.get("/signals")
 def ddos_signals_hint(

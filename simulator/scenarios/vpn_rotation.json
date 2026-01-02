@@ -1,0 +1,26 @@
+{
+  "name": "vpn_rotation",
+  "description": "VPN rotation: multiple IPs hitting same endpoint.",
+  "source_api_key": "osint-secret-key",
+  "base_time": "now",
+  "events": [
+    {
+      "event_type": "LOGIN_EVENT",
+      "offset_sec": -1800,
+      "repeat": 30,
+      "repeat_every_sec": 40,
+      "ip_pool_prefix": "102.168.1.",
+      "ip_pool_count": 6,
+      "anchors": {
+        "endpoint": "portal:/login:POST",
+        "device_id": "device-demo-1"
+      },
+      "payload": {
+        "username": "demo-user",
+        "outcome": "success",
+        "user_agent": "Mozilla/5.0",
+        "provider": "demo-vpn"
+      }
+    }
+  ]
+}

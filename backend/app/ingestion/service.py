@@ -3,7 +3,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Optional, Dict, Any
+import time
+from typing import Optional, Dict, Any, Tuple
 
 from sqlalchemy.orm import Session
 
@@ -28,6 +29,11 @@ from app.graph.repository import GraphDeltaRepository
 # Phase 2.5 — Redpanda/Kafka internal buses (best-effort)
 from app.streaming.messages import build_event_message, build_graph_delta_message
 from app.streaming.producer import get_producer
+
+# Lightweight in-process rate limiting (per source). Suitable for demo/dev only.
+_RATE_LIMIT_WINDOW_SECS = 60
+_RATE_LIMIT_MAX = 500
+_rate_state: Dict[str, Tuple[float, int]] = {}
 
 
 @dataclass(frozen=True)
@@ -115,6 +121,16 @@ class IngestionService:
         if not source:
             raise PermissionError("Invalid source API key")
         self.ledger.ensure_source_active(source)
+
+        # 1b) rate limit (best-effort, in-memory)
+        now_ts = time.time()
+        start_ts, count = _rate_state.get(source.source_id, (now_ts, 0))
+        if now_ts - start_ts > _RATE_LIMIT_WINDOW_SECS:
+            start_ts, count = now_ts, 0
+        count += 1
+        _rate_state[source.source_id] = (start_ts, count)
+        if count > _RATE_LIMIT_MAX:
+            raise PermissionError("Rate limit exceeded")
 
         # 2) Normalize + validate envelope
         event = normalize_event(event)

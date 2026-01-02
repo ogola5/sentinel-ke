@@ -1,0 +1,52 @@
+{
+  "name": "ddos_rehearsal",
+  "description": "Moderate DDoS rehearsal bursts (no hard outage).",
+  "source_api_key": "kpa-secret-key",
+  "base_time": "now",
+  "events": [
+    {
+      "event_type": "DDOS_SIGNAL_EVENT",
+      "offset_sec": -1200,
+      "repeat": 40,
+      "repeat_every_sec": 15,
+      "ip_pool_prefix": "198.51.100.",
+      "ip_pool_count": 20,
+      "anchors": {
+        "service_id": "kplc",
+        "endpoint": "kplc:/pay:POST"
+      },
+      "payload": {
+        "service_id": "kplc",
+        "endpoint": "/pay",
+        "req_rate": 120,
+        "unique_ips_count": 20,
+        "error_rate": 0.01,
+        "avg_latency_ms": 60,
+        "endpoint_convergence": 0.35,
+        "asn_concentration": 0.25
+      }
+    },
+    {
+      "event_type": "DDOS_SIGNAL_EVENT",
+      "offset_sec": -180,
+      "repeat": 120,
+      "repeat_every_sec": 2,
+      "ip_pool_prefix": "198.51.100.",
+      "ip_pool_count": 50,
+      "anchors": {
+        "service_id": "kplc",
+        "endpoint": "kplc:/pay:POST"
+      },
+      "payload": {
+        "service_id": "kplc",
+        "endpoint": "/pay",
+        "req_rate": 320,
+        "unique_ips_count": 50,
+        "error_rate": 0.03,
+        "avg_latency_ms": 90,
+        "endpoint_convergence": 0.55,
+        "asn_concentration": 0.45
+      }
+    }
+  ]
+}

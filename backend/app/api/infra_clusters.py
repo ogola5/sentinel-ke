@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, Query, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 
-from app.api.deps import get_db
+from app.api.deps import get_db, pagination_params
 from app.search.opensearch import get_client
 from app.search.bootstrap import ensure_events_index
 
@@ -71,15 +71,22 @@ def _compute_cluster_key(*, kind: str, ips: List[str], summary: Dict[str, Any]) 
 @router.get("/clusters")
 def list_clusters(
     kind: Optional[str] = Query(None),
-    limit: int = Query(50, ge=1, le=200),
+    pagination: dict = Depends(pagination_params),
     db: Session = Depends(get_db),
 ):
     q = db.query(InfraCluster)
     if kind:
         q = q.filter(InfraCluster.kind == kind)
-    rows = q.order_by(InfraCluster.created_at.desc()).limit(limit).all()
+    rows = (
+        q.order_by(InfraCluster.created_at.desc())
+        .offset(pagination["offset"])
+        .limit(pagination["limit"])
+        .all()
+    )
 
     return {
+        "limit": pagination["limit"],
+        "offset": pagination["offset"],
         "items": [
             {
                 "cluster_id": r.cluster_id,

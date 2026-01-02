@@ -2,8 +2,7 @@ from __future__ import annotations
 
 import os
 import time
-from dataclasses import asdict
-from typing import Dict, Iterable, List, Tuple
+from typing import Dict, List, Tuple
 
 from neo4j import Driver
 from sqlalchemy.orm import Session
@@ -13,10 +12,21 @@ from app.graph.neo4j_schema import ensure_schema
 from app.graph.delta_store import DeltaStore
 from app.ledger.db import SessionLocal
 
-# Allowed labels/types (hard validation)
+# Allowed labels/types (strict allowlist)
 ALLOWED_LABELS = {
-    "Person", "Phone", "Account", "Device", "IP", "Domain", "URL",
-    "Service", "Endpoint", "Provider", "Campaign", "InfraCluster", "Case",
+    "Person",
+    "Phone",
+    "Account",
+    "Device",
+    "IP",
+    "Domain",
+    "URL",
+    "Service",
+    "Endpoint",
+    "Provider",
+    "Campaign",
+    "InfraCluster",
+    "Case",
 }
 ALLOWED_EDGE_TYPES = {
     "LOGGED_IN_FROM",
@@ -41,72 +51,130 @@ ALLOWED_EDGE_TYPES = {
 }
 
 
-def _merge_node(tx, label: str, key: str, last_seen_iso: str) -> None:
-    # label is injected only after validation against ALLOWED_LABELS
+def _merge_node(tx, *, label: str, key: str, last_seen_iso: str, props: dict) -> None:
     q = f"""
     MERGE (n:{label} {{key: $key}})
-    ON CREATE SET n.created_at = datetime(), n.last_seen = datetime($last_seen)
-    ON MATCH  SET n.last_seen = datetime($last_seen)
+    ON CREATE SET n.created_at = datetime(), n.last_seen = datetime($last_seen), n += $props
+    ON MATCH  SET n.last_seen = datetime($last_seen), n += $props
     """
-    tx.run(q, key=key, last_seen=last_seen_iso)
+    tx.run(q, key=key, last_seen=last_seen_iso, props=props or {})
 
 
-def _merge_edge(tx, rel_type: str, src_label: str, src_key: str, dst_label: str, dst_key: str,
-                event_hash: str, last_seen_iso: str) -> None:
-    # rel_type injected only after validation against ALLOWED_EDGE_TYPES
+def _merge_edge(
+    tx,
+    *,
+    rel_type: str,
+    src_label: str,
+    src_key: str,
+    dst_label: str,
+    dst_key: str,
+    evidence_list: List[str],
+    last_seen_iso: str,
+    props: dict,
+) -> None:
+    # Extract common props
+    count = props.pop("count", None)
+    first_seen = props.pop("first_seen", None)
+    # Default first_seen to last_seen if not provided
+    first_seen_val = first_seen or last_seen_iso
+    count_val = count if isinstance(count, (int, float)) else 1
+
+    # Deduplicate evidence without APOC using reduce
     q = f"""
     MATCH (s:{src_label} {{key: $src_key}})
     MATCH (t:{dst_label} {{key: $dst_key}})
     MERGE (s)-[r:{rel_type}]->(t)
     ON CREATE SET
       r.created_at = datetime(),
+      r.first_seen = datetime($first_seen),
       r.last_seen = datetime($last_seen),
-      r.evidence = [$event_hash]
+      r.count = $count_val,
+      r.evidence = $evidence_list,
+      r += $props
     ON MATCH SET
+      r.first_seen = CASE WHEN r.first_seen IS NULL THEN datetime($first_seen) ELSE r.first_seen END,
       r.last_seen = datetime($last_seen),
-      r.evidence = CASE
-        WHEN r.evidence IS NULL THEN [$event_hash]
-        WHEN $event_hash IN r.evidence THEN r.evidence
-        ELSE r.evidence + $event_hash
-      END
+      r.count = coalesce(r.count, 0) + $count_val,
+      r.evidence = [x IN REDUCE(acc = [], e IN coalesce(r.evidence, []) + $evidence_list |
+        CASE WHEN e IN acc THEN acc ELSE acc + [e] END) | x],
+      r += $props
     """
-    tx.run(q, src_key=src_key, dst_key=dst_key, event_hash=event_hash, last_seen=last_seen_iso)
+    tx.run(
+        q,
+        src_key=src_key,
+        dst_key=dst_key,
+        evidence_list=evidence_list,
+        first_seen=first_seen_val,
+        last_seen=last_seen_iso,
+        count_val=count_val,
+        props=props or {},
+    )
 
 
-def apply_delta(driver: Driver, database: str, *, event_hash: str, nodes: list[dict], edges: list[dict], last_seen_iso: str) -> None:
-    # Build node lookup by id -> (type,labelkey)
-    id_to_node: Dict[str, Tuple[str, str]] = {}
+def apply_delta(
+    driver: Driver,
+    database: str,
+    *,
+    event_hash: str,
+    nodes: list[dict],
+    edges: list[dict],
+    last_seen_iso: str,
+) -> None:
+    # Build node lookup by id -> (type,key,props)
+    id_to_node: Dict[str, Tuple[str, str, dict]] = {}
     for n in nodes:
         ntype = n.get("type")
         nkey = n.get("key")
         nid = n.get("id")
+        nprops = n.get("props") or {}
         if ntype not in ALLOWED_LABELS:
             raise ValueError(f"Invalid node type: {ntype}")
         if not isinstance(nkey, str) or not nkey:
             raise ValueError("Invalid node key")
         if not isinstance(nid, str) or not nid:
             raise ValueError("Invalid node id")
-        id_to_node[nid] = (ntype, nkey)
+        if not isinstance(nprops, dict):
+            nprops = {}
+        id_to_node[nid] = (ntype, nkey, nprops)
 
     def _write(tx):
         # nodes first
-        for nid, (label, key) in id_to_node.items():
-            _merge_node(tx, label, key, last_seen_iso)
+        for _, (label, key, props) in id_to_node.items():
+            _merge_node(tx, label=label, key=key, last_seen_iso=last_seen_iso, props=props)
 
         # then edges
         for e in edges:
             etype = e.get("type")
             src = e.get("src")
             dst = e.get("dst")
+            eprops = e.get("props") or {}
+            ev_list = e.get("evidence") or []
+
             if etype not in ALLOWED_EDGE_TYPES:
                 raise ValueError(f"Invalid edge type: {etype}")
             if src not in id_to_node or dst not in id_to_node:
-                # refuse partial writes: projection must be consistent
                 raise ValueError("Edge references missing node(s)")
+            if not isinstance(eprops, dict):
+                eprops = {}
+            if not isinstance(ev_list, list):
+                ev_list = []
 
-            src_label, src_key = id_to_node[src]
-            dst_label, dst_key = id_to_node[dst]
-            _merge_edge(tx, etype, src_label, src_key, dst_label, dst_key, event_hash, last_seen_iso)
+            # Always include the delta event_hash for provenance
+            evidence_list = sorted({str(x) for x in ev_list if x} | {event_hash})
+
+            src_label, src_key, _ = id_to_node[src]
+            dst_label, dst_key, _ = id_to_node[dst]
+            _merge_edge(
+                tx,
+                rel_type=etype,
+                src_label=src_label,
+                src_key=src_key,
+                dst_label=dst_label,
+                dst_key=dst_key,
+                evidence_list=evidence_list,
+                last_seen_iso=last_seen_iso,
+                props=eprops,
+            )
 
     with driver.session(database=database) as s:
         s.execute_write(_write)
@@ -124,12 +192,12 @@ def run_once(batch_size: int = 500) -> int:
     after = store.get_cursor("neo4j")
     batch = store.fetch_batch(after=after, limit=batch_size)
     if not batch:
+        driver.close()
+        db.close()
         return 0
 
     processed = 0
-    # Use created_at as monotonic cursor
     for row in batch:
-        # created_at is a datetime from PG
         last_seen_iso = row.created_at.replace(tzinfo=None).isoformat() + "Z"
         apply_delta(
             driver,
@@ -149,6 +217,7 @@ def run_once(batch_size: int = 500) -> int:
 
 def main():
     import argparse
+
     p = argparse.ArgumentParser()
     p.add_argument("--batch-size", type=int, default=500)
     p.add_argument("--loop", action="store_true")
@@ -169,107 +238,6 @@ def main():
             print(f"neo4j_worker error: {e}")
             time.sleep(max(args.sleep, 2.0))
 
-# backend/app/graph/neo4j_worker.py  (PATCHED FUNCTIONS ONLY)
-
-def _merge_node(tx, label: str, key: str, last_seen_iso: str, props: dict) -> None:
-    # Merge node and upsert properties
-    q = f"""
-    MERGE (n:{label} {{key: $key}})
-    ON CREATE SET n.created_at = datetime(), n.last_seen = datetime($last_seen), n += $props
-    ON MATCH  SET n.last_seen = datetime($last_seen), n += $props
-    """
-    tx.run(q, key=key, last_seen=last_seen_iso, props=props or {})
-
-
-def _merge_edge(
-    tx,
-    rel_type: str,
-    src_label: str,
-    src_key: str,
-    dst_label: str,
-    dst_key: str,
-    evidence_list: list,
-    last_seen_iso: str,
-    props: dict,
-) -> None:
-    q = f"""
-    MATCH (s:{src_label} {{key: $src_key}})
-    MATCH (t:{dst_label} {{key: $dst_key}})
-    MERGE (s)-[r:{rel_type}]->(t)
-    ON CREATE SET
-      r.created_at = datetime(),
-      r.last_seen = datetime($last_seen),
-      r.evidence = $evidence_list,
-      r += $props
-    ON MATCH SET
-      r.last_seen = datetime($last_seen),
-      r.evidence = CASE
-        WHEN r.evidence IS NULL THEN $evidence_list
-        ELSE apoc.coll.toSet(r.evidence + $evidence_list)
-      END,
-      r += $props
-    """
-    # Uses APOC for set-union. If APOC is not installed, see note below.
-    tx.run(
-        q,
-        src_key=src_key,
-        dst_key=dst_key,
-        evidence_list=evidence_list,
-        last_seen=last_seen_iso,
-        props=props or {},
-    )
-
-
-def apply_delta(driver: Driver, database: str, *, event_hash: str, nodes: list[dict], edges: list[dict], last_seen_iso: str) -> None:
-    # Build node lookup by id -> (type,labelkey,props)
-    id_to_node: Dict[str, Tuple[str, str, dict]] = {}
-    for n in nodes:
-        ntype = n.get("type")
-        nkey = n.get("key")
-        nid = n.get("id")
-        nprops = n.get("props") or {}
-        if ntype not in ALLOWED_LABELS:
-            raise ValueError(f"Invalid node type: {ntype}")
-        if not isinstance(nkey, str) or not nkey:
-            raise ValueError("Invalid node key")
-        if not isinstance(nid, str) or not nid:
-            raise ValueError("Invalid node id")
-        if not isinstance(nprops, dict):
-            nprops = {}
-        id_to_node[nid] = (ntype, nkey, nprops)
-
-    def _write(tx):
-        # nodes first
-        for nid, (label, key, props) in id_to_node.items():
-            _merge_node(tx, label, key, last_seen_iso, props)
-
-        # then edges
-        for e in edges:
-            etype = e.get("type")
-            src = e.get("src")
-            dst = e.get("dst")
-            eprops = e.get("props") or {}
-            ev_list = e.get("evidence") or []
-
-            if etype not in ALLOWED_EDGE_TYPES:
-                raise ValueError(f"Invalid edge type: {etype}")
-            if src not in id_to_node or dst not in id_to_node:
-                raise ValueError("Edge references missing node(s)")
-
-            if not isinstance(eprops, dict):
-                eprops = {}
-            if not isinstance(ev_list, list):
-                ev_list = []
-
-            # Always include delta event_hash for provenance
-            evidence_list = sorted(set([str(x) for x in ev_list if x] + [event_hash]))
-
-            src_label, src_key, _ = id_to_node[src]
-            dst_label, dst_key, _ = id_to_node[dst]
-            _merge_edge(tx, etype, src_label, src_key, dst_label, dst_key, evidence_list, last_seen_iso, eprops)
-
-    with driver.session(database=database) as s:
-        s.execute_write(_write)
 
 if __name__ == "__main__":
     main()
