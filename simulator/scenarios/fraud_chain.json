@@ -6,57 +6,78 @@
   "events": [
     {
       "event_type": "SIM_SWAP_EVENT",
-      "offset_sec": -3600,
+      "offset_sec": -4200,
       "repeat": 3,
-      "repeat_every_sec": 600,
+      "repeat_every_sec": 180,
       "anchors": {
-        "phone_h": "254700000001",
-        "device_id": "sim-device-1"
+        "phone_h": "254700000101",
+        "device_id": "sim-device-a"
       },
       "payload": {
-        "phone": "254700000001",
+        "phone": "254700000101",
         "prev_sim_id": "sim-001",
-        "new_sim_id": "sim-002",
+        "new_sim_id": "sim-004",
         "reason": "re-issue"
       }
     },
     {
       "event_type": "LOGIN_EVENT",
-      "offset_sec": -3300,
+      "offset_sec": -3600,
       "repeat": 6,
-      "repeat_every_sec": 300,
-      "ip_pool_prefix": "41.90.1.",
-      "ip_pool_count": 3,
+      "repeat_every_sec": 120,
+      "ip_pool_prefix": "41.90.10.",
+      "ip_pool_count": 6,
       "anchors": {
-        "device_id": "sim-device-1",
+        "device_id": "sim-device-a",
         "endpoint": "bank:/login:POST"
       },
       "payload": {
-        "username": "user-001",
+        "username": "user-1001",
         "outcome": "success",
         "user_agent": "Mozilla/5.0",
-        "device_id": "sim-device-1",
+        "device_id": "sim-device-a",
         "provider": "cellular"
       }
     },
     {
       "event_type": "TRANSACTION_EVENT",
-      "offset_sec": -3000,
-      "repeat": 6,
-      "repeat_every_sec": 300,
-      "ip_pool_prefix": "41.90.1.",
-      "ip_pool_count": 3,
+      "offset_sec": -3300,
+      "repeat": 9,
+      "repeat_every_sec": 120,
+      "ip_pool_prefix": "41.90.10.",
+      "ip_pool_count": 6,
       "anchors": {
-        "device_id": "sim-device-1",
-        "account_h": "acct-0001"
+        "device_id": "sim-device-a",
+        "account_h": "acct-1001"
       },
       "payload": {
-        "account_from": "acct-0001",
+        "account_from": "acct-1001",
         "account_to": "acct-9001",
-        "amount": 5000,
+        "amount": 4500,
         "currency": "KES",
         "channel": "MOBILE",
-        "device_id": "sim-device-1"
+        "device_id": "sim-device-a",
+        "agent_id": "agent-47"
+      }
+    },
+    {
+      "event_type": "TRANSACTION_EVENT",
+      "offset_sec": -1500,
+      "repeat": 2,
+      "repeat_every_sec": 180,
+      "anchors": {
+        "account_h": "acct-9001",
+        "agent_id": "agent-47"
+      },
+      "payload": {
+        "account_from": "acct-9001",
+        "account_to": "cashout",
+        "amount": 12000,
+        "currency": "KES",
+        "channel": "AGENT_CASHOUT",
+        "agent_id": "agent-47",
+        "agent_location": "Nairobi-West",
+        "withdrawal_type": "agent"
       }
     }
   ]

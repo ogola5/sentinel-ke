@@ -44,11 +44,17 @@ class LoginPayload(BaseModel):
 class TransactionPayload(BaseModel):
     account_from: Optional[str] = None
     account_to: Optional[str] = None
+    # hashed variants (optional, used after pseudonymization)
+    account_h_from: Optional[str] = None
+    account_h_to: Optional[str] = None
     amount: Optional[float] = None
     currency: Optional[str] = None
     channel: Optional[str] = None
     ip: Optional[str] = None
     device_id: Optional[str] = None
+    agent_id: Optional[str] = None
+    agent_location: Optional[str] = None
+    withdrawal_type: Optional[str] = None
 
 
 class DomainRegPayload(BaseModel):
@@ -105,6 +111,7 @@ ALLOWED_ANCHOR_KEYS = {
     "service_id",
     "url",
     "endpoint",
+    "agent_id",
 }
 
 class CanonicalEvent(BaseModel):

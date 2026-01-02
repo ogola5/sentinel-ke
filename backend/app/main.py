@@ -19,6 +19,7 @@ from app.api.infra_graph import router as infra_graph_router
 from app.api.anomalies import router as anomalies_router
 from app.api.mitigations import router as mitigations_router
 from app.api.metrics import router as metrics_router
+from app.api.ai import router as ai_router
 from app.api.deps import require_api_key
 from app.search.opensearch import get_client as get_os_client
 from app.graph.neo4j_driver import get_driver
@@ -39,6 +40,7 @@ tags_metadata = [
     {"name": "ddos", "description": "DDoS indicators and alerts"},
     {"name": "anomalies", "description": "Anomaly scores"},
     {"name": "mitigations", "description": "IOC and mitigation bundles"},
+    {"name": "ai", "description": "AI predictions and explanations"},
     {"name": "metrics", "description": "Operational metrics"},
 ]
 
@@ -58,6 +60,7 @@ app.include_router(infra_graph_router, dependencies=[Depends(require_api_key)])
 app.include_router(anomalies_router, dependencies=[Depends(require_api_key)])
 app.include_router(mitigations_router, dependencies=[Depends(require_api_key)])
 app.include_router(metrics_router, dependencies=[Depends(require_api_key)])
+app.include_router(ai_router, dependencies=[Depends(require_api_key)])
 
 @app.on_event("startup")
 def startup():

@@ -33,9 +33,19 @@ def _build_consumer(topics: list[str]) -> KafkaConsumer:
 def process_message(db, msg) -> Tuple[bool, str]:
     try:
         payload: Dict[str, Any] = msg.value or {}
-        ev = CanonicalEvent.model_validate(payload)
+        if "event" in payload:
+            event_payload = payload.get("event") or {}
+            source_key = payload.get("source_api_key") or (payload.get("source") or {}).get("api_key")
+        else:
+            event_payload = payload
+            source_key = settings.ingest_api_key
+
+        if not source_key:
+            source_key = settings.ingest_api_key
+
+        ev = CanonicalEvent.model_validate(event_payload)
         svc = IngestionService(db, pseudonym_salt="stream-salt")
-        svc.ingest_event(event=ev, source_api_key=settings.ingest_api_key)
+        svc.ingest_event(event=ev, source_api_key=source_key)
         return True, ""
     except Exception as e:
         return False, str(e)

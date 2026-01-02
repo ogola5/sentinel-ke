@@ -20,7 +20,7 @@ def pseudonymize_payload_and_anchors(
     anchors: Dict[str, str] = {}
 
     # non-sensitive anchors pass through
-    for k in ("ip", "domain", "service_id", "device_id", "endpoint", "url"):
+    for k in ("ip", "domain", "service_id", "device_id", "endpoint", "url", "agent_id"):
         if k in raw:
             anchors[k] = raw[k]
 
@@ -31,9 +31,20 @@ def pseudonymize_payload_and_anchors(
         payload.pop("phone", None)
         payload.pop("msisdn", None)
 
-    if "account" in raw:
-        anchors["account_h"] = pseudonymize(raw["account"], salt=salt)
+    account_from = payload.get("account_from")
+    account_to = payload.get("account_to")
+    if "account" in raw or account_from:
+        account_h_from = payload.get("account_h_from") or pseudonymize(
+            raw.get("account") or str(account_from), salt=salt
+        )
+        anchors["account_h"] = account_h_from
+        payload["account_h_from"] = account_h_from
         payload.pop("account", None)
+        payload.pop("account_from", None)
+    if account_to:
+        account_h_to = payload.get("account_h_to") or pseudonymize(str(account_to), salt=salt)
+        payload["account_h_to"] = account_h_to
+        payload.pop("account_to", None)
 
     if "person" in raw:
         anchors["person_h"] = pseudonymize(raw["person"], salt=salt)

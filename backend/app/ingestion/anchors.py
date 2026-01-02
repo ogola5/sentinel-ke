@@ -10,6 +10,7 @@ ANCHOR_FIELDS = {
     "device_id": ["device_id"],
     "endpoint": ["endpoint"],
     "url": ["url"],
+    "agent_id": ["agent_id"],
     # phone/account/person are sensitive; we extract raw here, hash later
     "phone": ["phone", "msisdn"],
     "account": ["account", "account_from", "account_to"],

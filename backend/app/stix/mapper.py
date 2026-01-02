@@ -65,5 +65,45 @@ def to_stix_object(entity_key: str) -> Optional[Dict]:
             "name": v,
         }
 
+    if k == "provider":
+        return {
+            "type": "x-sentinel-provider",
+            "spec_version": "2.1",
+            "id": stix_id("x-sentinel-provider", f"provider:{v}"),
+            "name": v,
+        }
+
+    if k == "phone_h":
+        return {
+            "type": "x-sentinel-phone",
+            "spec_version": "2.1",
+            "id": stix_id("x-sentinel-phone", f"phone_h:{v}"),
+            "value": v,
+        }
+
+    if k == "account_h":
+        return {
+            "type": "x-sentinel-account",
+            "spec_version": "2.1",
+            "id": stix_id("x-sentinel-account", f"account_h:{v}"),
+            "value": v,
+        }
+
+    if k == "person_h":
+        return {
+            "type": "x-sentinel-person",
+            "spec_version": "2.1",
+            "id": stix_id("x-sentinel-person", f"person_h:{v}"),
+            "value": v,
+        }
+
+    if k == "device_id":
+        return {
+            "type": "x-sentinel-device",
+            "spec_version": "2.1",
+            "id": stix_id("x-sentinel-device", f"device_id:{v}"),
+            "value": v,
+        }
+
     # You can extend with device_id/person_h etc using custom objects
     return None
