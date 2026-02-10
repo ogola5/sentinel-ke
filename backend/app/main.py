@@ -20,6 +20,7 @@ from app.api.anomalies import router as anomalies_router
 from app.api.mitigations import router as mitigations_router
 from app.api.metrics import router as metrics_router
 from app.api.ai import router as ai_router
+from app.api.economy import router as economy_router
 from app.api.deps import require_api_key
 from app.search.opensearch import get_client as get_os_client
 from app.graph.neo4j_driver import get_driver
@@ -42,6 +43,7 @@ tags_metadata = [
     {"name": "mitigations", "description": "IOC and mitigation bundles"},
     {"name": "ai", "description": "AI predictions and explanations"},
     {"name": "metrics", "description": "Operational metrics"},
+    {"name": "economy", "description": "Economic integrity and procurement anomalies"},
 ]
 
 app = FastAPI(title="Sentinel-KE", openapi_tags=tags_metadata)
@@ -61,6 +63,7 @@ app.include_router(anomalies_router, dependencies=[Depends(require_api_key)])
 app.include_router(mitigations_router, dependencies=[Depends(require_api_key)])
 app.include_router(metrics_router, dependencies=[Depends(require_api_key)])
 app.include_router(ai_router, dependencies=[Depends(require_api_key)])
+app.include_router(economy_router, dependencies=[Depends(require_api_key)])
 
 @app.on_event("startup")
 def startup():

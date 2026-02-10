@@ -70,6 +70,115 @@ docs/RUNBOOK.md
 - AI feature snapshots + embeddings + predictions + explanations (lightweight, deterministic)
 - Metrics + readiness endpoints
 
+## National Backbone Roadmap (High Level)
+
+The goal is a security and economic integrity backbone that can serve every sector and scale across Africa.
+
+### Pillar A: National Security and Defense
+
+- National asset registry for critical infrastructure
+- Continuous risk scoring for assets, agencies, and sectors
+- Threat intelligence fusion (global + local)
+- Campaign correlation across sources and time windows
+- Graph intelligence core for entities and relationships
+- Cross-sector anomaly detection and escalation
+- Incident workflow engine (triage, assign, track)
+- Evidence chain-of-custody for legal defensibility
+- Playbook automation for common response paths
+- Early warning system with confidence signals
+- Alert explainability and evidence summaries
+- National cyber drills simulator
+- Forensic evidence export (court-ready)
+- Infrastructure sabotage alerts (energy, water, transport)
+- Cross-border collaboration hub
+
+### Pillar B: Economic Integrity and Anti-Leakage
+
+- Economic leakage detection across public systems
+- Procurement anomaly scoring (tenders, vendors, pricing)
+- Budget integrity checks (plan vs spend vs delivery)
+- Cross-agency audit correlations
+- Asset misuse detection (public assets and fleets)
+- Corruption risk indicators and audits
+- Illicit flow monitoring (cross-border patterns)
+- Tax base leakage analysis
+- Supply chain integrity maps
+- Critical service availability monitor
+- Fraud and abuse pattern engine (payments, subsidies)
+- Public safety analytics (crime + cyber + finance)
+- Cattle rustling risk monitoring with geo signals
+- Geo-risk modeling and hotspot alerts
+- Economic impact estimator for incidents
+
+### Platform Foundations
+
+- Sector-agnostic data exchange layer
+- Unified event schema with versioning
+- Data provenance ledger and lineage tracking
+- Zero-trust access model
+- Role-based access control (agency and sector)
+- Multi-tenant isolation with hard boundaries
+- Data minimization and retention controls
+- Privacy-preserving analytics (aggregation, pseudonymization)
+- Data quality scoring and freshness indicators
+- Data reconciliation across agencies
+- Secure DevSecOps pipeline (signed builds, SBOMs)
+- Tamper-evident audit logging
+- Multi-cloud and on-prem deployment support
+- API gateway + connector SDKs
+- Observability across data pipelines and services
+
+### AI and Analytics
+
+- Risk scoring with confidence bands
+- Explainable AI outputs (human-readable evidence)
+- Human-in-the-loop validation for high impact decisions
+- Bias and fairness monitoring
+- Model registry and version governance
+- Simulation sandbox for model testing
+- Feature store for reusable signals
+- Predictive scenario modeling
+- National trust index (aggregate risk signal)
+- Executive briefing generation
+
+### Governance, Adoption, and Export
+
+- National data trust governance model
+- Policy compliance dashboards
+- National incident reporting portal
+- Public-private sharing gateway
+- Multi-language reporting (regional accessibility)
+- Training and certification platform
+- Research collaboration bridge (universities, labs)
+- Maturity assessment tool for agencies
+- Outcome tracking metrics (loss reduction, uptime)
+- Sector onboarding toolkit
+- Interoperability standards (STIX/TAXII + custom)
+- Data marketplace framework
+- API monetization layer
+- Export-ready compliance pack (ISO, NIST, IEC 62443)
+
+## Current Implementation vs Roadmap (High Level)
+
+Rough coverage estimate: ~25% of the roadmap is implemented, focused on core data pipelines, graph, and initial analytics.
+
+Implemented or partially implemented today:
+- Canonical ingestion pipeline with validation, pseudonymization, and ledger
+- OpenSearch indexing and search/timeline APIs
+- Graph delta logging and Neo4j projection
+- Campaign correlation engine (fraud/mule demo)
+- DDoS analytics and infra clustering
+- Mitigation/IOC bundles and export
+- AI feature snapshots and lightweight predictions
+- Metrics and readiness endpoints
+
+Not implemented yet (examples from the roadmap):
+- Cross-agency data trust governance and policy compliance
+- Economic leakage and corruption detection workflows
+- Multi-tenant data sharing gateway and marketplace
+- National SOC workflows and incident reporting portal
+- Export compliance pack and monetization layers
+
 ## Repository Layout
 
 - `backend/` FastAPI services, workers, ledger, graph projection

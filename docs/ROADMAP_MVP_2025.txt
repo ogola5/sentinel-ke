@@ -1,0 +1,36 @@
+Sentinel-KE MVP Roadmap (Target: 15 Mar 2025)
+=
+
+Assumptions
+- Working days: Sunday through Thursday (Friday and Saturday excluded)
+- Schedule uses 3 working days per activity
+- Assumed start date: 2025-01-05 (Sunday)
+- MVP readiness by 2025-03-13 (Thursday) to meet 2025-03-15 target
+
+Current Baseline (High Level)
+- Coverage estimate: ~25% of the national-backbone roadmap
+- Implemented: ingestion pipeline, Postgres ledger, OpenSearch indexing/search, graph projection, initial analytics, demo UI
+- Gaps: governance, multi-tenant sharing, economic integrity workflows, national SOC ops tooling, export/compliance pack
+
+MVP Schedule (3 Working Days Each)
+- Note: date ranges may span a weekend because Fri/Sat are excluded
+01. 2025-01-05 to 2025-01-07 - MVP scope, success metrics, and stakeholder alignment
+02. 2025-01-08 to 2025-01-12 - Data governance, data trust policy, and sector onboarding plan
+03. 2025-01-13 to 2025-01-15 - Canonical schema hardening and data contract definitions
+04. 2025-01-16 to 2025-01-20 - Connector specs and ingestion hardening (validation + pseudonymization)
+05. 2025-01-21 to 2025-01-23 - Provenance ledger and evidence chain-of-custody workflow
+06. 2025-01-26 to 2025-01-28 - Zero-trust access model and RBAC/multi-tenant boundaries
+07. 2025-01-29 to 2025-02-02 - Observability, audit logging, and tamper-evident trails
+08. 2025-02-03 to 2025-02-05 - Search/graph stability, replay tools, and performance tuning
+09. 2025-02-06 to 2025-02-10 - Core analytics v1: campaigns, DDoS, and infra correlation
+10. 2025-02-11 to 2025-02-13 - Economic integrity v1: procurement anomalies and leakage signals
+11. 2025-02-16 to 2025-02-18 - Cross-agency correlation, case management, and evidence export
+12. 2025-02-19 to 2025-02-23 - Early warning risk scoring and explainable insights
+13. 2025-02-24 to 2025-02-26 - Frontend national SOC view and sector dashboards
+14. 2025-02-27 to 2025-03-03 - Executive reporting, KPI dashboards, and briefing packs
+15. 2025-03-04 to 2025-03-06 - Pilot integrations for one sector (e.g., telco or finance)
+16. 2025-03-09 to 2025-03-11 - Security testing, load testing, and data quality validation
+17. 2025-03-12 to 2025-03-13 - MVP readiness, documentation, and demo preparation
+
+MVP Delivery
+- Target: MVP ready by 2025-03-15

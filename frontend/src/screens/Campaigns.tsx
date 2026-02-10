@@ -1,0 +1,142 @@
+import type { Campaign } from "../types/domain";
+import { Sparkline } from "../components/Charts";
+import { formatConfidence } from "../utils/formatters";
+
+type CampaignsProps = {
+  campaigns: Campaign[];
+  selectedId: string;
+  onSelect: (campaignId: string) => void;
+  onOpenGraph: () => void;
+  onGenerateCase: () => void;
+  onOpenInfra: () => void;
+  onOpenEvidence: () => void;
+};
+
+const severityClass = (severity: string) => {
+  if (severity === "high") return "banner banner-high";
+  if (severity === "medium") return "banner banner-medium";
+  if (severity === "low") return "banner banner-low";
+  return "banner";
+};
+
+export default function Campaigns({
+  campaigns,
+  selectedId,
+  onSelect,
+  onOpenGraph,
+  onGenerateCase,
+  onOpenInfra,
+  onOpenEvidence,
+}: CampaignsProps) {
+  const selected = campaigns.find((campaign) => campaign.id === selectedId) ?? campaigns[0];
+
+  return (
+    <section className="screen">
+      <div className="screen-header">
+        <div>
+          <p className="eyebrow">S4</p>
+          <h2>Campaign Console</h2>
+          <p className="subtle">Coordinated operations with confidence growth.</p>
+        </div>
+        <div className="chip-row">
+          <button className="ghost" type="button" onClick={onOpenGraph}>
+            Open in Graph
+          </button>
+          <button className="ghost" type="button" onClick={onGenerateCase}>
+            Generate Case Packet
+          </button>
+        </div>
+      </div>
+
+      <div className={severityClass(selected.severity)}>
+        <strong>{selected.severity.toUpperCase()} severity</strong>
+        <span>{selected.name} / {selected.type} / {selected.status}</span>
+      </div>
+
+      <div className="grid-two">
+        <div className="panel">
+          <div className="panel-header">
+            <h3>Campaigns</h3>
+            <span className="muted">Operational objects</span>
+          </div>
+          <div className="campaign-list">
+            {campaigns.map((campaign) => (
+              <button
+                key={campaign.id}
+                className={
+                  campaign.id === selected.id ? "campaign-card active" : "campaign-card"
+                }
+                type="button"
+                onClick={() => onSelect(campaign.id)}
+              >
+                <div>
+                  <p className="label">{campaign.name}</p>
+                  <p className="muted">{campaign.type} / {campaign.status}</p>
+                </div>
+                <div className="stat">{formatConfidence(campaign.confidence)}</div>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="panel">
+          <div className="panel-header">
+            <h3>{selected.name}</h3>
+            <span className="muted">{selected.id}</span>
+          </div>
+          <div className="detail-grid">
+            <div>
+              <p className="label">Confidence</p>
+              <p className="stat">{formatConfidence(selected.confidence)}</p>
+            </div>
+            <div>
+              <p className="label">Status</p>
+              <p className="stat">{selected.status}</p>
+            </div>
+            <div>
+              <p className="label">Window</p>
+              <p className="stat">{selected.first_seen} - {selected.last_seen}</p>
+            </div>
+            <div>
+              <p className="label">Severity</p>
+              <p className="stat">{selected.severity}</p>
+            </div>
+          </div>
+          <div className="panel-subsection">
+            <h4>Confidence history</h4>
+            <Sparkline data={selected.confidence_history} stroke="var(--accent)" />
+          </div>
+          <div className="panel-subsection">
+            <h4>Top entities & roles</h4>
+            <div className="entity-roles">
+              {selected.top_entities.map((entity) => (
+                <div key={entity.label} className="entity-role">
+                  <span>{entity.label}</span>
+                  <span className="muted">{entity.role}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className="panel-subsection">
+            <h4>AI confidence drivers</h4>
+            <div className="factors">
+              {selected.factors.map((factor) => (
+                <span key={factor} className="factor">
+                  {factor}
+                </span>
+              ))}
+            </div>
+          </div>
+          <div className="chip-row">
+            <button className="ghost" type="button" onClick={onOpenInfra}>
+              View Infra Clusters
+            </button>
+            <button className="ghost" type="button" onClick={onOpenEvidence}>
+              Evidence references
+            </button>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
