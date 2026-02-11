@@ -18,21 +18,6 @@ def _index_name() -> str:
 
 
 # -------------------------
-# GET EVENT BY HASH
-# -------------------------
-@router.get("/{event_hash}")
-def get_event(event_hash: str):
-    client = get_client()
-    index = _index_name()
-
-    try:
-        res = client.get(index=index, id=event_hash)
-        return res["_source"]
-    except Exception:
-        raise HTTPException(status_code=404, detail="event_not_found")
-
-
-# -------------------------
 # SEARCH EVENTS
 # -------------------------
 @router.get("/search")
@@ -136,3 +121,18 @@ def timeline(
             for b in buckets
         ],
     }
+
+
+# -------------------------
+# GET EVENT BY HASH
+# -------------------------
+@router.get("/{event_hash}")
+def get_event(event_hash: str):
+    client = get_client()
+    index = _index_name()
+
+    try:
+        res = client.get(index=index, id=event_hash)
+        return res["_source"]
+    except Exception:
+        raise HTTPException(status_code=404, detail="event_not_found")

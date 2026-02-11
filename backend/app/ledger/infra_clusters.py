@@ -13,6 +13,7 @@ class InfraCluster(Base):
     __tablename__ = "infra_cluster"
 
     cluster_id = Column(String, primary_key=True)
+    cluster_key = Column(String, nullable=True)
     kind = Column(String, nullable=False)
     confidence = Column(Float, nullable=False, default=0.5)
 
@@ -34,6 +35,7 @@ class InfraCluster(Base):
 
     __table_args__ = (
         Index("ix_infra_cluster_kind_time", "kind", "created_at"),
+        Index("ux_infra_cluster_cluster_key", "cluster_key", unique=True),
     )
 
 

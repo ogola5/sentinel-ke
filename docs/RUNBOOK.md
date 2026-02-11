@@ -9,6 +9,8 @@ docker compose up -d
 ```
 
 Compose includes a background mule campaign worker (`sentinel-mule-campaign-worker`).
+Frontend dev server is proxied to backend via `/v1`, `/health`, and `/ready`.
+In Docker, proxy target is `http://backend:8000` (set in `docker-compose.yml`).
 
 ## 2) Seed sources (API keys)
 
@@ -102,6 +104,11 @@ docker compose run --rm --no-deps -e PYTHONPATH=/app backend python -m app.analy
 docker compose run --rm --no-deps -e PYTHONPATH=/app backend python -m app.analytics.layer3.embedding_worker --window-key Wmid
 docker compose run --rm --no-deps -e PYTHONPATH=/app backend python -m app.analytics.layer3.ai_inference_worker --window-key Wmid
 ```
+
+Economic leakage worker:
+```
+docker compose run --rm --no-deps -e PYTHONPATH=/app backend python -m app.analytics.layer3.economic_leakage_worker --window-days 30
+```
 ## 5) Validate DB state (optional)
 
 ```
@@ -188,6 +195,20 @@ GET  /v1/stix/mitigations?kind=DDOS
 Metrics:
 ```
 GET /v1/metrics
+```
+
+Economy (procurement + guardrails + tamper integrity):
+```
+POST /v1/economy/procurement/analyze
+POST /v1/economy/guardrail/evaluate
+GET  /v1/economy/guardrail/decisions
+POST /v1/economy/integrity/snapshot
+GET  /v1/economy/integrity/alerts
+POST /v1/economy/leakage/run
+GET  /v1/economy/leakage/alerts
+GET  /v1/economy/leakage/summary
+GET  /v1/economy/signals
+GET  /v1/economy/procurement/anomalies
 ```
 
 ## 7) Demo checks in Neo4j (optional)

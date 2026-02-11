@@ -1,17 +1,22 @@
-@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Space+Grotesk:wght@400;500;600;700&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Rajdhani:wght@400;500;600;700&display=swap");
 
 :root {
-  --bg: #f4f2ea;
-  --panel: #fbf9f2;
-  --panel-strong: #ffffff;
-  --ink: #1a1c1b;
-  --ink-muted: #5a5e5b;
-  --line: #d8d3c7;
-  --accent: #b15b1c;
-  --accent-2: #2f6c6e;
-  --warning: #c08525;
-  --danger: #9d3b31;
-  --shadow: 0 14px 30px rgba(29, 27, 24, 0.08);
+  --bg: #040a06;
+  --panel: #0b1710;
+  --panel-strong: #102017;
+  --ink: #ddffe9;
+  --ink-muted: #88b79b;
+  --line: #1f3f2e;
+  --accent: #31ff90;
+  --accent-2: #7effb4;
+  --warning: #ffd147;
+  --danger: #ff4d5a;
+  --success: #21dd77;
+  --accent-rgb: 49 255 144;
+  --danger-rgb: 255 77 90;
+  --warning-rgb: 255 209 71;
+  --surface-rgb: 16 32 23;
+  --shadow: 0 18px 42px rgba(0, 0, 0, 0.48);
   --radius: 14px;
 }
 
@@ -21,10 +26,12 @@
 
 body {
   margin: 0;
-  font-family: "Space Grotesk", "Segoe UI", sans-serif;
+  font-family: "Rajdhani", "Segoe UI", sans-serif;
   color: var(--ink);
-  background: linear-gradient(180deg, rgba(244, 242, 234, 0.98), rgba(239, 236, 226, 0.92)),
-    radial-gradient(circle at top, rgba(177, 91, 28, 0.08), transparent 60%);
+  background:
+    radial-gradient(circle at 12% 12%, rgba(49, 255, 144, 0.14), transparent 38%),
+    radial-gradient(circle at 84% 6%, rgba(255, 77, 90, 0.12), transparent 34%),
+    linear-gradient(165deg, #040a06 0%, #06110b 45%, #040a06 100%);
   background-attachment: fixed;
   min-height: 100vh;
 }
@@ -33,11 +40,12 @@ body::before {
   content: "";
   position: fixed;
   inset: 0;
-  background-image: linear-gradient(rgba(26, 28, 27, 0.05) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(26, 28, 27, 0.05) 1px, transparent 1px);
-  background-size: 40px 40px;
+  background-image:
+    linear-gradient(rgba(49, 255, 144, 0.08) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(49, 255, 144, 0.08) 1px, transparent 1px);
+  background-size: 34px 34px;
   pointer-events: none;
-  opacity: 0.25;
+  opacity: 0.16;
   z-index: -1;
 }
 
@@ -50,8 +58,9 @@ h2,
 h3,
 h4 {
   margin: 0;
-  font-weight: 600;
+  font-weight: 700;
   letter-spacing: -0.02em;
+  text-transform: uppercase;
 }
 
 p {
@@ -94,5 +103,5 @@ li {
 }
 
 .mono {
-  font-family: "IBM Plex Mono", "Courier New", monospace;
+  font-family: "JetBrains Mono", "Courier New", monospace;
 }

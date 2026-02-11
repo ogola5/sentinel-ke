@@ -13,5 +13,11 @@ from app.analytics.ddos_alerts import DDoSAlert
 from app.campaign.risk import CampaignRisk
 from app.analytics.anomalies import AnomalyScore
 from app.analytics.economics import EconomicSignal, ProcurementAnomaly
+from app.analytics.economic_leakage import LeakageAlert
+from app.analytics.economy_guardrails import (
+    ProcurementGuardrailDecision,
+    ExternalIntegritySnapshot,
+    ExternalTamperAlert,
+)
 from app.analytics.mitigations import Mitigation
 from app.analytics.ai_models import GraphFeatureSnapshot, EntityEmbedding, AIPrediction, AIExplanation

@@ -34,3 +34,8 @@ MVP Schedule (3 Working Days Each)
 
 MVP Delivery
 - Target: MVP ready by 2025-03-15
+
+MVP Add-On Extension (2026, No Rewrite)
+- New objective: cross-platform desktop product + national-security/economic-impact differentiators.
+- Execution plan: `docs/MVP_ADDON_EXECUTION_PLAN.md`
+- Tracker integration: `docs/ROADMAP_TRACKER.md` section "Desktop Add-On MVP Track (No Rewrite)"

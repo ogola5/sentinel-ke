@@ -21,6 +21,8 @@ from app.api.mitigations import router as mitigations_router
 from app.api.metrics import router as metrics_router
 from app.api.ai import router as ai_router
 from app.api.economy import router as economy_router
+from app.api.economy_guardrail import router as economy_guardrail_router
+from app.api.economy_leakage import router as economy_leakage_router
 from app.api.deps import require_api_key
 from app.search.opensearch import get_client as get_os_client
 from app.graph.neo4j_driver import get_driver
@@ -32,6 +34,38 @@ if not DATABASE_URL:
 
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+
+
+def _ensure_infra_cluster_schema() -> None:
+    if engine.dialect.name != "postgresql":
+        return
+
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                ALTER TABLE infra_cluster
+                ADD COLUMN IF NOT EXISTS cluster_key TEXT
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                UPDATE infra_cluster
+                SET cluster_key = concat('legacy:', cluster_id::text)
+                WHERE COALESCE(cluster_key, '') = ''
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS ux_infra_cluster_cluster_key
+                ON infra_cluster (cluster_key)
+                """
+            )
+        )
 
 tags_metadata = [
     {"name": "ingest", "description": "Evidence-grade ingestion"},
@@ -64,10 +98,13 @@ app.include_router(mitigations_router, dependencies=[Depends(require_api_key)])
 app.include_router(metrics_router, dependencies=[Depends(require_api_key)])
 app.include_router(ai_router, dependencies=[Depends(require_api_key)])
 app.include_router(economy_router, dependencies=[Depends(require_api_key)])
+app.include_router(economy_guardrail_router, dependencies=[Depends(require_api_key)])
+app.include_router(economy_leakage_router, dependencies=[Depends(require_api_key)])
 
 @app.on_event("startup")
 def startup():
     Base.metadata.create_all(bind=engine)
+    _ensure_infra_cluster_schema()
 
 @app.get("/health")
 def health():

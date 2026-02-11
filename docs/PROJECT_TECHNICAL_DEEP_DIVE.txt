@@ -1,0 +1,514 @@
+SENTINEL-KE: DEEP TECHNICAL EXPLANATION OF CURRENT SYSTEM BEHAVIOR
+Generated: 2026-02-11
+
+====================================================================
+0) WHY THIS DOCUMENT EXISTS
+====================================================================
+This document explains, in technical depth, what is currently happening in the Sentinel-KE project:
+- how backend and frontend are wired,
+- what each screen is actually doing,
+- what the recent logs mean,
+- what is implemented vs partially implemented vs missing,
+- and how to explain the system clearly to another technical or non-technical stakeholder.
+
+The analysis is based on the current repository code and route wiring.
+
+
+====================================================================
+1) CURRENT INCIDENT TIMELINE FROM YOUR LOGS
+====================================================================
+1.1 Earlier failure (now fixed): /v1/infra/clusters returned 500
+- Symptom:
+  AttributeError: 'InfraCluster' object has no attribute 'cluster_key'
+  raised in backend/app/api/infra_clusters.py while building list response.
+
+- Why it happened:
+  API response expected InfraCluster.cluster_key, but runtime schema/model path had missing or inconsistent cluster_key state in DB/model layer.
+
+- Why it appears fixed now:
+  You now have repeated 200 responses for:
+  GET /v1/infra/clusters?limit=10&offset=0
+
+- Code-level fix path present now:
+  - backend/app/main.py startup contains _ensure_infra_cluster_schema() to:
+    - add cluster_key column if missing,
+    - backfill legacy rows,
+    - create unique index on cluster_key.
+  - backend/app/ledger/infra_clusters.py includes cluster_key field.
+  - backend/app/api/infra_clusters.py returns cluster_key in list/get payloads.
+
+1.2 Current repeated issue: /v1/events/search and /v1/events/timeline return 404
+- Symptom in logs:
+  GET /v1/events/search?size=120 -> 404
+  GET /v1/events/timeline?... -> 404
+
+- Important context:
+  - campaigns, ddos alerts, infra clusters, ready are returning 200 in same period.
+  - so backend process is up and many routers are active.
+
+- Most likely explanation at system level:
+  The frontend sync loop calls these events endpoints every cycle. When they 404, live snapshot quality degrades and UI can fall back to demo data for parts of the experience.
+
+- Route wiring in code currently does define these endpoints:
+  backend/app/api/events.py has:
+  - GET /v1/events/search
+  - GET /v1/events/timeline
+  - GET /v1/events/{event_hash}
+
+  So persistent 404 means runtime route state and expected route state are diverging for some reason (detailed hypotheses in Section 6).
+
+1.3 Repeated Redpanda warning is not the frontend/backend outage
+- Message:
+  Redpanda Enterprise license required for partition_autobalancing_mode=continuous.
+- Impact:
+  non-blocking warning for this local/demo setup; not root cause of your API 404/500 issues.
+
+
+====================================================================
+2) DEPLOYMENT TOPOLOGY (WHAT IS RUNNING)
+====================================================================
+From docker-compose.yml, the system is a multi-service local SOC stack:
+
+- sentinel-backend (FastAPI, port 8000)
+- sentinel-frontend (Vite + React, port 3000 mapped to 5173)
+- sentinel-postgres (canonical DB)
+- sentinel-neo4j (graph projection DB)
+- sentinel-opensearch (search/timeline index)
+- sentinel-redpanda (Kafka-compatible event bus)
+- sentinel-redpanda-consumer (ingest consumer worker)
+- sentinel-mule-campaign-worker (scheduled layer-3 campaign detector)
+
+Critical connectivity path:
+- Frontend in Docker uses VITE_API_PROXY_TARGET=http://backend:8000.
+- Vite proxies /v1, /health, /ready to backend.
+
+Implication:
+- If backend returns 404 for /v1/events/*, this is backend route/runtime behavior, not just a browser/client typo.
+
+
+====================================================================
+3) BACKEND ARCHITECTURE (DEEP TECHNICAL VIEW)
+====================================================================
+3.1 Application boot and router wiring
+File: backend/app/main.py
+
+At startup:
+- Validates DATABASE_URL env.
+- Builds SQLAlchemy engine/session.
+- Creates SQLAlchemy metadata tables.
+- Runs infra schema patch helper for cluster_key compatibility.
+
+Routers included under global API-key guard:
+- ingest
+- events
+- graph
+- timeline (legacy duplicate route family)
+- campaigns
+- infra clusters
+- ddos
+- campaign evidence
+- cases
+- stix
+- infra graph projection
+- anomalies
+- mitigations
+- metrics
+- ai
+- economy
+- economy guardrail
+- economy leakage
+
+Health model:
+- /health checks Postgres.
+- /ready checks Postgres + OpenSearch + Neo4j and returns component map.
+
+3.2 Security/access model
+File: backend/app/api/deps.py
+
+- All routers are protected by require_api_key unless dev bypass toggles are enabled.
+- Expected key is FRONTEND_API_KEY, fallback INGEST_API_KEY.
+- In development with API_AUTH_OPTIONAL_DEV=true, missing key can be tolerated.
+
+Consequence:
+- Access failures should be 401, not 404. So current 404 issue is not primarily an auth failure.
+
+3.3 Layer 1: Canonical ingestion pipeline
+Files:
+- backend/app/ingestion/router.py
+- backend/app/ingestion/service.py
+- backend/app/ledger/repository.py
+- backend/app/ledger/models.py
+
+Flow for each event:
+1. Source API key resolved against source_registry (hash-verified).
+2. Source active check.
+3. In-memory per-source rate limit (demo-grade).
+4. Event normalization + schema validation.
+5. Pseudonymization of payload/anchors.
+6. Anchor sanitization to avoid prefix corruption (e.g., person_h:person_h:x).
+7. Deterministic event_hash computation.
+8. Append-only insert to event_log + event_entity_index.
+9. Audit trail insert to audit_log.
+10. Best-effort side effects (only on accepted events):
+   - OpenSearch indexing,
+   - GraphDelta generation + graph_delta_log insert,
+   - Kafka publish for event and graph delta topics.
+11. Synchronous campaign signal extraction in dev path when accepted.
+
+Core property:
+- Postgres event_log is canonical source of truth.
+- Everything else is projection/derived.
+
+3.4 Layer 1 search/timeline APIs
+File: backend/app/api/events.py
+
+Implemented:
+- GET /v1/events/search
+  query_string + filters over OpenSearch.
+- GET /v1/events/timeline
+  date_histogram aggregation over occurred_at.
+- GET /v1/events/{event_hash}
+  direct event retrieval by OpenSearch doc id.
+
+Legacy overlap:
+File: backend/app/api/timeline.py also defines GET /v1/events/timeline.
+
+This duplicate endpoint family is architectural debt and can create confusion in behavior expectations.
+
+3.5 Layer 2: Graph projection model
+Files:
+- backend/app/graph/projector.py
+- backend/app/graph/models.py
+- backend/app/graph/repository.py
+- backend/app/graph/neo4j_worker.py
+- backend/app/graph/service.py
+- backend/app/api/graph.py
+
+Model:
+- Canonical event -> deterministic GraphDelta (nodes+edges with evidence hashes).
+- GraphDeltaLog in Postgres persists projection intents.
+- Neo4j worker replays deltas using projection cursor.
+
+Safety/quality characteristics:
+- Strict allowlist for labels and edge types.
+- Edge merge accumulates evidence and counts.
+- Provenance always includes event_hash on relations.
+- Neo4j is rebuildable from Postgres deltas.
+
+Graph read APIs:
+- GET /v1/graph/entity/{entity_key}
+- GET /v1/graph/neighbors/{entity_key}
+- GET /v1/graph/path?from=...&to=...
+- GET /v1/graph/evidence/{event_hash}
+
+3.6 Layer 3: Analytics and intelligence workers
+Representative files:
+- backend/app/analytics/layer3/ddos_alert_worker.py
+- backend/app/analytics/layer3/vpn_cluster_worker.py
+- backend/app/analytics/layer3/mule_campaign_worker.py
+
+DDoS worker:
+- pulls time windows from OpenSearch,
+- computes robust z-score and convergence metrics,
+- classifies stage/risk,
+- upserts ddos_alert rows,
+- upserts mitigation bundles.
+
+VPN/infra worker:
+- clusters IPs by endpoint/provider/time overlap,
+- creates infra_cluster + members + evidence.
+
+Mule campaign worker:
+- detects transfer fan-in + cashout patterns,
+- upserts campaign/campaign_entity/campaign_event,
+- writes synthetic campaign graph deltas.
+
+3.7 Campaign, case packet, STIX export path
+Files:
+- backend/app/api/campaigns.py
+- backend/app/api/campaign_evidence.py
+- backend/app/cases/api.py
+- backend/app/cases/builders.py
+- backend/app/api/stix.py
+- backend/app/stix/exporter.py
+
+Pipeline:
+- Campaign entities/events form explainable evidence chain.
+- Case packet endpoint builds evidence and graph summary for a campaign.
+- STIX export builds bundle with observables, indicators, relationships, report, and optional attack-pattern for DDoS types.
+
+3.8 Economy, guardrails, integrity, leakage
+Files:
+- backend/app/api/economy.py
+- backend/app/api/economy_guardrail.py
+- backend/app/api/economy_leakage.py
+- backend/app/economy/*
+
+Capabilities:
+- procurement anomaly scoring,
+- allow/review/block guardrail decisions,
+- external system tamper/deletion integrity alerts,
+- leakage detection and summary aggregation.
+
+3.9 Streaming architecture (best effort, non-fatal)
+Files:
+- backend/app/streaming/producer.py
+- backend/app/streaming/ingest_consumer.py
+- backend/app/streaming/messages.py
+
+- Producer is lazy-initialized to avoid backend crash when Kafka unavailable.
+- Consumer can ingest canonical events from topic and feed same ingestion service.
+
+
+====================================================================
+4) FRONTEND ARCHITECTURE AND SCREEN BEHAVIOR
+====================================================================
+4.1 Shell and sync loop
+File: frontend/src/app/App.tsx
+
+Main behavior:
+- On load and every 30s, does Promise.all([fetchBackendSnapshot(), fetchOperationsSnapshot()]).
+- If sync succeeds, UI uses live backend data.
+- If sync fails, UI switches label to backend unavailable and uses demo fallback data.
+
+Operational consequence:
+- One critical failing endpoint in fetchBackendSnapshot can cause visible fallback behavior, even if some other backend endpoints are healthy.
+
+4.2 Data adapter layer
+Files:
+- frontend/src/api/backend.ts
+- frontend/src/api/operations.ts
+- frontend/src/api/endpoints.ts
+
+backend.ts:
+- ready + events + timeline + campaigns + ddos alerts + infra clusters
+- maps API responses into UI domain types
+- fetches infra cluster detail for top rows
+- fetches campaign evidence drawer data
+
+operations.ts:
+- metrics, anomalies, mitigations, IOC export, AI predictions/explanations,
+  economy signals, procurement anomalies, guardrail decisions,
+  integrity alerts, leakage alerts/summary
+- uses safeFetch fallback per endpoint (more resilient than backend.ts)
+
+4.3 Screen-by-screen behavior map
+
+S1 National Live Feed (LiveFeed.tsx)
+- Expects events list + timeline counts.
+- actions: Show in Graph, Timeline Context, Evidence drawer.
+- Uses /v1/events/search and /v1/events/timeline via snapshot adapter.
+
+S2 Timeline / Indicators (Timeline.tsx)
+- Service-level DDoS indicator trends and stage/risk.
+- Data comes from ddos alerts -> ddos indicators adapter path.
+
+S3 Threat Graph Explorer (GraphExplorer.tsx)
+- Currently rendered from static graphData/demo structures.
+- Not wired to /v1/graph neighbors/path/evidence APIs yet.
+- This is important: graph UI currently looks rich but is not a live backend graph query client.
+
+S4 Campaign Console (Campaigns.tsx)
+- Pulls campaign list and can open evidence drawer.
+- Supports case generation trigger.
+
+S5 Infra & VPN Correlation (InfraCorrelation.tsx)
+- Pulls /v1/infra/clusters and detail /v1/infra/clusters/{id}.
+- Shows members/reasons/rotation/evidence summary.
+
+S6 Case Packet + STIX (CasePackets.tsx)
+- Creates case from campaign endpoint.
+- STIX export action calls stix endpoint.
+- Primarily workflow shell around generated case artifacts.
+
+S7 Operations & Economy (OperationsCenter.tsx)
+- Unified observability panel for anomalies, mitigations, AI, procurement, guardrails, integrity, leakage.
+- This screen is the most backend-integrated and robustly degraded.
+
+Right-side inspector + evidence drawer
+- Inspector uses selected entity/campaign state.
+- Evidence drawer displays evidence arrays from selected context.
+
+Scenario Controller panel
+- Frontend calls /v1/demo/scenario/start/*, /v1/demo/scenario/reset, /v1/demo/replay.
+- Backend currently has empty files for scenario_controller.py and replay.py and no route registration in main.py.
+- Therefore these buttons are presently frontend-only intent without backend implementation.
+
+4.4 UI/UX theme and styling state
+Files:
+- frontend/src/index.css
+- frontend/src/App.css
+
+Current theme already uses requested cyber palette direction:
+- dark background, green accent, red danger, yellow warning.
+- font stack: Rajdhani + JetBrains Mono.
+- has pulse animation, panel hierarchy, responsive breakpoints.
+
+So the baseline cybersecurity visual direction (green/red/black) is already in place.
+
+
+====================================================================
+5) FRONTEND-BACKEND INTEGRATION MATRIX
+====================================================================
+Legend:
+- CONNECTED: live backend wiring present and primary path active.
+- PARTIAL: some live data + some fallback/static gaps.
+- MOCK/NOT CONNECTED: screen mostly static or route missing.
+
+1) S1 Live Feed
+- Backend routes expected: /v1/events/search, /v1/events/timeline
+- Status: PARTIAL/DEGRADED due repeated 404 on those endpoints.
+
+2) S2 Timeline / Indicators
+- Backend routes expected: /v1/ddos/alerts, /v1/ddos/indicators
+- Status: CONNECTED when ddos rows exist; otherwise falls back to demo baseline.
+
+3) S3 Graph Explorer
+- Backend routes available: /v1/graph/*
+- Frontend usage: static graphData (no live API fetch)
+- Status: MOCK/NOT FULLY CONNECTED.
+
+4) S4 Campaign Console
+- Backend routes: /v1/campaigns, /v1/campaigns/{id}/evidence
+- Status: CONNECTED.
+
+5) S5 Infra Correlation
+- Backend routes: /v1/infra/clusters, /v1/infra/clusters/{id}
+- Status: CONNECTED (cluster_key 500 issue appears fixed).
+
+6) S6 Case Packet + STIX
+- Backend routes: /v1/cases/from-campaign/{id}, /v1/stix/case/{id}
+- Status: CONNECTED (workflow-oriented).
+
+7) S7 Operations & Economy
+- Backend routes: /v1/metrics, /v1/anomalies, /v1/mitigations, /v1/ai/*, /v1/economy/*
+- Status: CONNECTED with safe endpoint-level fallback handling.
+
+8) Scenario Controller (side panel)
+- Frontend routes called: /v1/demo/*
+- Backend implementation: missing route wiring, empty module files
+- Status: NOT CONNECTED.
+
+
+====================================================================
+6) ROOT-CAUSE ANALYSIS OF THE CURRENT LOG BEHAVIOR
+====================================================================
+6.1 Why infra/clusters moved from 500 to 200
+- code now includes schema compatibility patch + cluster_key field + response mapping.
+- observed logs confirm success.
+
+6.2 Why events endpoints still 404 despite route code existing
+Most probable explanations (ordered by likelihood):
+
+A) Runtime route map mismatch (stale process/image/reload path)
+- Code has /v1/events/search and /v1/events/timeline.
+- Runtime may still be serving an earlier route map.
+
+B) Path conflict behavior with dynamic route in another runtime version
+- If an older events.py ordered /{event_hash} before /search, /search can be captured as event_hash and return 404 event_not_found.
+- Current file order is correct, but runtime may not match current file.
+
+C) Inconsistent duplicate timeline router family
+- /v1/events/timeline exists in two routers (events.py and timeline.py), which is avoidable ambiguity.
+- Not enough alone to explain /search 404, but indicates route hygiene debt.
+
+D) Proxy/runtime environment divergence across services
+- frontend and backend containers may not reflect same code revision state at that moment.
+
+What is unlikely:
+- Auth failure (would be 401).
+- OpenSearch query miss (would not typically emit plain route-level 404).
+
+6.3 Why UI can appear "connected but wrong"
+- In App.tsx, fetchBackendSnapshot is all-or-nothing Promise.all.
+- If /events/search or /events/timeline fails, snapshot load throws.
+- App then sets offline/demo-fallback label and keeps demo data.
+- Simultaneously, operations snapshot has safe per-endpoint fallbacks, so parts of UI can still feel semi-live.
+
+
+====================================================================
+7) WHAT IS MISSING OR INCONSISTENT TODAY
+====================================================================
+1) Missing backend endpoints used by frontend scenario controls
+- frontend expects /v1/demo/scenario/start/{A|B|C}, /v1/demo/scenario/reset, /v1/demo/replay.
+- backend demo scenario_controller.py and replay.py are empty and not mounted.
+
+2) Graph Explorer not connected to live graph APIs
+- UI uses static graph dataset, not /v1/graph endpoints.
+
+3) Duplicate timeline route definitions
+- /v1/events/timeline appears in both events.py and timeline.py.
+
+4) Runbook endpoint list is partially stale
+- docs/RUNBOOK.md lists routes that do not exist in current API shape (for example GET /v1/events, GET /v1/graph root style references).
+
+5) .env.example quality issues
+- duplicate keys and a corrupted line indicate configuration-template hygiene problems.
+
+6) Backend adapter resilience imbalance
+- frontend backend snapshot path has hard fail on any one endpoint.
+- operations snapshot path is safeFetch-hardened.
+
+
+====================================================================
+8) DATA LIFECYCLE NARRATIVE (END-TO-END)
+====================================================================
+1. A source submits canonical event with API key.
+2. Backend validates, pseudonymizes, hashes, stores in Postgres event_log.
+3. Same accepted event is indexed to OpenSearch (search/timeline).
+4. Event is projected into GraphDelta and stored in graph_delta_log.
+5. Neo4j worker replays deltas to maintain graph projection.
+6. Layer-3 workers analyze windows and write derived intelligence rows:
+   - ddos alerts,
+   - infra clusters,
+   - campaigns,
+   - anomalies,
+   - mitigations,
+   - AI outputs,
+   - economic integrity outputs.
+7. Frontend polls backend APIs every 30s and maps rows into SOC screens.
+8. Case/STIX export endpoints package campaign intelligence for sharing/legal workflows.
+
+Core invariant:
+- canonical truth is Postgres ledger;
+- OpenSearch and Neo4j are derived views;
+- workers enrich the same canonical timeline into decision artifacts.
+
+
+====================================================================
+9) HOW TO EXPLAIN THIS TO SOMEONE (READY-TO-USE SCRIPT)
+====================================================================
+"Sentinel-KE is a layered cyber-intelligence system. The backend ingests normalized events from multiple sources, stores them immutably in Postgres, and then projects that evidence into OpenSearch for fast search and into Neo4j for relationship analysis. On top of that, analytics workers generate alerts, campaigns, infrastructure clusters, and economic-integrity findings. The frontend is a 7-screen SOC console that consumes those APIs every 30 seconds. Right now, infrastructure clustering and most analytics routes are healthy, but the events search/timeline routes are still returning 404 at runtime, so parts of the UI can degrade into demo fallback. The graph screen is currently mostly static and not fully bound to live graph APIs, and the scenario-control endpoints exposed in the frontend are not implemented in backend routing yet. So the core pipeline exists and is substantial, but route hygiene and last-mile integration are the main blockers to fully consistent live operation." 
+
+
+====================================================================
+10) SURGICAL PRIORITY FIX LIST (LOW RISK, HIGH IMPACT)
+====================================================================
+Priority 1 (stability now)
+1. Remove duplicate /v1/events/timeline router definition by consolidating to one implementation.
+2. Verify runtime route table inside running backend container and ensure /v1/events/search and /v1/events/timeline are registered in active process.
+3. Add lightweight startup route self-check log (prints route list for /v1/events* once).
+
+Priority 2 (frontend reliability)
+4. Change fetchBackendSnapshot to endpoint-level safe fetch (like operations.ts) so one endpoint failure does not collapse whole live mode.
+5. Surface per-endpoint health badges in UI (events/timeline/campaigns/infra).
+
+Priority 3 (feature completeness)
+6. Wire Graph Explorer to /v1/graph/neighbors + /v1/graph/path + /v1/graph/evidence.
+7. Implement and mount /v1/demo/* scenario endpoints or remove Scenario Controller buttons until backend exists.
+8. Update docs/RUNBOOK.md endpoint inventory to actual implemented API.
+9. Clean .env.example duplicates/corruption.
+
+
+====================================================================
+11) FINAL TECHNICAL ASSESSMENT
+====================================================================
+Current project state is not a prototype toy; it has a real layered architecture with canonical ledger, deterministic projection, and meaningful analytics breadth. The main problems visible in your logs are not about missing core architecture, but about integration consistency and route hygiene:
+- one previously broken infra response path is now fixed,
+- event route runtime behavior is still inconsistent,
+- parts of frontend remain static or call unimplemented demo routes.
+
+In short:
+- core backend platform: substantial and functional,
+- frontend UX structure: strong and cyber-themed,
+- integration quality: partially complete, with clear surgical fixes needed.

@@ -7,6 +7,7 @@ import type {
   InfraCluster,
   ServiceIndicator,
 } from "../types/domain";
+import type { OperationsSnapshot } from "../types/operations";
 
 export const sourceOptions = ["telco", "bank", "gov", "osint", "infra"] as const;
 
@@ -587,3 +588,179 @@ export const cases: CasePacket[] = [
     ],
   },
 ];
+
+export const operationsSnapshotDemo: OperationsSnapshot = {
+  metrics: {
+    events: 1244,
+    graphDeltas: 219,
+    anomalies: 37,
+    mitigations: 18,
+  },
+  anomalies: [
+    {
+      id: "az-1",
+      serviceId: "eCitizen",
+      endpoint: "/auth/login",
+      score: 0.89,
+      reasonCodes: ["SPIKE_Z_HIGH", "CONVERGENCE_HIGH"],
+      windowEnd: "09:10",
+    },
+    {
+      id: "az-2",
+      serviceId: "KPLC_tokens",
+      endpoint: "/tokens/query",
+      score: 0.54,
+      reasonCodes: ["UNIQUE_IP_GROWTH"],
+      windowEnd: "09:08",
+    },
+  ],
+  mitigations: [
+    {
+      id: "mt-1",
+      kind: "ddos_playbook",
+      refId: "CAMP-041",
+      stakeholders: ["SOC", "ISP", "NCSC"],
+      createdAt: "09:11",
+    },
+    {
+      id: "mt-2",
+      kind: "ioc_bundle",
+      refId: "CL-07",
+      stakeholders: ["SOC", "APP_TEAM"],
+      createdAt: "09:09",
+    },
+  ],
+  iocExport: {
+    records: 18,
+    actions: 42,
+    ips: 26,
+    domains: 7,
+    providers: 5,
+    endpoints: 11,
+  },
+  predictions: [
+    {
+      id: "pred-1",
+      entityKey: "service:eCitizen",
+      predictionType: "ddos_risk",
+      score: 0.92,
+      reasonCodes: ["ANOMALY_WINDOW", "INFRA_REUSE"],
+      evidenceCount: 6,
+    },
+    {
+      id: "pred-2",
+      entityKey: "vendor:V-1933",
+      predictionType: "procurement_risk",
+      score: 0.81,
+      reasonCodes: ["SINGLE_SOURCE", "OVERPRICING"],
+      evidenceCount: 4,
+    },
+  ],
+  economySignals: [
+    {
+      id: "sig-1",
+      signalType: "procurement_anomaly",
+      agency: "KRA",
+      sector: "tax",
+      severity: "high",
+      score: 0.88,
+    },
+    {
+      id: "sig-2",
+      signalType: "integrity_tamper",
+      agency: "NTSA",
+      sector: "transport",
+      severity: "medium",
+      score: 0.58,
+    },
+  ],
+  procurementAnomalies: [
+    {
+      id: "pa-1",
+      tenderId: "TND-4021",
+      vendorId: "V-1933",
+      agency: "KRA",
+      severity: "high",
+      score: 0.9,
+    },
+    {
+      id: "pa-2",
+      tenderId: "TND-3988",
+      vendorId: "V-5562",
+      agency: "KURA",
+      severity: "medium",
+      score: 0.61,
+    },
+  ],
+  guardrailDecisions: [
+    {
+      id: "gd-1",
+      tenderId: "TND-4021",
+      vendorId: "V-1933",
+      decision: "block",
+      severity: "high",
+      score: 0.93,
+    },
+    {
+      id: "gd-2",
+      tenderId: "TND-3988",
+      vendorId: "V-5562",
+      decision: "review",
+      severity: "medium",
+      score: 0.64,
+    },
+  ],
+  integrityAlerts: [
+    {
+      id: "ia-1",
+      sourceSystem: "ifmis",
+      recordType: "procurement_record",
+      alertType: "deletion",
+      severity: "high",
+      status: "open",
+      confidence: 0.91,
+    },
+    {
+      id: "ia-2",
+      sourceSystem: "etims",
+      recordType: "invoice",
+      alertType: "tamper",
+      severity: "medium",
+      status: "open",
+      confidence: 0.67,
+    },
+  ],
+  leakageAlerts: [
+    {
+      id: "la-1",
+      detectorType: "split_tender",
+      agency: "KRA",
+      vendorId: "V-1933",
+      severity: "high",
+      score: 0.89,
+    },
+    {
+      id: "la-2",
+      detectorType: "vendor_rotation",
+      agency: "KURA",
+      vendorId: "V-5562",
+      severity: "medium",
+      score: 0.57,
+    },
+  ],
+  leakageSummary: {
+    windowDays: 30,
+    totalAlerts: 15,
+    suspectedAmountTotal: 188400000,
+    byDetector: {
+      split_tender: 6,
+      vendor_rotation: 5,
+      price_padding: 4,
+    },
+    bySeverity: {
+      high: 7,
+      medium: 6,
+      low: 2,
+    },
+  },
+};

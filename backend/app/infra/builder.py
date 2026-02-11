@@ -31,6 +31,7 @@ class InfraClusterBuilder:
 
         cluster = InfraCluster(
             cluster_id=cluster_id,
+            cluster_key=f"campaign:{campaign_id}:{cluster_id}",
             kind=campaign.type.lower(),
             confidence=min(0.9, max(0.4, campaign.score)),
             first_seen=campaign.first_seen,

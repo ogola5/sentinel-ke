@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class ProcurementRecord(BaseModel):
@@ -51,3 +51,31 @@ class EconomicSignalIn(BaseModel):
     reason_codes: List[str] = Field(default_factory=list)
     indicators: Dict[str, Any] = Field(default_factory=dict)
     evidence: Dict[str, Any] = Field(default_factory=dict)
+
+
+class IntegritySnapshotIn(BaseModel):
+    """
+    Snapshot from an external system to detect tamper/deletion patterns.
+    """
+
+    source_system: str = Field(..., min_length=1)
+    record_type: str = Field(..., min_length=1)
+    record_id: str = Field(..., min_length=1)
+
+    observed_at: Optional[datetime] = None
+    is_deleted: bool = False
+
+    payload: Dict[str, Any] = Field(default_factory=dict)
+    payload_hash: Optional[str] = None
+
+    change_ticket: Optional[str] = None
+    actor_id: Optional[str] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    evidence: Dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _validate_payload_material(self) -> "IntegritySnapshotIn":
+        # For non-delete snapshots, require either payload or payload_hash.
+        if not self.is_deleted and not self.payload and not self.payload_hash:
+            raise ValueError("payload or payload_hash is required when is_deleted=false")
+        return self

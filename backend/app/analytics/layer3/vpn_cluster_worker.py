@@ -71,6 +71,7 @@ def run_once(db: Session, minutes: int = 60, min_ips: int = 2) -> int:
         # Create cluster
         cluster = InfraCluster(
             cluster_id=cluster_id,
+            cluster_key=f"vpn_exit:{cluster_id}",
             kind="vpn_exit",
             confidence=0.6,
             window_start=tw_start,

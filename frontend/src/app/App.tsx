@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import "../App.css";
 import LiveFeed from "../screens/LiveFeed";
 import Timeline from "../screens/Timeline";
@@ -6,18 +6,43 @@ import GraphExplorer from "../screens/GraphExplorer";
 import Campaigns from "../screens/Campaigns";
 import InfraCorrelation from "../screens/InfraCorrelation";
 import CasePackets from "../screens/CasePackets";
+import OperationsCenter from "../screens/OperationsCenter";
 import {
-  campaigns,
-  cases,
-  entities,
-  events,
+  createCasePacketFromCampaign,
+  fetchBackendSnapshot,
+  fetchCampaignEvidenceForDrawer,
+} from "../api/backend";
+import {
+  fetchOperationsSnapshot,
+  runLeakageDetection,
+} from "../api/operations";
+import { endpoints } from "../api/endpoints";
+import {
+  campaigns as demoCampaigns,
+  cases as demoCases,
+  entities as demoEntities,
+  events as demoEvents,
   graphData,
-  indicators,
-  infraClusters,
+  indicators as demoIndicators,
+  infraClusters as demoInfraClusters,
+  operationsSnapshotDemo,
   sourceOptions,
-  timelineCounts,
+  timelineCounts as demoTimelineCounts,
 } from "../data/demoData";
-import type { EvidenceItem, EventRecord, GraphEdge, GraphNode, SourceType } from "../types/domain";
+import type {
+  Campaign,
+  CasePacket,
+  EntityProfile,
+  EvidenceItem,
+  EventRecord,
+  GraphEdge,
+  GraphNode,
+  InfraCluster,
+  ServiceIndicator,
+  SourceType,
+  TimelinePoint,
+} from "../types/domain";
+import type { OperationsSnapshot } from "../types/operations";
 
 const screens = [
   { id: "live", label: "National Live Feed", tag: "S1" },
@@ -26,6 +51,7 @@ const screens = [
   { id: "campaigns", label: "Campaign Console", tag: "S4" },
   { id: "infra", label: "Infra & VPN Correlation", tag: "S5" },
   { id: "cases", label: "Case Packet + STIX", tag: "S6" },
+  { id: "ops", label: "Operations & Economy", tag: "S7" },
 ] as const;
 
 type ScreenId = (typeof screens)[number]["id"];
@@ -46,6 +72,20 @@ const timeWindows = [
 const sourceLabel = (source: SourceType) => source.toUpperCase();
 
 export default function App() {
+  const [backendStatus, setBackendStatus] = useState<"connected" | "degraded" | "offline">("offline");
+  const [backendLabel, setBackendLabel] = useState("Demo mode");
+  const [isSyncing, setIsSyncing] = useState(false);
+
+  const [eventsData, setEventsData] = useState<EventRecord[]>(demoEvents);
+  const [timelineData, setTimelineData] = useState<TimelinePoint[]>(demoTimelineCounts);
+  const [indicatorsData, setIndicatorsData] = useState<ServiceIndicator[]>(demoIndicators);
+  const [campaignsData, setCampaignsData] = useState<Campaign[]>(demoCampaigns);
+  const [infraClustersData, setInfraClustersData] = useState<InfraCluster[]>(demoInfraClusters);
+  const [entitiesData, setEntitiesData] = useState<EntityProfile[]>(demoEntities);
+  const [casesData, setCasesData] = useState<CasePacket[]>(demoCases);
+  const [operationsData, setOperationsData] = useState<OperationsSnapshot>(operationsSnapshotDemo);
+  const [leakageActionLabel, setLeakageActionLabel] = useState("Run leakage detector");
+
   const [activeScreen, setActiveScreen] = useState<ScreenId>("live");
   const [timeWindow, setTimeWindow] = useState("1h");
   const [sourceFilters, setSourceFilters] = useState<Record<SourceType, boolean>>(() => {
@@ -54,18 +94,96 @@ export default function App() {
       return acc;
     }, {} as Record<SourceType, boolean>);
   });
-  const [selectedEntity, setSelectedEntity] = useState(entities[0]);
-  const [selectedCampaignId, setSelectedCampaignId] = useState(campaigns[0].id);
-  const [selectedClusterId, setSelectedClusterId] = useState(infraClusters[0].id);
-  const [selectedServiceId, setSelectedServiceId] = useState(indicators[0].serviceId);
-  const [selectedCaseId, setSelectedCaseId] = useState(cases[0]?.id ?? "");
+  const [selectedEntity, setSelectedEntity] = useState<EntityProfile>(demoEntities[0]);
+  const [selectedCampaignId, setSelectedCampaignId] = useState(demoCampaigns[0]?.id ?? "");
+  const [selectedClusterId, setSelectedClusterId] = useState(demoInfraClusters[0]?.id ?? "");
+  const [selectedServiceId, setSelectedServiceId] = useState(demoIndicators[0]?.serviceId ?? "");
+  const [selectedCaseId, setSelectedCaseId] = useState(demoCases[0]?.id ?? "");
   const [evidence, setEvidence] = useState<EvidenceState>({ open: false, title: "", items: [] });
   const [demoOpen, setDemoOpen] = useState(false);
   const [demoStatus, setDemoStatus] = useState("Idle");
   const [entityQuery, setEntityQuery] = useState("");
 
-  const activeCase = cases.find((item) => item.id === selectedCaseId) ?? cases[0];
-  const selectedCampaign = campaigns.find((item) => item.id === selectedCampaignId) ?? campaigns[0];
+  useEffect(() => {
+    let cancelled = false;
+
+    const syncWithBackend = async () => {
+      setIsSyncing(true);
+      try {
+        const [snapshot, operationsSnapshot] = await Promise.all([
+          fetchBackendSnapshot(),
+          fetchOperationsSnapshot(),
+        ]);
+        if (cancelled) return;
+
+        if (snapshot.events.length > 0) setEventsData(snapshot.events);
+        if (snapshot.timelineCounts.length > 0) setTimelineData(snapshot.timelineCounts);
+        if (snapshot.indicators.length > 0) setIndicatorsData(snapshot.indicators);
+        if (snapshot.campaigns.length > 0) setCampaignsData(snapshot.campaigns);
+        if (snapshot.infraClusters.length > 0) setInfraClustersData(snapshot.infraClusters);
+        if (snapshot.entities.length > 0) setEntitiesData(snapshot.entities);
+        setOperationsData(operationsSnapshot);
+
+        setBackendStatus(snapshot.mode === "live" ? "connected" : "degraded");
+        setBackendLabel(snapshot.connectionLabel);
+      } catch {
+        if (cancelled) return;
+        setBackendStatus("offline");
+        setBackendLabel("Backend unavailable, using demo data");
+        setOperationsData(operationsSnapshotDemo);
+      } finally {
+        if (!cancelled) setIsSyncing(false);
+      }
+    };
+
+    void syncWithBackend();
+    const timer = window.setInterval(() => {
+      void syncWithBackend();
+    }, 30_000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (campaignsData.length === 0) return;
+    if (!campaignsData.find((item) => item.id === selectedCampaignId)) {
+      setSelectedCampaignId(campaignsData[0].id);
+    }
+  }, [campaignsData, selectedCampaignId]);
+
+  useEffect(() => {
+    if (infraClustersData.length === 0) return;
+    if (!infraClustersData.find((item) => item.id === selectedClusterId)) {
+      setSelectedClusterId(infraClustersData[0].id);
+    }
+  }, [infraClustersData, selectedClusterId]);
+
+  useEffect(() => {
+    if (indicatorsData.length === 0) return;
+    if (!indicatorsData.find((item) => item.serviceId === selectedServiceId)) {
+      setSelectedServiceId(indicatorsData[0].serviceId);
+    }
+  }, [indicatorsData, selectedServiceId]);
+
+  useEffect(() => {
+    if (entitiesData.length === 0) return;
+    if (!entitiesData.find((item) => item.id === selectedEntity.id)) {
+      setSelectedEntity(entitiesData[0]);
+    }
+  }, [entitiesData, selectedEntity.id]);
+
+  useEffect(() => {
+    if (casesData.length === 0) return;
+    if (!casesData.find((item) => item.id === selectedCaseId)) {
+      setSelectedCaseId(casesData[0].id);
+    }
+  }, [casesData, selectedCaseId]);
+
+  const activeCase = casesData.find((item) => item.id === selectedCaseId) ?? casesData[0];
+  const selectedCampaign = campaignsData.find((item) => item.id === selectedCampaignId) ?? campaignsData[0];
 
   const toggleSource = (source: SourceType) => {
     setSourceFilters((prev) => ({ ...prev, [source]: !prev[source] }));
@@ -80,7 +198,7 @@ export default function App() {
   };
 
   const handleSelectEvent = (event: EventRecord) => {
-    const entity = entities.find((item) =>
+    const entity = entitiesData.find((item) =>
       item.label.toLowerCase().includes(event.service_id.toLowerCase()) ||
       item.label.toLowerCase().includes(event.endpoint.toLowerCase())
     );
@@ -100,17 +218,21 @@ export default function App() {
   };
 
   const handleOpenCampaign = () => {
-    setSelectedCampaignId("CAMP-041");
+    if (campaignsData.length > 0) {
+      setSelectedCampaignId(campaignsData[0].id);
+    }
     setActiveScreen("campaigns");
   };
 
   const handleShowInfra = () => {
-    setSelectedClusterId("CL-07");
+    if (infraClustersData.length > 0) {
+      setSelectedClusterId(infraClustersData[0].id);
+    }
     setActiveScreen("infra");
   };
 
   const handleGraphNode = (node: GraphNode) => {
-    const entity = entities.find((item) => item.label.toLowerCase().includes(node.label.toLowerCase()));
+    const entity = entitiesData.find((item) => item.label.toLowerCase().includes(node.label.toLowerCase()));
     if (entity) {
       setSelectedEntity(entity);
     }
@@ -128,16 +250,49 @@ export default function App() {
     setDemoStatus(`${method} ${path}`);
     try {
       await fetch(path, { method });
+      setDemoStatus(`Completed ${method} ${path}`);
     } catch {
-      setDemoStatus(`Queued ${method} ${path}`);
+      setDemoStatus(`Failed ${method} ${path}`);
     }
   };
 
-  const searchOptions = entities.map((entity) => entity.label);
+  const handleGenerateCase = async () => {
+    if (!selectedCampaignId) return;
+    setDemoStatus(`POST ${endpoints.caseFromCampaign(selectedCampaignId)}`);
+    try {
+      const packet = await createCasePacketFromCampaign(selectedCampaignId);
+      setCasesData((prev) => {
+        const withoutCurrent = prev.filter((item) => item.id !== packet.id);
+        return [packet, ...withoutCurrent];
+      });
+      setSelectedCaseId(packet.id);
+      setActiveScreen("cases");
+      setDemoStatus(`Case generated ${packet.id}`);
+    } catch {
+      if (casesData.length > 0) {
+        setSelectedCaseId(casesData[0].id);
+      }
+      setDemoStatus("Case generation failed");
+      setActiveScreen("cases");
+    }
+  };
+
+  const handleRunLeakage = async () => {
+    setLeakageActionLabel("Running leakage detector...");
+    try {
+      const summary = await runLeakageDetection(30);
+      setOperationsData((prev) => ({ ...prev, leakageSummary: summary }));
+      setLeakageActionLabel(`Leakage scan complete (${summary.totalAlerts} alerts)`);
+    } catch {
+      setLeakageActionLabel("Leakage detector failed");
+    }
+  };
+
+  const searchOptions = entitiesData.map((entity) => entity.label);
 
   const handleSearch = (value: string) => {
     setEntityQuery(value);
-    const entity = entities.find((item) => item.label === value);
+    const entity = entitiesData.find((item) => item.label === value);
     if (entity) {
       setSelectedEntity(entity);
     }
@@ -150,8 +305,11 @@ export default function App() {
           <div>
             <p className="eyebrow">Sentinel-Ke</p>
             <h1>National SOC Console</h1>
+            <p className="muted">{backendLabel}{isSyncing ? " / syncing..." : ""}</p>
           </div>
-          <div className="status-badge">Live demo</div>
+          <div className="status-badge">
+            {backendStatus === "connected" ? "Backend Live" : backendStatus === "degraded" ? "Backend Degraded" : "Demo Mode"}
+          </div>
         </div>
         <nav className="nav-list">
           {screens.map((screen) => (
@@ -230,8 +388,8 @@ export default function App() {
           <main className="primary">
             {activeScreen === "live" && (
               <LiveFeed
-                events={events}
-                timeline={timelineCounts}
+                events={eventsData}
+                timeline={timelineData}
                 activeSources={sourceFilters}
                 onSelectEvent={handleSelectEvent}
                 onShowGraph={handleShowGraph}
@@ -241,7 +399,7 @@ export default function App() {
             )}
             {activeScreen === "timeline" && (
               <Timeline
-                indicators={indicators}
+                indicators={indicatorsData}
                 selectedService={selectedServiceId}
                 onSelectService={setSelectedServiceId}
                 onOpenCampaign={handleOpenCampaign}
@@ -257,27 +415,33 @@ export default function App() {
             )}
             {activeScreen === "campaigns" && (
               <Campaigns
-                campaigns={campaigns}
+                campaigns={campaignsData}
                 selectedId={selectedCampaignId}
                 onSelect={setSelectedCampaignId}
                 onOpenGraph={() => setActiveScreen("graph")}
-                onGenerateCase={() => {
-                  setSelectedCaseId(cases[0]?.id ?? "");
-                  handleScenario(`/v1/cases/from-campaign/${selectedCampaignId}`);
-                  setActiveScreen("cases");
-                }}
+                onGenerateCase={handleGenerateCase}
                 onOpenInfra={() => setActiveScreen("infra")}
-                onOpenEvidence={() =>
-                  openEvidence(
-                    "Campaign evidence",
-                    events.slice(0, 3).flatMap((item) => item.evidence.slice(0, 1))
-                  )
-                }
+                onOpenEvidence={async () => {
+                  try {
+                    const evidenceItems = await fetchCampaignEvidenceForDrawer(selectedCampaignId);
+                    openEvidence(
+                      `Campaign evidence (${selectedCampaignId})`,
+                      evidenceItems.length > 0
+                        ? evidenceItems
+                        : eventsData.slice(0, 3).flatMap((item) => item.evidence.slice(0, 1)),
+                    );
+                  } catch {
+                    openEvidence(
+                      `Campaign evidence (${selectedCampaignId})`,
+                      eventsData.slice(0, 3).flatMap((item) => item.evidence.slice(0, 1)),
+                    );
+                  }
+                }}
               />
             )}
             {activeScreen === "infra" && (
               <InfraCorrelation
-                clusters={infraClusters}
+                clusters={infraClustersData}
                 selectedId={selectedClusterId}
                 onSelect={setSelectedClusterId}
                 onOpenGraph={() => setActiveScreen("graph")}
@@ -287,8 +451,15 @@ export default function App() {
             {activeScreen === "cases" && (
               <CasePackets
                 packet={activeCase}
-                onExportJson={() => handleScenario(`/v1/cases/${activeCase?.id ?? "CASE"}`, "GET")}
-                onExportStix={() => handleScenario(`/v1/export/stix/case/${activeCase?.id ?? "CASE"}`, "GET")}
+                onExportJson={() => handleScenario(endpoints.caseFromCampaign(selectedCampaignId), "POST")}
+                onExportStix={() => handleScenario(endpoints.stixCaseByCampaign(selectedCampaignId), "GET")}
+              />
+            )}
+            {activeScreen === "ops" && (
+              <OperationsCenter
+                data={operationsData}
+                onRunLeakage={handleRunLeakage}
+                leakageActionLabel={leakageActionLabel}
               />
             )}
           </main>
