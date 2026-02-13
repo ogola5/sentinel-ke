@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db, pagination_params
@@ -8,6 +8,7 @@ from app.analytics.economy_guardrails import ProcurementGuardrailDecision, Exter
 from app.economy.guardrail import evaluate_and_persist_guardrail
 from app.economy.integrity import ingest_integrity_snapshot
 from app.economy.schemas import ProcurementRecord, IntegritySnapshotIn
+from app.legal.service import LegalAuthorizationService
 
 router = APIRouter(prefix="/v1/economy", tags=["economy"])
 
@@ -81,12 +82,29 @@ def list_guardrail_decisions(
 @router.post("/integrity/snapshot")
 def create_integrity_snapshot(
     payload: IntegritySnapshotIn,
+    x_legal_grant_token: str | None = Header(default=None, alias="X-Legal-Grant-Token"),
+    x_legal_target: str | None = Header(default=None, alias="X-Legal-Target"),
     db: Session = Depends(get_db),
 ):
     """
     Ingest external-system integrity snapshot and detect tamper/deletion.
     """
-    return ingest_integrity_snapshot(db, payload=payload)
+    if not x_legal_grant_token:
+        raise HTTPException(status_code=401, detail="missing_legal_grant_token")
+    target = x_legal_target or f"integrity:{payload.source_system}:{payload.record_type}"
+    try:
+        auth = LegalAuthorizationService(db).verify_grant_token(
+            execution_token=x_legal_grant_token,
+            action_type="integrity_snapshot_ingest",
+            target=target,
+            actor_id="integrity_snapshot_api",
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+
+    out = ingest_integrity_snapshot(db, payload=payload)
+    out["legal_authorization"] = auth
+    return out
 
 
 @router.get("/integrity/alerts")

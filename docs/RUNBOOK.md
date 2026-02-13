@@ -12,6 +12,33 @@ Compose includes a background mule campaign worker (`sentinel-mule-campaign-work
 Frontend dev server is proxied to backend via `/v1`, `/health`, and `/ready`.
 In Docker, proxy target is `http://backend:8000` (set in `docker-compose.yml`).
 
+## 1.1) Dependency workflow in Docker (important)
+
+Backend image uses:
+- `backend/requirements.txt` for runtime dependencies
+- `backend/requirements-dev.txt` for development tools (includes `pytest`)
+
+When you add/change dependencies:
+1. Runtime library:
+   - add it to `backend/requirements.txt`
+2. Dev/test tool:
+   - add it to `backend/requirements-dev.txt`
+3. Rebuild backend-based images:
+```
+docker compose build backend redpanda-consumer mule-campaign-worker
+docker compose up -d backend redpanda-consumer mule-campaign-worker
+```
+
+Quick temporary install (not reproducible, lost on rebuild):
+```
+docker compose exec backend pip install <package>
+```
+
+Check pytest is installed in image:
+```
+docker compose run --rm --no-deps -e PYTHONPATH=/app backend python -m pytest --version
+```
+
 ## 2) Seed sources (API keys)
 
 ```
@@ -107,7 +134,11 @@ docker compose run --rm --no-deps -e PYTHONPATH=/app backend python -m app.analy
 
 Economic leakage worker:
 ```
-docker compose run --rm --no-deps -e PYTHONPATH=/app backend python -m app.analytics.layer3.economic_leakage_worker --window-days 30
+docker compose run --rm --no-deps -e PYTHONPATH=/app backend \
+  python -m app.analytics.layer3.economic_leakage_worker \
+  --window-days 30 \
+  --grant-token <LEGAL_GRANT_TOKEN> \
+  --target economy:procurement
 ```
 ## 5) Validate DB state (optional)
 
@@ -139,6 +170,56 @@ POST /v1/ingest/event
 POST /v1/ingest/batch
 POST /v1/ingest/file
 GET  /v1/ingest/schema
+```
+
+Integrations (external software connectors -> canonical ingest):
+```
+GET  /v1/integrations/connectors
+POST /v1/integrations/{connector_key}/event
+POST /v1/integrations/{connector_key}/batch
+```
+
+Legal controls (court-order constrained operations):
+```
+POST /v1/legal/orders
+POST /v1/legal/orders/{order_id}/revoke
+GET  /v1/legal/orders
+POST /v1/legal/approval/payload
+POST /v1/legal/authorize
+POST /v1/legal/grants/verify
+GET  /v1/legal/grants
+POST /v1/legal/scan-plan
+POST /v1/legal/evidence/export
+GET  /v1/legal/evidence/bundles
+GET  /v1/legal/evidence/bundles/{bundle_id}
+```
+
+Legal approval workflow (2-person crypto):
+```
+# 1) Request canonical payload to sign
+POST /v1/legal/approval/payload
+
+# 2) Approvers sign the returned "message" with HMAC-SHA256 using approver secret keys
+#    (configured in LEGAL_APPROVER_SECRETS)
+
+# 3) Submit authorization request with approved_by + approval_signatures[]
+POST /v1/legal/authorize
+```
+
+Sensitive economy operations now require header:
+```
+X-Legal-Grant-Token: <execution_token_from_authorize>
+```
+
+Local passive network probe connector:
+```
+# source key seeded by app.ledger.seed_sources:
+#   source_id=local_net_probe
+#   source_api_key=local-net-probe-secret-key
+PYTHONPATH=backend python -m app.integrations.local_network_probe \
+  --endpoint http://localhost:8000 \
+  --x-api-key "${INGEST_API_KEY:-dev-secret-key}" \
+  --interval-seconds 10
 ```
 
 Events:

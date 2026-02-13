@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.economy.leakage import run_leakage_detection
 from app.ledger.db import SessionLocal
+from app.legal.service import LegalAuthorizationService
 
 
 def run_once(*, db: Session, window_days: int = 30) -> dict:
@@ -19,6 +20,8 @@ def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--window-days", type=int, default=30)
     p.add_argument("--as-of", default=None, help="ISO timestamp override")
+    p.add_argument("--grant-token", required=True, help="Legal execution token from /v1/legal/authorize")
+    p.add_argument("--target", default="economy:procurement")
     args = p.parse_args()
 
     as_of = None
@@ -27,7 +30,14 @@ def main() -> None:
 
     db = SessionLocal()
     try:
+        auth = LegalAuthorizationService(db).verify_grant_token(
+            execution_token=args.grant_token,
+            action_type="economic_leakage_scan",
+            target=args.target,
+            actor_id="economic_leakage_worker",
+        )
         res = run_leakage_detection(db, window_days=args.window_days, as_of=as_of)
+        res["legal_authorization"] = auth
         print(json.dumps(res))
     finally:
         db.close()

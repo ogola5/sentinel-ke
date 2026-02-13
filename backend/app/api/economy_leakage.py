@@ -3,12 +3,13 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db, pagination_params
 from app.analytics.economic_leakage import LeakageAlert
 from app.economy.leakage import run_leakage_detection
+from app.legal.service import LegalAuthorizationService
 
 router = APIRouter(prefix="/v1/economy/leakage", tags=["economy"])
 
@@ -16,12 +17,28 @@ router = APIRouter(prefix="/v1/economy/leakage", tags=["economy"])
 @router.post("/run")
 def run_leakage(
     window_days: int = Query(default=30, ge=1, le=365),
+    x_legal_grant_token: str | None = Header(default=None, alias="X-Legal-Grant-Token"),
+    x_legal_target: str | None = Header(default="economy:procurement"),
     db: Session = Depends(get_db),
 ):
     """
     Run leakage detection against recent procurement anomaly records.
     """
-    return run_leakage_detection(db, window_days=window_days)
+    if not x_legal_grant_token:
+        raise HTTPException(status_code=401, detail="missing_legal_grant_token")
+    try:
+        auth = LegalAuthorizationService(db).verify_grant_token(
+            execution_token=x_legal_grant_token,
+            action_type="economic_leakage_scan",
+            target=x_legal_target or "economy:procurement",
+            actor_id="economy_leakage_api",
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+
+    out = run_leakage_detection(db, window_days=window_days)
+    out["legal_authorization"] = auth
+    return out
 
 
 @router.get("/alerts")

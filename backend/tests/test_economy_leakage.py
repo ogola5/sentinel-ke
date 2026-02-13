@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
 from app.economy.leakage import (
+    detect_bid_rotation_ring,
     detect_change_order_inflation,
     detect_split_tendering,
     detect_vendor_concentration_capture,
@@ -97,3 +98,28 @@ def test_detect_change_order_inflation_flags_repeat_inflated_records():
     assert alert.detector_type == "change_order_inflation"
     assert alert.score >= 0.5
     assert alert.indicators["records_flagged"] == 2
+
+
+def test_detect_bid_rotation_ring_flags_stable_rotation_pattern():
+    end = _now()
+    start = end - timedelta(days=30)
+    rows = []
+    vendors = ["V-A", "V-B", "V-C", "V-A", "V-B", "V-C", "V-A", "V-B", "V-C"]
+    for idx, vendor in enumerate(vendors):
+        rows.append(
+            {
+                "tender_id": f"BR-{idx+1}",
+                "vendor_id": vendor,
+                "agency": "county-health-x",
+                "sector": "health",
+                "amount": 450_000.0 + (idx * 2_500.0),
+                "occurred_at": start + timedelta(days=idx),
+            }
+        )
+
+    out = detect_bid_rotation_ring(rows, window_start=start, window_end=end)
+    assert len(out) == 1
+    alert = out[0]
+    assert alert.detector_type == "bid_rotation_ring"
+    assert alert.agency == "county-health-x"
+    assert alert.indicators["rotation_ratio"] >= 0.8

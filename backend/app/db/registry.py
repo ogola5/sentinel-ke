@@ -21,3 +21,4 @@ from app.analytics.economy_guardrails import (
 )
 from app.analytics.mitigations import Mitigation
 from app.analytics.ai_models import GraphFeatureSnapshot, EntityEmbedding, AIPrediction, AIExplanation
+from app.legal.models import LegalOrder, LegalAuthorizationGrant, LegalEvidenceBundle

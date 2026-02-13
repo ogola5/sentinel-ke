@@ -42,6 +42,12 @@ SOURCES = [
         "classification_level": "PUBLIC",
         "api_key": "osint-secret-key",
     },
+    {
+        "source_id": "local_net_probe",
+        "source_type": "sensor",
+        "classification_level": "INTERNAL",
+        "api_key": "local-net-probe-secret-key",
+    },
 ]
 
 

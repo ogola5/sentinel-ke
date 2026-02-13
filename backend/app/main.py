@@ -20,6 +20,8 @@ from app.api.anomalies import router as anomalies_router
 from app.api.mitigations import router as mitigations_router
 from app.api.metrics import router as metrics_router
 from app.api.ai import router as ai_router
+from app.api.integrations import router as integrations_router
+from app.api.legal import router as legal_router
 from app.api.economy import router as economy_router
 from app.api.economy_guardrail import router as economy_guardrail_router
 from app.api.economy_leakage import router as economy_leakage_router
@@ -76,6 +78,8 @@ tags_metadata = [
     {"name": "anomalies", "description": "Anomaly scores"},
     {"name": "mitigations", "description": "IOC and mitigation bundles"},
     {"name": "ai", "description": "AI predictions and explanations"},
+    {"name": "integrations", "description": "External connector ingestion bridge"},
+    {"name": "legal", "description": "Court-order authorization and legal controls"},
     {"name": "metrics", "description": "Operational metrics"},
     {"name": "economy", "description": "Economic integrity and procurement anomalies"},
 ]
@@ -97,6 +101,8 @@ app.include_router(anomalies_router, dependencies=[Depends(require_api_key)])
 app.include_router(mitigations_router, dependencies=[Depends(require_api_key)])
 app.include_router(metrics_router, dependencies=[Depends(require_api_key)])
 app.include_router(ai_router, dependencies=[Depends(require_api_key)])
+app.include_router(integrations_router, dependencies=[Depends(require_api_key)])
+app.include_router(legal_router, dependencies=[Depends(require_api_key)])
 app.include_router(economy_router, dependencies=[Depends(require_api_key)])
 app.include_router(economy_guardrail_router, dependencies=[Depends(require_api_key)])
 app.include_router(economy_leakage_router, dependencies=[Depends(require_api_key)])

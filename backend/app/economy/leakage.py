@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import math
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional, Tuple
@@ -296,6 +297,96 @@ def detect_change_order_inflation(
     return out
 
 
+def detect_bid_rotation_ring(
+    rows: List[Dict[str, Any]],
+    *,
+    min_events: int = 8,
+    min_unique_vendors: int = 3,
+    max_unique_vendors: int = 5,
+    min_rotation_ratio: float = 0.8,
+    max_top_share: float = 0.55,
+    window_start: datetime,
+    window_end: datetime,
+) -> List[LeakageCandidate]:
+    """
+    Flag agency windows where winners rotate among a small stable vendor set,
+    a common cartel pattern in procurement manipulation.
+    """
+    by_agency: Dict[Tuple[Optional[str], str], List[Dict[str, Any]]] = {}
+    for r in rows:
+        agency = r.get("agency")
+        sector = r.get("sector") or "unknown"
+        vendor_id = r.get("vendor_id")
+        occurred_at = r.get("occurred_at")
+        if not agency or not vendor_id or not occurred_at:
+            continue
+        by_agency.setdefault((agency, sector), []).append(r)
+
+    out: List[LeakageCandidate] = []
+    for (agency, sector), items in by_agency.items():
+        seq_items = sorted(items, key=lambda x: x.get("occurred_at"))
+        winners = [str(x.get("vendor_id")) for x in seq_items if x.get("vendor_id")]
+        if len(winners) < min_events:
+            continue
+
+        counts: Dict[str, int] = {}
+        for v in winners:
+            counts[v] = counts.get(v, 0) + 1
+        unique_vendors = len(counts)
+        if unique_vendors < min_unique_vendors or unique_vendors > max_unique_vendors:
+            continue
+
+        transitions = max(1, len(winners) - 1)
+        changed = sum(1 for i in range(1, len(winners)) if winners[i] != winners[i - 1])
+        rotation_ratio = changed / transitions
+        top_vendor_count = max(counts.values())
+        top_share = top_vendor_count / len(winners)
+        if rotation_ratio < min_rotation_ratio or top_share > max_top_share:
+            continue
+
+        probs = [c / len(winners) for c in counts.values()]
+        entropy = -sum(p * math.log(p, 2) for p in probs if p > 0)
+        max_entropy = math.log(max(2, unique_vendors), 2)
+        balance_score = (entropy / max_entropy) if max_entropy > 0 else 0.0
+
+        score = 0.5
+        score += min(0.25, (rotation_ratio - min_rotation_ratio) * 0.6)
+        score += min(0.2, balance_score * 0.25)
+        if unique_vendors >= 4:
+            score += 0.05
+        score = _clamp(score)
+
+        out.append(
+            LeakageCandidate(
+                detector_type="bid_rotation_ring",
+                sector=sector,
+                agency=agency,
+                vendor_id=None,
+                project_id=None,
+                score=score,
+                severity=severity_from_score(score),
+                reason_codes=[
+                    "bid_rotation_pattern",
+                    "stable_vendor_ring_rotation",
+                ],
+                indicators={
+                    "awards_count": len(winners),
+                    "unique_vendors": unique_vendors,
+                    "rotation_ratio": round(rotation_ratio, 4),
+                    "top_vendor_share": round(top_share, 4),
+                    "entropy_balance": round(balance_score, 4),
+                },
+                evidence={
+                    "top_vendors": sorted(counts.items(), key=lambda x: x[1], reverse=True)[:10],
+                    "tender_ids": [x.get("tender_id") for x in seq_items if x.get("tender_id")][:40],
+                },
+                window_start=window_start,
+                window_end=window_end,
+            )
+        )
+    return out
+
+
 def _query_procurement_rows(db: Session, *, window_start: datetime, window_end: datetime) -> List[Dict[str, Any]]:
     rows = (
         db.query(ProcurementAnomaly)
@@ -350,6 +441,13 @@ def detect_all_leakage_candidates(
     )
     candidates.extend(
         detect_change_order_inflation(
+            rows,
+            window_start=window_start,
+            window_end=window_end,
+        )
+    )
+    candidates.extend(
+        detect_bid_rotation_ring(
             rows,
             window_start=window_start,
             window_end=window_end,

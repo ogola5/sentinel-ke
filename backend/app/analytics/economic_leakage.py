@@ -28,7 +28,10 @@ class LeakageAlert(Base):
     )
 
     alert_key = Column(String, nullable=False)
-    detector_type = Column(String, nullable=False)  # split_tendering | vendor_concentration | change_order_inflation
+    detector_type = Column(
+        String,
+        nullable=False,
+    )  # split_tendering | vendor_concentration | change_order_inflation | bid_rotation_ring
     sector = Column(String, nullable=False)
     agency = Column(String, nullable=True)
     vendor_id = Column(String, nullable=True)

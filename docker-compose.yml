@@ -1,9 +1,14 @@
 version: "3.9"
 
+x-backend-build: &backend-build
+  context: ./backend
+  args:
+    INSTALL_DEV: "1"
+
 services:
 
   backend:
-    build: ./backend
+    build: *backend-build
     container_name: sentinel-backend
     env_file:
       - .env
@@ -97,7 +102,7 @@ services:
       - "9644:9644"
 
   redpanda-consumer:
-    build: ./backend
+    build: *backend-build
     container_name: sentinel-redpanda-consumer
     command: python -m app.streaming.ingest_consumer --topics sentinel.ingest
     depends_on:
@@ -112,7 +117,7 @@ services:
     restart: unless-stopped
 
   mule-campaign-worker:
-    build: ./backend
+    build: *backend-build
     container_name: sentinel-mule-campaign-worker
     command: /bin/sh -c "while true; do python -m app.analytics.layer3.mule_campaign_worker --minutes 180 --min-senders 2 --min-tx 4; sleep 300; done"
     depends_on:
