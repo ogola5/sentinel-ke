@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import Column, DateTime, ForeignKey, Index, String
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Index, String
 from sqlalchemy.dialects.postgresql import JSONB
 
 from app.db.base import Base, utcnow
@@ -94,4 +94,39 @@ class LegalEvidenceBundle(Base):
         Index("ix_legal_bundle_campaign", "campaign_id"),
         Index("ix_legal_bundle_order", "order_id"),
         Index("ix_legal_bundle_created_at", "created_at"),
+    )
+
+
+class LegalEvidenceAnchor(Base):
+    __tablename__ = "legal_evidence_anchor"
+
+    anchor_id = Column(String, primary_key=True)
+    bundle_id = Column(
+        String,
+        ForeignKey("legal_evidence_bundle.bundle_id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+    )
+
+    minio_backend = Column(String, nullable=False, default="stub")
+    minio_bucket = Column(String, nullable=True)
+    minio_object_key = Column(String, nullable=True)
+    minio_version_id = Column(String, nullable=True)
+    minio_etag = Column(String, nullable=True)
+
+    immudb_backend = Column(String, nullable=False, default="stub")
+    immudb_key = Column(String, nullable=True)
+    immudb_tx_id = Column(String, nullable=True)
+    immudb_verified = Column(Boolean, nullable=False, default=False)
+
+    anchor_status = Column(String, nullable=False, default="failed")
+    anchor_receipt_hash = Column(String, nullable=False, unique=True)
+    error_json = Column(JSONB, nullable=False, default=dict)
+    metadata_json = Column(JSONB, nullable=False, default=dict)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+    __table_args__ = (
+        Index("ix_legal_anchor_bundle", "bundle_id"),
+        Index("ix_legal_anchor_status", "anchor_status"),
+        Index("ix_legal_anchor_created_at", "created_at"),
     )

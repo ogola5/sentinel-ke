@@ -6,3 +6,6 @@ psycopg2-binary
 neo4j
 opensearch-py
 kafka-python
+requests
+boto3
+torch>=2.3,<3

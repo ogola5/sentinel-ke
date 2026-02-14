@@ -1,0 +1,66 @@
+from app.analytics.layer3.gnn_backbone import (
+    build_feature_vector,
+    collapse_edges,
+    weak_label,
+)
+
+
+def test_weak_label_prioritizes_risk_flags():
+    y = weak_label(
+        risk_flags=["CAMPAIGN_ENTITY"],
+        event_count=1,
+        source_count=1,
+    )
+    assert y == 1
+
+
+def test_weak_label_uses_volume_fallback():
+    y = weak_label(
+        risk_flags=[],
+        event_count=30,
+        source_count=4,
+    )
+    assert y == 1
+
+
+def test_weak_label_low_signal_is_negative():
+    y = weak_label(
+        risk_flags=[],
+        event_count=3,
+        source_count=1,
+    )
+    assert y == 0
+
+
+def test_feature_vector_shape_and_recency():
+    v = build_feature_vector(
+        event_count=10,
+        source_count=3,
+        risk_flags=["VPN_CLUSTER_MEMBER"],
+        features={
+            "last_seen_age_sec": 60,
+            "event_types": {
+                "DDOS_SIGNAL_EVENT": 2,
+                "TRANSACTION_EVENT": 5,
+            },
+        },
+    )
+    # base 7 + tracked 5
+    assert len(v) == 12
+    # recency signal should be > 0 for recent activity
+    assert v[2] > 0
+    # vpn flag channel
+    assert v[5] == 1.0
+
+
+def test_collapse_edges_merges_bidirectional_duplicates():
+    edges = [
+        ("a", "b", 2.0),
+        ("b", "a", 1.5),
+        ("a", "c", 1.0),
+    ]
+    out = collapse_edges(edges)
+    assert out[0][0] == "a"
+    assert out[0][1] == "b"
+    assert out[0][2] == 3.5
+    assert len(out) == 2

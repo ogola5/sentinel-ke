@@ -117,3 +117,40 @@ class AIExplanation(Base):
     __table_args__ = (
         Index("ix_ai_expl_prediction", "prediction_id"),
     )
+
+
+class GNNTrainingRun(Base):
+    __tablename__ = "gnn_training_run"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    model_version = Column(String, nullable=False)
+    prediction_type = Column(String, nullable=False, default="risk_gnn")
+    source_backend = Column(String, nullable=False, default="hybrid")
+
+    window_key = Column(String, nullable=False)
+    window_end = Column(DateTime(timezone=True), nullable=False)
+
+    node_count = Column(Integer, nullable=False, default=0)
+    edge_count = Column(Integer, nullable=False, default=0)
+    feature_dim = Column(Integer, nullable=False, default=0)
+    positive_count = Column(Integer, nullable=False, default=0)
+
+    epochs = Column(Integer, nullable=False, default=0)
+    train_loss = Column(Float, nullable=True)
+    val_loss = Column(Float, nullable=True)
+    auc = Column(Float, nullable=True)
+    precision = Column(Float, nullable=True)
+    recall = Column(Float, nullable=True)
+    f1 = Column(Float, nullable=True)
+
+    artifact_path = Column(String, nullable=True)
+    params_json = Column(JSONB, nullable=False, default=dict)
+    metrics_json = Column(JSONB, nullable=False, default=dict)
+
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+    __table_args__ = (
+        Index("ix_gnn_run_created_at", "created_at"),
+        Index("ix_gnn_run_window_end", "window_end"),
+        Index("ix_gnn_run_model_version", "model_version"),
+    )

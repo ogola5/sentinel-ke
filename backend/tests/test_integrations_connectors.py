@@ -12,6 +12,9 @@ def test_list_connectors_includes_expected_keys():
     assert "cloudflare_ddos_v1" in keys
     assert "telco_sim_swap_v1" in keys
     assert "local_network_probe_v1" in keys
+    assert "pgaudit_event_v1" in keys
+    assert "wazuh_fim_v1" in keys
+    assert "velociraptor_artifact_v1" in keys
 
 
 def test_map_splunk_login_event():
@@ -82,3 +85,73 @@ def test_map_local_network_probe_to_service_health_event():
     assert ev.payload["gateway"] == "192.168.1.1"
     assert ev.payload["dns_servers"] == ["1.1.1.1", "8.8.8.8"]
     assert ev.anchors["service_id"] == "local-network:workstation-01:eth0"
+
+
+def test_map_pgaudit_event_to_db_audit_event():
+    ev = map_external_event(
+        connector_key="pgaudit_event_v1",
+        payload={
+            "timestamp": "2026-02-14T08:00:00Z",
+            "db_instance": "pg-primary-01",
+            "db_name": "ifmis",
+            "db_user": "svc_audit",
+            "statement_type": "COPY",
+            "table": "payments_2026",
+            "query": "COPY payments_2026 TO PROGRAM 'curl ...'",
+            "success": True,
+            "audit_setting_changed": True,
+        },
+        confidence=0.95,
+    )
+
+    assert ev.event_type == "DB_AUDIT_EVENT"
+    assert ev.anchors["service_id"] == "pg-primary-01"
+    assert ev.payload["statement_type"] == "COPY"
+    assert "query_fingerprint" in ev.payload
+    assert "high_impact_db_statement" in ev.payload["reason_codes"]
+    assert "audit_config_changed" in ev.payload["reason_codes"]
+
+
+def test_map_wazuh_fim_event_to_file_integrity_event():
+    ev = map_external_event(
+        connector_key="wazuh_fim_v1",
+        payload={
+            "timestamp": "2026-02-14T08:05:00Z",
+            "hostname": "county-finance-db-01",
+            "path": "/var/backups/ifmis/ledger.sql.gz",
+            "action": "deleted",
+            "critical_path": True,
+            "user": "root",
+            "process_name": "rm",
+        },
+        confidence=0.9,
+    )
+
+    assert ev.event_type == "FILE_INTEGRITY_EVENT"
+    assert ev.payload["action"] == "deleted"
+    assert ev.payload["is_critical_path"] is True
+    assert "file_deleted" in ev.payload["reason_codes"]
+    assert "critical_path_mutation" in ev.payload["reason_codes"]
+    assert ev.anchors["device_id"] == "county-finance-db-01"
+
+
+def test_map_velociraptor_artifact_to_dfir_finding_event():
+    ev = map_external_event(
+        connector_key="velociraptor_artifact_v1",
+        payload={
+            "timestamp": "2026-02-14T08:15:00Z",
+            "host": "gov-mail-01",
+            "artifact": "Windows.Detection.EventLogs",
+            "finding_type": "eventlog_cleared",
+            "severity": "high",
+            "eventlog_cleared": True,
+            "user": "administrator",
+        },
+        confidence=0.88,
+    )
+
+    assert ev.event_type == "DFIR_FINDING_EVENT"
+    assert ev.payload["artifact_name"] == "Windows.Detection.EventLogs"
+    assert ev.payload["severity"] == "high"
+    assert "log_tamper_signal" in ev.payload["reason_codes"]
+    assert ev.anchors["service_id"] == "endpoint:gov-mail-01"

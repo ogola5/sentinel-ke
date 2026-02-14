@@ -15,6 +15,9 @@ EventType = Literal[
     "DDOS_SIGNAL_EVENT",
     "SERVICE_HEALTH_EVENT",
     "DNS_RESOLUTION_EVENT",
+    "DB_AUDIT_EVENT",
+    "FILE_INTEGRITY_EVENT",
+    "DFIR_FINDING_EVENT",
 ]
 
 Classification = Literal["PUBLIC", "RESTRICTED", "INTERNAL"]
@@ -97,6 +100,58 @@ class DnsResolutionPayload(BaseModel):
     domain: str
     ip: str
     ttl: Optional[int] = None
+
+
+class DbAuditPayload(BaseModel):
+    source: str = "pgaudit"
+    db_instance: str
+    db_name: Optional[str] = None
+    db_user: Optional[str] = None
+    statement_type: str
+    object_name: Optional[str] = None
+    operation: Optional[str] = None
+    row_count: Optional[int] = None
+    success: bool = True
+    session_id: Optional[str] = None
+    query_fingerprint: Optional[str] = None
+    client_ip: Optional[str] = None
+    reason_codes: List[str] = Field(default_factory=list)
+
+
+class FileIntegrityPayload(BaseModel):
+    source: str = "wazuh"
+    host: str
+    agent_id: Optional[str] = None
+    file_path: str
+    action: str
+    hash_before: Optional[str] = None
+    hash_after: Optional[str] = None
+    user: Optional[str] = None
+    process: Optional[str] = None
+    severity: Optional[str] = None
+    rule_id: Optional[str] = None
+    client_ip: Optional[str] = None
+    is_critical_path: bool = False
+    reason_codes: List[str] = Field(default_factory=list)
+
+
+class DfirFindingPayload(BaseModel):
+    source: str = "velociraptor"
+    host: str
+    artifact_name: str
+    finding_type: str
+    severity: str = "medium"
+    status: Optional[str] = None
+    user: Optional[str] = None
+    process_name: Optional[str] = None
+    process_pid: Optional[int] = None
+    file_path: Optional[str] = None
+    sha256: Optional[str] = None
+    command_line: Optional[str] = None
+    client_ip: Optional[str] = None
+    case_id: Optional[str] = None
+    hunt_id: Optional[str] = None
+    reason_codes: List[str] = Field(default_factory=list)
 
 
 # ---- Canonical envelope ----

@@ -167,6 +167,30 @@ def _normalize_service_status(v: Optional[str]) -> str:
     return "degraded"
 
 
+def _normalize_fim_action(v: Optional[str]) -> str:
+    if not v:
+        return "modified"
+    x = v.strip().lower()
+    if x in {"added", "create", "created", "new"}:
+        return "created"
+    if x in {"delete", "deleted", "removed", "unlink"}:
+        return "deleted"
+    if x in {"renamed", "rename", "moved", "move"}:
+        return "moved"
+    if x in {"perm", "permission_changed", "chmod", "chown"}:
+        return "permission_changed"
+    return "modified"
+
+
+def _normalize_severity(v: Optional[str], *, default: str = "medium") -> str:
+    if not v:
+        return default
+    x = v.strip().lower()
+    if x in {"critical", "high", "medium", "low", "info"}:
+        return x
+    return default
+
+
 def _map_splunk_login(payload: Dict[str, Any], confidence: float, classification: Optional[str]) -> CanonicalEvent:
     occurred_at = _as_datetime(payload, ("timestamp", "_time", "time", "occurred_at", "ts"))
     username = _as_str(payload, ("username", "user", "principal", "actor"))
@@ -386,6 +410,162 @@ def _map_local_network_probe(payload: Dict[str, Any], confidence: float, classif
     )
 
 
+def _map_pgaudit_event(payload: Dict[str, Any], confidence: float, classification: Optional[str]) -> CanonicalEvent:
+    occurred_at = _as_datetime(payload, ("timestamp", "time", "occurred_at", "log_time", "ts"))
+    db_instance = _as_str(payload, ("db_instance", "service_id", "db_host", "instance"), required=True)
+    statement_type = (_as_str(payload, ("statement_type", "command", "class"), required=True) or "").upper()
+    object_name = _as_str(payload, ("object_name", "relation", "table", "object"))
+    raw_query = _as_str(payload, ("query", "statement", "sql"))
+
+    reason_codes: List[str] = []
+    if statement_type in {"COPY", "ALTER SYSTEM", "DROP", "TRUNCATE", "GRANT", "REVOKE"}:
+        reason_codes.append("high_impact_db_statement")
+    if _as_bool(payload, ("audit_setting_changed", "audit_tamper")):
+        reason_codes.append("audit_config_changed")
+    if _as_bool(payload, ("backup_deleted", "backup_rotation_disabled")):
+        reason_codes.append("backup_control_modified")
+
+    query_fingerprint = _as_str(payload, ("query_fingerprint",))
+    if not query_fingerprint and raw_query:
+        # Deterministic fingerprint to avoid storing full SQL text in downstream systems.
+        query_fingerprint = pseudonymize(raw_query, salt="pgaudit-fingerprint")
+
+    anchors: Dict[str, str] = {"service_id": db_instance}
+    if object_name:
+        anchors["endpoint"] = object_name
+
+    model_payload: Dict[str, Any] = {
+        "source": "pgaudit",
+        "db_instance": db_instance,
+        "db_name": _as_str(payload, ("db_name", "database")),
+        "db_user": _as_str(payload, ("db_user", "user", "role")),
+        "statement_type": statement_type,
+        "object_name": object_name,
+        "operation": _as_str(payload, ("operation", "action")),
+        "row_count": _as_int(payload, ("rows", "row_count", "affected_rows")),
+        "success": bool(_as_bool(payload, ("success", "allowed", "result_ok")) is not False),
+        "session_id": _as_str(payload, ("session_id", "pid", "connection_id")),
+        "query_fingerprint": query_fingerprint,
+        "client_ip": _as_str(payload, ("client_ip", "src_ip", "ip")),
+        "reason_codes": sorted(set(reason_codes)),
+    }
+    model_payload = {k: v for k, v in model_payload.items() if v is not None}
+
+    return CanonicalEvent(
+        event_type="DB_AUDIT_EVENT",
+        occurred_at=occurred_at,
+        confidence=_coerce_confidence(confidence),
+        payload=model_payload,
+        anchors=anchors,
+        classification=classification,
+    )
+
+
+def _map_wazuh_fim(payload: Dict[str, Any], confidence: float, classification: Optional[str]) -> CanonicalEvent:
+    occurred_at = _as_datetime(payload, ("timestamp", "time", "occurred_at", "agent_time", "syscheck_ts"))
+    host = _as_str(payload, ("host", "hostname", "agent_name", "agent"), required=True)
+    file_path = _as_str(payload, ("file_path", "path", "file"), required=True)
+    action = _normalize_fim_action(_as_str(payload, ("action", "event_type", "syscheck_event")))
+
+    reason_codes: List[str] = []
+    is_critical_path = bool(_as_bool(payload, ("is_critical_path", "critical_path", "critical")) is True)
+    if is_critical_path:
+        reason_codes.append("critical_path_mutation")
+    if action == "deleted":
+        reason_codes.append("file_deleted")
+    if _as_bool(payload, ("permission_escalation", "chmod_777", "suid_added")):
+        reason_codes.append("permission_escalation_signal")
+
+    anchors: Dict[str, str] = {
+        "service_id": f"host:{host}",
+        "device_id": host,
+        "endpoint": file_path,
+    }
+    agent_id = _as_str(payload, ("agent_id",))
+    if agent_id:
+        anchors["agent_id"] = agent_id
+
+    model_payload: Dict[str, Any] = {
+        "source": "wazuh",
+        "host": host,
+        "agent_id": agent_id,
+        "file_path": file_path,
+        "action": action,
+        "hash_before": _as_str(payload, ("hash_before", "old_sha256", "sha256_before", "md5_before")),
+        "hash_after": _as_str(payload, ("hash_after", "sha256_after", "new_sha256", "md5_after")),
+        "user": _as_str(payload, ("user", "actor", "username")),
+        "process": _as_str(payload, ("process", "process_name")),
+        "severity": _normalize_severity(_as_str(payload, ("severity", "rule_level")), default="medium"),
+        "rule_id": _as_str(payload, ("rule_id", "sid")),
+        "client_ip": _as_str(payload, ("client_ip", "src_ip", "ip")),
+        "is_critical_path": is_critical_path,
+        "reason_codes": sorted(set(reason_codes)),
+    }
+    model_payload = {k: v for k, v in model_payload.items() if v is not None}
+
+    return CanonicalEvent(
+        event_type="FILE_INTEGRITY_EVENT",
+        occurred_at=occurred_at,
+        confidence=_coerce_confidence(confidence),
+        payload=model_payload,
+        anchors=anchors,
+        classification=classification,
+    )
+
+
+def _map_velociraptor_artifact(payload: Dict[str, Any], confidence: float, classification: Optional[str]) -> CanonicalEvent:
+    occurred_at = _as_datetime(payload, ("timestamp", "time", "occurred_at", "collected_at"))
+    host = _as_str(payload, ("host", "hostname", "client_id", "endpoint"), required=True)
+    artifact_name = _as_str(payload, ("artifact_name", "artifact", "vql_artifact"), required=True)
+    finding_type = _as_str(payload, ("finding_type", "category", "event_type"), required=True)
+
+    reason_codes: List[str] = []
+    severity = _normalize_severity(_as_str(payload, ("severity", "level")), default="medium")
+    if severity in {"critical", "high"}:
+        reason_codes.append("high_severity_dfir_finding")
+    if _as_bool(payload, ("credential_access", "lsass_access")):
+        reason_codes.append("credential_access_signal")
+    if _as_bool(payload, ("log_tamper", "eventlog_cleared")):
+        reason_codes.append("log_tamper_signal")
+
+    file_path = _as_str(payload, ("file_path", "path"))
+    anchors: Dict[str, str] = {
+        "service_id": f"endpoint:{host}",
+        "device_id": host,
+    }
+    if file_path:
+        anchors["endpoint"] = file_path
+
+    model_payload: Dict[str, Any] = {
+        "source": "velociraptor",
+        "host": host,
+        "artifact_name": artifact_name,
+        "finding_type": finding_type,
+        "severity": severity,
+        "status": _as_str(payload, ("status", "state")),
+        "user": _as_str(payload, ("user", "username", "actor")),
+        "process_name": _as_str(payload, ("process_name", "process")),
+        "process_pid": _as_int(payload, ("process_pid", "pid")),
+        "file_path": file_path,
+        "sha256": _as_str(payload, ("sha256", "hash")),
+        "command_line": _as_str(payload, ("command_line", "cmdline")),
+        "client_ip": _as_str(payload, ("client_ip", "src_ip", "ip")),
+        "case_id": _as_str(payload, ("case_id",)),
+        "hunt_id": _as_str(payload, ("hunt_id", "flow_id")),
+        "reason_codes": sorted(set(reason_codes)),
+    }
+    model_payload = {k: v for k, v in model_payload.items() if v is not None}
+
+    return CanonicalEvent(
+        event_type="DFIR_FINDING_EVENT",
+        occurred_at=occurred_at,
+        confidence=_coerce_confidence(confidence),
+        payload=model_payload,
+        anchors=anchors,
+        classification=classification,
+    )
+
+
 _CONNECTORS: Dict[str, ConnectorDefinition] = {
     "splunk_login_v1": ConnectorDefinition(
         key="splunk_login_v1",
@@ -416,6 +596,24 @@ _CONNECTORS: Dict[str, ConnectorDefinition] = {
         description="Local passive network probe to SERVICE_HEALTH_EVENT",
         required_fields=("timestamp", "interface|iface", "gateway|default_gateway", "dns_servers"),
         mapper=_map_local_network_probe,
+    ),
+    "pgaudit_event_v1": ConnectorDefinition(
+        key="pgaudit_event_v1",
+        description="PostgreSQL pgAudit log records to DB_AUDIT_EVENT",
+        required_fields=("timestamp", "db_instance|service_id|db_host", "statement_type|command|class"),
+        mapper=_map_pgaudit_event,
+    ),
+    "wazuh_fim_v1": ConnectorDefinition(
+        key="wazuh_fim_v1",
+        description="Wazuh file integrity monitoring records to FILE_INTEGRITY_EVENT",
+        required_fields=("timestamp", "host|hostname|agent_name", "file_path|path", "action|event_type"),
+        mapper=_map_wazuh_fim,
+    ),
+    "velociraptor_artifact_v1": ConnectorDefinition(
+        key="velociraptor_artifact_v1",
+        description="Velociraptor artifact findings to DFIR_FINDING_EVENT",
+        required_fields=("timestamp", "host|hostname|client_id", "artifact_name|artifact", "finding_type|category"),
+        mapper=_map_velociraptor_artifact,
     ),
 }
 

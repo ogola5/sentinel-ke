@@ -132,6 +132,15 @@ docker compose run --rm --no-deps -e PYTHONPATH=/app backend python -m app.analy
 docker compose run --rm --no-deps -e PYTHONPATH=/app backend python -m app.analytics.layer3.ai_inference_worker --window-key Wmid
 ```
 
+GNN backbone training (hybrid Neo4j + Postgres edges):
+```
+docker compose run --rm --no-deps -e PYTHONPATH=/app backend \
+  python -m app.analytics.layer3.gnn_train_worker \
+  --window-key Wmid \
+  --edge-backend hybrid \
+  --epochs 80
+```
+
 Economic leakage worker:
 ```
 docker compose run --rm --no-deps -e PYTHONPATH=/app backend \
@@ -139,6 +148,16 @@ docker compose run --rm --no-deps -e PYTHONPATH=/app backend \
   --window-days 30 \
   --grant-token <LEGAL_GRANT_TOKEN> \
   --target economy:procurement
+```
+
+Cover-up risk fusion worker:
+```
+docker compose run --rm --no-deps -e PYTHONPATH=/app backend \
+  python -m app.analytics.layer3.coverup_risk_worker \
+  --window-days 30 \
+  --min-score 0.45 \
+  --grant-token <LEGAL_GRANT_TOKEN> \
+  --target economy:coverup
 ```
 ## 5) Validate DB state (optional)
 
@@ -192,6 +211,8 @@ POST /v1/legal/scan-plan
 POST /v1/legal/evidence/export
 GET  /v1/legal/evidence/bundles
 GET  /v1/legal/evidence/bundles/{bundle_id}
+GET  /v1/legal/evidence/bundles/{bundle_id}/anchor
+POST /v1/legal/evidence/bundles/{bundle_id}/anchor/refresh
 ```
 
 Legal approval workflow (2-person crypto):
@@ -209,6 +230,29 @@ POST /v1/legal/authorize
 Sensitive economy operations now require header:
 ```
 X-Legal-Grant-Token: <execution_token_from_authorize>
+```
+
+Legal evidence anchoring configuration (Phase 3):
+```
+# MinIO anchor modes: stub | webhook | s3 | disabled
+MINIO_ANCHOR_MODE=stub
+MINIO_ANCHOR_BUCKET=sentinel-legal-evidence
+MINIO_ANCHOR_WEBHOOK_URL=
+MINIO_S3_ENDPOINT=minio:9000
+MINIO_S3_REGION=us-east-1
+MINIO_S3_ACCESS_KEY=minioadmin
+MINIO_S3_SECRET_KEY=minioadmin
+MINIO_S3_SECURE=false
+MINIO_S3_CREATE_BUCKET_IF_MISSING=false
+MINIO_OBJECT_LOCK_RETENTION_DAYS=365
+MINIO_OBJECT_LEGAL_HOLD=true
+
+# immudb anchor modes: stub | webhook | http | disabled
+IMMUDB_ANCHOR_MODE=stub
+IMMUDB_ANCHOR_WEBHOOK_URL=
+IMMUDB_HTTP_BASE_URL=
+IMMUDB_HTTP_ANCHOR_PATH=/api/v2/anchor
+IMMUDB_HTTP_TOKEN=
 ```
 
 Local passive network probe connector:
@@ -288,6 +332,9 @@ GET  /v1/economy/integrity/alerts
 POST /v1/economy/leakage/run
 GET  /v1/economy/leakage/alerts
 GET  /v1/economy/leakage/summary
+POST /v1/economy/coverup/run
+GET  /v1/economy/coverup/alerts
+GET  /v1/economy/coverup/summary
 GET  /v1/economy/signals
 GET  /v1/economy/procurement/anomalies
 ```

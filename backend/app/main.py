@@ -25,6 +25,7 @@ from app.api.legal import router as legal_router
 from app.api.economy import router as economy_router
 from app.api.economy_guardrail import router as economy_guardrail_router
 from app.api.economy_leakage import router as economy_leakage_router
+from app.api.economy_coverup import router as economy_coverup_router
 from app.api.deps import require_api_key
 from app.search.opensearch import get_client as get_os_client
 from app.graph.neo4j_driver import get_driver
@@ -106,6 +107,7 @@ app.include_router(legal_router, dependencies=[Depends(require_api_key)])
 app.include_router(economy_router, dependencies=[Depends(require_api_key)])
 app.include_router(economy_guardrail_router, dependencies=[Depends(require_api_key)])
 app.include_router(economy_leakage_router, dependencies=[Depends(require_api_key)])
+app.include_router(economy_coverup_router, dependencies=[Depends(require_api_key)])
 
 @app.on_event("startup")
 def startup():

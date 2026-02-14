@@ -15,6 +15,9 @@ from app.ingestion.schemas import (
     DdosSignalPayload,
     ServiceHealthPayload,
     DnsResolutionPayload,
+    DbAuditPayload,
+    FileIntegrityPayload,
+    DfirFindingPayload,
 )
 
 REQUIRED_ANCHOR_GROUP = (
@@ -66,6 +69,12 @@ def _validate_typed_payload(event: CanonicalEvent) -> None:
             ServiceHealthPayload.model_validate(event.payload)
         elif event.event_type == "DNS_RESOLUTION_EVENT":
             DnsResolutionPayload.model_validate(event.payload)
+        elif event.event_type == "DB_AUDIT_EVENT":
+            DbAuditPayload.model_validate(event.payload)
+        elif event.event_type == "FILE_INTEGRITY_EVENT":
+            FileIntegrityPayload.model_validate(event.payload)
+        elif event.event_type == "DFIR_FINDING_EVENT":
+            DfirFindingPayload.model_validate(event.payload)
         else:
             raise ValueError(f"unsupported event_type: {event.event_type}")
     except ValidationError as e:

@@ -15,6 +15,7 @@ from app.cases.builders import build_case_packet
 from app.core.security import compute_event_hash, hmac_verify, sha256_hex, stable_json_dumps
 from app.ledger.models import AuditLog
 from app.ledger.repository import LedgerRepository
+from app.legal.anchoring import LegalEvidenceAnchoringService
 from app.legal.models import LegalAuthorizationGrant, LegalEvidenceBundle, LegalOrder
 from app.legal.schemas import (
     ApprovalPayloadRequest,
@@ -146,6 +147,7 @@ class LegalAuthorizationService:
     def __init__(self, db: Session):
         self.db = db
         self.ledger = LedgerRepository(db)
+        self.anchor = LegalEvidenceAnchoringService(db)
 
     def create_order(self, payload: LegalOrderCreate) -> Dict[str, Any]:
         issued_at = payload.issued_at or _now_utc()
@@ -436,7 +438,15 @@ class LegalAuthorizationService:
             action="legal_evidence_bundle.exported",
             target=row.bundle_id,
         )
-        return self._evidence_bundle_to_dict(row, include_payload=True)
+
+        anchor = self.anchor.anchor_bundle(bundle=row)
+        self.ledger.audit(
+            actor_type="analyst",
+            actor_id=payload.exported_by,
+            action=f"legal_evidence_anchor.{anchor.get('anchor_status', 'unknown')}",
+            target=row.bundle_id,
+        )
+        return self._evidence_bundle_to_dict(row, include_payload=True, anchor=anchor)
 
     def list_orders(self, *, status: str | None, limit: int, offset: int) -> Dict[str, Any]:
         q = self.db.query(LegalOrder)
@@ -460,13 +470,45 @@ class LegalAuthorizationService:
             .limit(limit)
             .all()
         )
-        return {"limit": limit, "offset": offset, "items": [self._evidence_bundle_to_dict(x) for x in rows]}
+        items: List[Dict[str, Any]] = []
+        for x in rows:
+            anchor = None
+            try:
+                anchor = self.anchor.get_anchor(bundle_id=x.bundle_id)
+            except ValueError:
+                anchor = None
+            items.append(self._evidence_bundle_to_dict(x, anchor=anchor))
+        return {"limit": limit, "offset": offset, "items": items}
 
     def get_evidence_bundle(self, bundle_id: str) -> Dict[str, Any]:
         row = self.db.get(LegalEvidenceBundle, bundle_id)
         if not row:
             raise ValueError("legal_evidence_bundle_not_found")
-        return self._evidence_bundle_to_dict(row, include_payload=True)
+        anchor = None
+        try:
+            anchor = self.anchor.get_anchor(bundle_id=bundle_id)
+        except ValueError:
+            anchor = None
+        return self._evidence_bundle_to_dict(row, include_payload=True, anchor=anchor)
+
+    def get_evidence_anchor(self, bundle_id: str) -> Dict[str, Any]:
+        row = self.db.get(LegalEvidenceBundle, bundle_id)
+        if not row:
+            raise ValueError("legal_evidence_bundle_not_found")
+        return self.anchor.get_anchor(bundle_id=bundle_id)
+
+    def refresh_evidence_anchor(self, *, bundle_id: str, actor_id: str = "api") -> Dict[str, Any]:
+        row = self.db.get(LegalEvidenceBundle, bundle_id)
+        if not row:
+            raise ValueError("legal_evidence_bundle_not_found")
+        anchor = self.anchor.anchor_bundle(bundle=row, force=True)
+        self.ledger.audit(
+            actor_type="service",
+            actor_id=actor_id,
+            action=f"legal_evidence_anchor.refresh.{anchor.get('anchor_status', 'unknown')}",
+            target=bundle_id,
+        )
+        return anchor
 
     def _evaluate(self, *, order: LegalOrder, req: LegalAuthorizationRequest) -> AuthorizationDecision:
         now = _now_utc()
@@ -569,7 +611,12 @@ class LegalAuthorizationService:
         }
 
     @staticmethod
-    def _evidence_bundle_to_dict(row: LegalEvidenceBundle, *, include_payload: bool = False) -> Dict[str, Any]:
+    def _evidence_bundle_to_dict(
+        row: LegalEvidenceBundle,
+        *,
+        include_payload: bool = False,
+        anchor: Dict[str, Any] | None = None,
+    ) -> Dict[str, Any]:
         out = {
             "bundle_id": row.bundle_id,
             "export_type": row.export_type,
@@ -581,6 +628,8 @@ class LegalAuthorizationService:
             "created_by": row.created_by,
             "created_at": row.created_at.isoformat(),
         }
+        if anchor is not None:
+            out["anchor"] = anchor
         if include_payload:
             out["payload"] = row.payload_json or {}
         return out

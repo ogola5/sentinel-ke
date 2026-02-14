@@ -185,3 +185,35 @@ def get_evidence_bundle(bundle_id: str, db: Session = Depends(get_db)):
     except Exception:
         log.exception("get_evidence_bundle_failed")
         raise HTTPException(status_code=500, detail="internal_error")
+
+
+@router.get("/evidence/bundles/{bundle_id}/anchor")
+def get_evidence_anchor(bundle_id: str, db: Session = Depends(get_db)):
+    try:
+        return LegalAuthorizationService(db).get_evidence_anchor(bundle_id)
+    except ValueError as e:
+        detail = str(e)
+        if detail in {"legal_evidence_bundle_not_found", "legal_evidence_anchor_not_found"}:
+            raise HTTPException(status_code=404, detail=detail)
+        raise HTTPException(status_code=422, detail=detail)
+    except Exception:
+        log.exception("get_evidence_anchor_failed")
+        raise HTTPException(status_code=500, detail="internal_error")
+
+
+@router.post("/evidence/bundles/{bundle_id}/anchor/refresh")
+def refresh_evidence_anchor(
+    bundle_id: str,
+    actor_id: str = "api",
+    db: Session = Depends(get_db),
+):
+    try:
+        return LegalAuthorizationService(db).refresh_evidence_anchor(bundle_id=bundle_id, actor_id=actor_id)
+    except ValueError as e:
+        detail = str(e)
+        if detail == "legal_evidence_bundle_not_found":
+            raise HTTPException(status_code=404, detail=detail)
+        raise HTTPException(status_code=422, detail=detail)
+    except Exception:
+        log.exception("refresh_evidence_anchor_failed")
+        raise HTTPException(status_code=500, detail="internal_error")
