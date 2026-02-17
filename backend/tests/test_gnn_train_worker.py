@@ -5,10 +5,18 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from app.analytics.ai_models import AIPrediction, AIExplanation, EntityEmbedding, GNNTrainingRun
+from app.analytics.ai_models import (
+    AIPrediction,
+    AIExplanation,
+    AICampaignRiskIndicator,
+    AIRiskThreshold,
+    EntityEmbedding,
+    GNNTrainingRun,
+)
 from app.analytics.layer3.gnn_backbone import GNNDataset
 from app.analytics.layer3.gnn_model import GNNTrainResult
 from app.analytics.layer3 import gnn_train_worker
+from app.campaign.models import Campaign, CampaignEntity
 from app.db import registry as _  # noqa: F401
 from app.db.base import Base
 
@@ -31,6 +39,10 @@ def test_gnn_train_worker_persists_outputs(monkeypatch):
     try:
         db.query(AIExplanation).delete()
         db.query(AIPrediction).delete()
+        db.query(AICampaignRiskIndicator).delete()
+        db.query(AIRiskThreshold).delete()
+        db.query(CampaignEntity).delete()
+        db.query(Campaign).delete()
         db.query(EntityEmbedding).delete()
         db.query(GNNTrainingRun).delete()
         db.commit()
@@ -50,11 +62,33 @@ def test_gnn_train_worker_persists_outputs(monkeypatch):
             labels=[1, 0, 1],
             edges=[(0, 1, 2.0), (1, 2, 1.0)],
             node_meta=[
-                {"risk_flags": ["DDOS_ALERT_SERVICE"], "event_count": 18, "source_count": 3, "event_types": {}},
-                {"risk_flags": [], "event_count": 4, "source_count": 1, "event_types": {}},
-                {"risk_flags": ["CAMPAIGN_ENTITY"], "event_count": 25, "source_count": 4, "event_types": {}},
+                {
+                    "risk_flags": ["DDOS_ALERT_SERVICE"],
+                    "event_count": 18,
+                    "source_count": 3,
+                    "event_types": {},
+                    "is_benign_negative": False,
+                },
+                {
+                    "risk_flags": [],
+                    "event_count": 4,
+                    "source_count": 1,
+                    "event_types": {},
+                    "is_benign_negative": True,
+                },
+                {
+                    "risk_flags": ["CAMPAIGN_ENTITY"],
+                    "event_count": 25,
+                    "source_count": 4,
+                    "event_types": {},
+                    "is_benign_negative": False,
+                },
             ],
             source_backend_used="hybrid",
+            edge_source_counts={"neo4j": 2, "postgres": 1},
+            positive_count=2,
+            negative_count=1,
+            benign_negative_count=1,
         )
 
         fake_train = GNNTrainResult(
@@ -75,11 +109,18 @@ def test_gnn_train_worker_persists_outputs(monkeypatch):
             model_version="gnn-sage-v1",
             prediction_type="risk_gnn",
             artifact_dir="/tmp/gnn",
+            component_discovery_enabled=True,
+            component_min_size=3,
+            component_min_indicator_ratio=0.5,
         )
 
         assert out["status"] == "ok"
         assert out["predictions_created"] == 3
         assert out["embeddings_upserted"] == 3
+        assert out["thresholds_upserted"] >= 1
+        assert out["campaign_indicators_created"] >= 0
+        assert out["component_campaigns_created"] >= 1
+        assert out["component_entities_upserted"] >= 3
 
         runs = db.query(GNNTrainingRun).all()
         assert len(runs) == 1
@@ -87,11 +128,22 @@ def test_gnn_train_worker_persists_outputs(monkeypatch):
 
         preds = db.query(AIPrediction).filter(AIPrediction.prediction_type == "risk_gnn").all()
         assert len(preds) == 3
+        assert all("legal_notice" in (p.details_json or {}) for p in preds)
+        assert all("RISK_INDICATOR_ONLY_NOT_FINAL_PROOF" in (p.reason_codes or []) for p in preds)
 
         expl = db.query(AIExplanation).all()
         assert len(expl) == 3
+        assert all("legal_notice" in (e.details_json or {}) for e in expl)
 
         emb = db.query(EntityEmbedding).filter(EntityEmbedding.model_version == "gnn-sage-v1").all()
         assert len(emb) == 3
+
+        th = db.query(AIRiskThreshold).all()
+        assert len(th) >= 1
+
+        comp = db.query(Campaign).filter(Campaign.type == "GNN_COMPONENT").all()
+        assert len(comp) >= 1
+        members = db.query(CampaignEntity).filter(CampaignEntity.campaign_id == comp[0].id).all()
+        assert len(members) == 3
     finally:
         db.close()

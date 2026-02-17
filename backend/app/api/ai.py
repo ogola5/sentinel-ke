@@ -4,7 +4,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db, pagination_params
-from app.analytics.ai_models import AIPrediction, AIExplanation, GNNTrainingRun
+from app.analytics.ai_models import (
+    AIPrediction,
+    AIExplanation,
+    GNNTrainingRun,
+    AIRiskThreshold,
+    AICampaignRiskIndicator,
+)
 
 router = APIRouter(prefix="/v1/ai", tags=["ai"])
 
@@ -172,4 +178,97 @@ def get_gnn_run(run_id: str, db: Session = Depends(get_db)):
         "params": r.params_json,
         "metrics": r.metrics_json,
         "created_at": r.created_at.isoformat(),
+    }
+
+
+@router.get("/thresholds")
+def list_thresholds(
+    pagination: dict = Depends(pagination_params),
+    model_version: str | None = Query(default=None),
+    prediction_type: str | None = Query(default=None),
+    entity_type: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+):
+    q = db.query(AIRiskThreshold)
+    if model_version:
+        q = q.filter(AIRiskThreshold.model_version == model_version)
+    if prediction_type:
+        q = q.filter(AIRiskThreshold.prediction_type == prediction_type)
+    if entity_type:
+        q = q.filter(AIRiskThreshold.entity_type == entity_type)
+
+    rows = (
+        q.order_by(AIRiskThreshold.window_end.desc(), AIRiskThreshold.entity_type.asc())
+        .offset(pagination["offset"])
+        .limit(pagination["limit"])
+        .all()
+    )
+    return {
+        "limit": pagination["limit"],
+        "offset": pagination["offset"],
+        "items": [
+            {
+                "id": str(r.id),
+                "model_version": r.model_version,
+                "prediction_type": r.prediction_type,
+                "entity_type": r.entity_type,
+                "window_key": r.window_key,
+                "window_end": r.window_end.isoformat(),
+                "threshold_score": r.threshold_score,
+                "method": r.method,
+                "sample_count": r.sample_count,
+                "positive_count": r.positive_count,
+                "metrics": r.metrics_json,
+                "created_at": r.created_at.isoformat(),
+            }
+            for r in rows
+        ],
+    }
+
+
+@router.get("/campaign-indicators")
+def list_campaign_indicators(
+    pagination: dict = Depends(pagination_params),
+    prediction_type: str | None = Query(default=None),
+    min_score: float | None = Query(default=None, ge=0.0, le=100.0),
+    severity: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+):
+    q = db.query(AICampaignRiskIndicator)
+    if prediction_type:
+        q = q.filter(AICampaignRiskIndicator.prediction_type == prediction_type)
+    if min_score is not None:
+        q = q.filter(AICampaignRiskIndicator.score >= min_score)
+    if severity:
+        q = q.filter(AICampaignRiskIndicator.severity == severity)
+
+    rows = (
+        q.order_by(AICampaignRiskIndicator.window_end.desc(), AICampaignRiskIndicator.score.desc())
+        .offset(pagination["offset"])
+        .limit(pagination["limit"])
+        .all()
+    )
+    return {
+        "limit": pagination["limit"],
+        "offset": pagination["offset"],
+        "items": [
+            {
+                "id": str(r.id),
+                "campaign_id": str(r.campaign_id),
+                "prediction_type": r.prediction_type,
+                "model_version": r.model_version,
+                "window_key": r.window_key,
+                "window_end": r.window_end.isoformat(),
+                "score": r.score,
+                "severity": r.severity,
+                "flagged_entity_count": r.flagged_entity_count,
+                "total_entity_count": r.total_entity_count,
+                "reason_codes": r.reason_codes,
+                "details": r.details_json,
+                "evidence_entity_keys": r.evidence_entity_keys,
+                "created_at": r.created_at.isoformat(),
+                "updated_at": r.updated_at.isoformat(),
+            }
+            for r in rows
+        ],
     }

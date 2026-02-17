@@ -1,6 +1,8 @@
 # Sentinel-KE Runbook
 
 This runbook lists the common commands for demos, workers, and API usage.
+Phase tracker is in:
+`docs/PHASES_90_TRACKER.md`
 
 ## 1) Start the stack
 
@@ -15,18 +17,28 @@ In Docker, proxy target is `http://backend:8000` (set in `docker-compose.yml`).
 ## 1.1) Dependency workflow in Docker (important)
 
 Backend image uses:
-- `backend/requirements.txt` for runtime dependencies
-- `backend/requirements-dev.txt` for development tools (includes `pytest`)
+- `backend/requirements-runtime.txt` for core runtime dependencies
+- `backend/requirements-ml.txt` for heavy ML dependencies (CPU torch wheel, cached separately)
+- `backend/requirements.txt` as aggregate runtime list
+- `backend/requirements-dev.txt` for development tools (`pytest`, `jupyterlab`, data science libs)
+
+Important:
+- Code-only edits do not require rebuild (`./backend` is mounted into `/app`).
+- Only dependency changes require rebuild.
+- The Dockerfile now installs ML dependencies in a dedicated cached layer to avoid repeated torch downloads.
+- Torch is pinned to CPU wheels to avoid massive CUDA downloads on slow links.
 
 When you add/change dependencies:
 1. Runtime library:
-   - add it to `backend/requirements.txt`
-2. Dev/test tool:
+   - add it to `backend/requirements-runtime.txt`
+2. Heavy ML library:
+   - add it to `backend/requirements-ml.txt`
+3. Dev/test tool:
    - add it to `backend/requirements-dev.txt`
-3. Rebuild backend-based images:
+4. Rebuild backend-based images:
 ```
-docker compose build backend redpanda-consumer mule-campaign-worker
-docker compose up -d backend redpanda-consumer mule-campaign-worker
+docker compose build backend notebook redpanda-consumer mule-campaign-worker
+docker compose up -d backend notebook redpanda-consumer mule-campaign-worker
 ```
 
 Quick temporary install (not reproducible, lost on rebuild):
@@ -34,9 +46,60 @@ Quick temporary install (not reproducible, lost on rebuild):
 docker compose exec backend pip install <package>
 ```
 
+Fast patch install to all Python services (temporary):
+```
+docker compose exec backend pip install <package>
+docker compose exec notebook pip install <package>
+docker compose exec redpanda-consumer pip install <package>
+docker compose exec mule-campaign-worker pip install <package>
+docker compose restart backend notebook redpanda-consumer mule-campaign-worker
+```
+
 Check pytest is installed in image:
 ```
 docker compose run --rm --no-deps -e PYTHONPATH=/app backend python -m pytest --version
+```
+
+## 1.2) Jupyter Lab in Docker (VS Code notebook workflow)
+
+Start notebook service:
+```
+docker compose up -d notebook
+```
+
+Open:
+```
+http://localhost:8888/lab?token=<JUPYTER_TOKEN>
+```
+
+Default token (from `.env.example`):
+```
+sentinel-notebook-token
+```
+
+Notebook files are in:
+```
+notebooks/
+```
+
+Suggested order:
+1. `notebooks/01_feature_build.ipynb`
+2. `notebooks/02_gnn_train.ipynb`
+3. `notebooks/03_eval_and_explain.ipynb`
+
+## 1.3) Database migrations (Alembic)
+
+Migration config lives in:
+`backend/alembic.ini`
+
+Apply migrations:
+```
+docker compose exec -w /app backend alembic -c alembic.ini upgrade head
+```
+
+Create a new migration revision:
+```
+docker compose exec -w /app backend alembic -c alembic.ini revision -m "describe_change"
 ```
 
 ## 2) Seed sources (API keys)
@@ -138,6 +201,8 @@ docker compose run --rm --no-deps -e PYTHONPATH=/app backend \
   python -m app.analytics.layer3.gnn_train_worker \
   --window-key Wmid \
   --edge-backend hybrid \
+  --negative-multiplier 1.5 \
+  --threshold-min-samples 10 \
   --epochs 80
 ```
 
@@ -306,6 +371,16 @@ Anomalies + mitigations:
 GET /v1/anomalies
 GET /v1/mitigations
 GET /v1/mitigations/export
+```
+
+AI + GNN:
+```
+GET /v1/ai/predictions?prediction_type=risk_gnn
+GET /v1/ai/explanations/{prediction_id}
+GET /v1/ai/gnn/runs
+GET /v1/ai/gnn/runs/{run_id}
+GET /v1/ai/thresholds
+GET /v1/ai/campaign-indicators
 ```
 
 Cases + STIX:

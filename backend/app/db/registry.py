@@ -27,5 +27,7 @@ from app.analytics.ai_models import (
     AIPrediction,
     AIExplanation,
     GNNTrainingRun,
+    AIRiskThreshold,
+    AICampaignRiskIndicator,
 )
 from app.legal.models import LegalOrder, LegalAuthorizationGrant, LegalEvidenceBundle, LegalEvidenceAnchor

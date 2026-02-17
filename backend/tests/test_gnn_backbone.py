@@ -1,6 +1,7 @@
 from app.analytics.layer3.gnn_backbone import (
     build_feature_vector,
     collapse_edges,
+    entity_key_to_neo4j_ref,
     weak_label,
 )
 
@@ -64,3 +65,10 @@ def test_collapse_edges_merges_bidirectional_duplicates():
     assert out[0][1] == "b"
     assert out[0][2] == 3.5
     assert len(out) == 2
+
+
+def test_entity_key_to_neo4j_ref_mapping():
+    assert entity_key_to_neo4j_ref("ip:203.0.113.1") == ("IP", "203.0.113.1")
+    assert entity_key_to_neo4j_ref("service_id:core-payments") == ("Service", "core-payments")
+    assert entity_key_to_neo4j_ref("account_h:abc123") == ("Account", "account_h:abc123")
+    assert entity_key_to_neo4j_ref("unknown:x1") is None

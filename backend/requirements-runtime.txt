@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+pydantic
+sqlalchemy
+psycopg2-binary
+neo4j
+opensearch-py
+kafka-python
+requests
+boto3

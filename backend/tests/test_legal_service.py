@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from app.legal.schemas import ApprovalPayloadRequest, ScanCandidate
 from app.legal.service import (
     _match_action,
     _match_target,
+    LegalAuthorizationService,
     build_approval_message,
     greedy_select_candidates,
 )
@@ -70,3 +73,43 @@ def test_greedy_select_prefers_higher_ratio():
     assert used_budget == 4.0
     assert [x["target"] for x in selected] == ["db:b", "db:c"]
     assert any(x["target"] == "db:a" and x["reason"] == "budget_exceeded" for x in skipped)
+
+
+def test_grant_to_dict_hides_execution_token_by_default():
+    row = SimpleNamespace(
+        grant_id="g1",
+        order_id="o1",
+        action_type="economic_leakage_scan",
+        target="economy:procurement",
+        requested_by="analyst-a",
+        approved_by_json=["a", "b"],
+        status="allow",
+        reason_codes_json=["authorized"],
+        valid_from=SimpleNamespace(isoformat=lambda: "2026-01-01T00:00:00+00:00"),
+        valid_until=SimpleNamespace(isoformat=lambda: "2026-01-01T01:00:00+00:00"),
+        execution_token="secret-token",
+        evidence_json={},
+        created_at=SimpleNamespace(isoformat=lambda: "2026-01-01T00:00:00+00:00"),
+    )
+    out = LegalAuthorizationService._grant_to_dict(row)
+    assert "execution_token" not in out
+
+
+def test_grant_to_dict_can_include_execution_token():
+    row = SimpleNamespace(
+        grant_id="g1",
+        order_id="o1",
+        action_type="economic_leakage_scan",
+        target="economy:procurement",
+        requested_by="analyst-a",
+        approved_by_json=["a", "b"],
+        status="allow",
+        reason_codes_json=["authorized"],
+        valid_from=SimpleNamespace(isoformat=lambda: "2026-01-01T00:00:00+00:00"),
+        valid_until=SimpleNamespace(isoformat=lambda: "2026-01-01T01:00:00+00:00"),
+        execution_token="secret-token",
+        evidence_json={},
+        created_at=SimpleNamespace(isoformat=lambda: "2026-01-01T00:00:00+00:00"),
+    )
+    out = LegalAuthorizationService._grant_to_dict(row, include_execution_token=True)
+    assert out["execution_token"] == "secret-token"

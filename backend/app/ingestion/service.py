@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import logging
 import time
 from typing import Optional, Dict, Any, Tuple
 
@@ -34,6 +35,7 @@ from app.streaming.producer import get_producer
 _RATE_LIMIT_WINDOW_SECS = 60
 _RATE_LIMIT_MAX = 500
 _rate_state: Dict[str, Tuple[float, int]] = {}
+log = logging.getLogger("sentinel.ingest")
 
 
 @dataclass(frozen=True)
@@ -232,8 +234,8 @@ class IngestionService:
                     payload=event.payload,
                 )
                 index_event(os_client, index_name, doc)
-            except Exception:
-                pass
+            except Exception as e:
+                log.warning("ingest_opensearch_index_failed event_hash=%s err=%s", event_hash, e)
 
             # 10) Graph delta generation + Postgres logging (best-effort)
             nodes_payload = []
@@ -248,7 +250,8 @@ class IngestionService:
                     nodes=nodes_payload,
                     edges=edges_payload,
                 )
-            except Exception:
+            except Exception as e:
+                log.warning("ingest_graph_delta_failed event_hash=%s err=%s", event_hash, e)
                 nodes_payload = []
                 edges_payload = []
 
@@ -292,8 +295,8 @@ class IngestionService:
                         key=event_hash,
                         value=gmsg,
                     )
-            except Exception:
-                pass
+            except Exception as e:
+                log.warning("ingest_kafka_publish_failed event_hash=%s err=%s", event_hash, e)
 
         return IngestResult(
             event_hash=event_hash,

@@ -11,6 +11,8 @@ def env_bool(name: str, default: bool = False) -> bool:
 
 
 class Settings:
+    app_env = os.environ.get("APP_ENV", "development").lower()
+
     # ---------------------------------------------------------
     # Kafka / Redpanda
     # ---------------------------------------------------------
@@ -34,20 +36,33 @@ class Settings:
     gnn_max_entities = int(os.environ.get("GNN_MAX_ENTITIES", "3000"))
     gnn_max_edges = int(os.environ.get("GNN_MAX_EDGES", "30000"))
     gnn_min_edge_weight = int(os.environ.get("GNN_MIN_EDGE_WEIGHT", "1"))
+    gnn_negative_multiplier = float(os.environ.get("GNN_NEGATIVE_MULTIPLIER", "1.5"))
     gnn_epochs = int(os.environ.get("GNN_EPOCHS", "60"))
     gnn_hidden_dim = int(os.environ.get("GNN_HIDDEN_DIM", "64"))
     gnn_embed_dim = int(os.environ.get("GNN_EMBED_DIM", "32"))
     gnn_dropout = float(os.environ.get("GNN_DROPOUT", "0.2"))
     gnn_learning_rate = float(os.environ.get("GNN_LEARNING_RATE", "0.001"))
     gnn_weight_decay = float(os.environ.get("GNN_WEIGHT_DECAY", "0.0001"))
+    gnn_threshold_min_samples = int(os.environ.get("GNN_THRESHOLD_MIN_SAMPLES", "10"))
+    gnn_component_discovery_enabled = env_bool("GNN_COMPONENT_DISCOVERY_ENABLED", True)
+    gnn_component_min_size = int(os.environ.get("GNN_COMPONENT_MIN_SIZE", "3"))
+    gnn_component_min_indicator_ratio = float(os.environ.get("GNN_COMPONENT_MIN_INDICATOR_RATIO", "0.5"))
     gnn_seed = int(os.environ.get("GNN_SEED", "7"))
     gnn_artifact_dir = os.environ.get("GNN_ARTIFACT_DIR", "/app/artifacts/gnn")
 
     # ---------------------------------------------------------
+    # Platform hardening
+    # ---------------------------------------------------------
+    pseudonym_salt = os.environ.get("PSEUDONYM_SALT", "").strip()
+    api_auth_disabled = env_bool("API_AUTH_DISABLED", False)
+    api_auth_optional_dev = env_bool("API_AUTH_OPTIONAL_DEV", False)
+    frontend_api_key = os.environ.get("FRONTEND_API_KEY", "").strip()
+    db_auto_create = env_bool("DB_AUTO_CREATE", app_env == "development")
+
+    # ---------------------------------------------------------
     # Ingestion API Security
     # ---------------------------------------------------------
-    # Single key for MVP / dev. Can be rotated to multi-key later.
-    ingest_api_key = os.environ.get("INGEST_API_KEY", "dev-secret-key")
+    ingest_api_key = os.environ.get("INGEST_API_KEY", "").strip()
 
     # Allow bypass in local dev ONLY if explicitly enabled
     ingest_allow_unauthenticated = env_bool("INGEST_ALLOW_UNAUTH", False)

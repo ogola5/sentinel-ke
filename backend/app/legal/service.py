@@ -246,7 +246,7 @@ class LegalAuthorizationService:
             target=grant_id,
         )
 
-        return self._grant_to_dict(row)
+        return self._grant_to_dict(row, include_execution_token=True)
 
     def verify_grant_token(
         self,
@@ -398,7 +398,7 @@ class LegalAuthorizationService:
             "case_packet": case_packet,
             "stix_bundle": stix_bundle,
             "legal_order": self._order_to_dict(order),
-            "authorization_chain": [self._grant_to_dict(g) for g in grants],
+            "authorization_chain": [self._grant_to_dict(g, include_execution_token=False) for g in grants],
             "audit_chain": audit_chain,
         }
         root_hash = compute_event_hash(bundle_payload)
@@ -460,7 +460,11 @@ class LegalAuthorizationService:
         if status:
             q = q.filter(LegalAuthorizationGrant.status == status)
         rows = q.order_by(LegalAuthorizationGrant.created_at.desc()).offset(offset).limit(limit).all()
-        return {"limit": limit, "offset": offset, "items": [self._grant_to_dict(x) for x in rows]}
+        return {
+            "limit": limit,
+            "offset": offset,
+            "items": [self._grant_to_dict(x, include_execution_token=False) for x in rows],
+        }
 
     def list_evidence_bundles(self, *, limit: int, offset: int) -> Dict[str, Any]:
         rows = (
@@ -593,8 +597,12 @@ class LegalAuthorizationService:
         }
 
     @staticmethod
-    def _grant_to_dict(row: LegalAuthorizationGrant) -> Dict[str, Any]:
-        return {
+    def _grant_to_dict(
+        row: LegalAuthorizationGrant,
+        *,
+        include_execution_token: bool = False,
+    ) -> Dict[str, Any]:
+        out = {
             "grant_id": row.grant_id,
             "order_id": row.order_id,
             "action_type": row.action_type,
@@ -605,10 +613,12 @@ class LegalAuthorizationService:
             "reason_codes": row.reason_codes_json or [],
             "valid_from": row.valid_from.isoformat(),
             "valid_until": row.valid_until.isoformat(),
-            "execution_token": row.execution_token,
             "evidence": row.evidence_json or {},
             "created_at": row.created_at.isoformat(),
         }
+        if include_execution_token:
+            out["execution_token"] = row.execution_token
+        return out
 
     @staticmethod
     def _evidence_bundle_to_dict(

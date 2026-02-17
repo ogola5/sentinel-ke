@@ -154,3 +154,77 @@ class GNNTrainingRun(Base):
         Index("ix_gnn_run_window_end", "window_end"),
         Index("ix_gnn_run_model_version", "model_version"),
     )
+
+
+class AIRiskThreshold(Base):
+    __tablename__ = "ai_risk_threshold"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    model_version = Column(String, nullable=False)
+    prediction_type = Column(String, nullable=False)
+
+    entity_type = Column(String, nullable=False)
+    window_key = Column(String, nullable=False)
+    window_end = Column(DateTime(timezone=True), nullable=False)
+
+    threshold_score = Column(Float, nullable=False, default=75.0)  # 0..100
+    method = Column(String, nullable=False, default="f1_weak_label")
+    sample_count = Column(Integer, nullable=False, default=0)
+    positive_count = Column(Integer, nullable=False, default=0)
+
+    metrics_json = Column(JSONB, nullable=False, default=dict)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "model_version",
+            "prediction_type",
+            "entity_type",
+            "window_key",
+            "window_end",
+            name="uq_ai_risk_threshold",
+        ),
+        Index("ix_ai_risk_threshold_entity", "entity_type"),
+        Index("ix_ai_risk_threshold_window_end", "window_end"),
+    )
+
+
+class AICampaignRiskIndicator(Base):
+    __tablename__ = "ai_campaign_risk_indicator"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    campaign_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("campaign.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+
+    prediction_type = Column(String, nullable=False, default="risk_gnn")
+    model_version = Column(String, nullable=False)
+    window_key = Column(String, nullable=False)
+    window_end = Column(DateTime(timezone=True), nullable=False)
+
+    score = Column(Float, nullable=False, default=0.0)  # 0..100
+    severity = Column(String, nullable=False, default="low")
+    flagged_entity_count = Column(Integer, nullable=False, default=0)
+    total_entity_count = Column(Integer, nullable=False, default=0)
+
+    reason_codes = Column(JSONB, nullable=False, default=list)
+    details_json = Column(JSONB, nullable=False, default=dict)
+    evidence_entity_keys = Column(JSONB, nullable=False, default=list)
+
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "campaign_id",
+            "prediction_type",
+            "window_key",
+            "window_end",
+            name="uq_ai_campaign_risk_indicator",
+        ),
+        Index("ix_ai_campaign_risk_score", "score"),
+        Index("ix_ai_campaign_risk_window_end", "window_end"),
+        Index("ix_ai_campaign_risk_campaign", "campaign_id"),
+    )

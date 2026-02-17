@@ -1,4 +1,5 @@
 import os
+import logging
 from fastapi import FastAPI, Depends
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
@@ -27,9 +28,12 @@ from app.api.economy_guardrail import router as economy_guardrail_router
 from app.api.economy_leakage import router as economy_leakage_router
 from app.api.economy_coverup import router as economy_coverup_router
 from app.api.deps import require_api_key
+from app.core.config import settings
 from app.search.opensearch import get_client as get_os_client
 from app.graph.neo4j_driver import get_driver
 import app.db.registry  # noqa: F401  # ensure all models are registered
+
+log = logging.getLogger("sentinel.main")
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
@@ -111,7 +115,10 @@ app.include_router(economy_coverup_router, dependencies=[Depends(require_api_key
 
 @app.on_event("startup")
 def startup():
-    Base.metadata.create_all(bind=engine)
+    if settings.db_auto_create:
+        Base.metadata.create_all(bind=engine)
+    else:
+        log.info("db_auto_create_disabled; skipping Base.metadata.create_all")
     _ensure_infra_cluster_schema()
 
 @app.get("/health")

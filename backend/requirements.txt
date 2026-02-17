@@ -1,11 +1,2 @@
-fastapi
-uvicorn
-pydantic
-sqlalchemy
-psycopg2-binary
-neo4j
-opensearch-py
-kafka-python
-requests
-boto3
-torch>=2.3,<3
+-r requirements-runtime.txt
+-r requirements-ml.txt

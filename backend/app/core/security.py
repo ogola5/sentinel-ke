@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import os
 from typing import Any, Dict, Optional
 
 
@@ -57,6 +58,11 @@ DEFAULT_PSEUDO_SALT = "sentinel-ke-demo-salt"
 
 
 def pseudonymize(value: str, salt: Optional[str] = None) -> str:
-    salt = salt or DEFAULT_PSEUDO_SALT
-    material = f"{salt}:{value}".encode("utf-8")
+    effective_salt = salt or os.getenv("PSEUDONYM_SALT", "").strip()
+    if not effective_salt:
+        app_env = os.getenv("APP_ENV", "development").lower()
+        if app_env != "development":
+            raise ValueError("PSEUDONYM_SALT is required outside development")
+        effective_salt = DEFAULT_PSEUDO_SALT
+    material = f"{effective_salt}:{value}".encode("utf-8")
     return sha256_hex(material)

@@ -1,14 +1,18 @@
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, Header, HTTPException
 from sqlalchemy.orm import Session
 from typing import List, Optional
 
 from app.api.deps import get_db
+from app.core.config import settings
 from app.ingestion.schemas import CanonicalEvent
 from app.ingestion.service import IngestionService
 
 router = APIRouter(prefix="/v1/ingest", tags=["ingestion"])
+log = logging.getLogger("sentinel.api.ingest")
 
 
 def _require_api_key(x_api_key: Optional[str]) -> str:
@@ -26,7 +30,7 @@ def ingest_event(
     api_key = _require_api_key(x_api_key)
 
     try:
-        svc = IngestionService(db, pseudonym_salt="demo-salt")
+        svc = IngestionService(db, pseudonym_salt=settings.pseudonym_salt or None)
         res = svc.ingest_event(event=event, source_api_key=api_key)
         return {
             "event_hash": res.event_hash,
@@ -39,8 +43,9 @@ def ingest_event(
         raise HTTPException(status_code=401, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"internal_error: {e}")
+    except Exception:
+        log.exception("ingest_event_failed")
+        raise HTTPException(status_code=500, detail="internal_error")
 
 
 @router.post("/batch")
@@ -51,14 +56,15 @@ def ingest_batch(
 ):
     api_key = _require_api_key(x_api_key)
 
-    svc = IngestionService(db, pseudonym_salt="demo-salt")
+    svc = IngestionService(db, pseudonym_salt=settings.pseudonym_salt or None)
     out = []
     for ev in events:
         try:
             res = svc.ingest_event(event=ev, source_api_key=api_key)
             out.append({"event_hash": res.event_hash, "status": res.status})
-        except Exception as e:
-            out.append({"error": str(e)})
+        except Exception:
+            log.exception("ingest_batch_item_failed")
+            out.append({"error": "internal_error"})
     return {"results": out}
 
 
