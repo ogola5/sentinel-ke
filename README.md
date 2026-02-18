@@ -56,6 +56,11 @@ docker compose up -d
 docs/RUNBOOK.md
 ```
 
+Backend-only cloud deployment (skip ML runtime in API service):
+```
+docs/RENDER_BACKEND_ONLY.md
+```
+
 Delivery tracker (5 phases to 90% readiness):
 ```
 docs/PHASES_90_TRACKER.md

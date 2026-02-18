@@ -1,0 +1,32 @@
+services:
+  - type: web
+    name: sentinel-backend
+    runtime: docker
+    dockerContext: ./backend
+    dockerfilePath: ./backend/Dockerfile
+    dockerCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: DB_AUTO_CREATE
+        value: "false"
+      - key: GNN_ENABLED
+        value: "false"
+      - key: AI_API_ENABLED
+        value: "false"
+      - key: KAFKA_ENABLED
+        value: "false"
+      - key: API_AUTH_DISABLED
+        value: "false"
+      - key: FRONTEND_API_KEY
+        generateValue: true
+      - key: INGEST_API_KEY
+        generateValue: true
+      - key: PSEUDONYM_SALT
+        generateValue: true
+      - key: CORS_ALLOW_ORIGINS
+        sync: false
+      - key: DATABASE_URL
+        sync: false

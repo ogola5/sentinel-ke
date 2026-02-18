@@ -19,13 +19,13 @@ In Docker, proxy target is `http://backend:8000` (set in `docker-compose.yml`).
 Backend image uses:
 - `backend/requirements-runtime.txt` for core runtime dependencies
 - `backend/requirements-ml.txt` for heavy ML dependencies (CPU torch wheel, cached separately)
-- `backend/requirements.txt` as aggregate runtime list
+- `backend/requirements.txt` as aggregate full-dependency list (runtime + ML)
 - `backend/requirements-dev.txt` for development tools (`pytest`, `jupyterlab`, data science libs)
 
 Important:
 - Code-only edits do not require rebuild (`./backend` is mounted into `/app`).
 - Only dependency changes require rebuild.
-- The Dockerfile now installs ML dependencies in a dedicated cached layer to avoid repeated torch downloads.
+- The Dockerfile installs ML dependencies only when `INSTALL_ML=1`, in a dedicated cached layer.
 - Torch is pinned to CPU wheels to avoid massive CUDA downloads on slow links.
 
 When you add/change dependencies:

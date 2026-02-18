@@ -1,6 +1,7 @@
 import os
 import logging
 from fastapi import FastAPI, Depends
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
@@ -82,14 +83,24 @@ tags_metadata = [
     {"name": "ddos", "description": "DDoS indicators and alerts"},
     {"name": "anomalies", "description": "Anomaly scores"},
     {"name": "mitigations", "description": "IOC and mitigation bundles"},
-    {"name": "ai", "description": "AI predictions and explanations"},
     {"name": "integrations", "description": "External connector ingestion bridge"},
     {"name": "legal", "description": "Court-order authorization and legal controls"},
     {"name": "metrics", "description": "Operational metrics"},
     {"name": "economy", "description": "Economic integrity and procurement anomalies"},
 ]
+if settings.ai_api_enabled:
+    tags_metadata.append({"name": "ai", "description": "AI predictions and explanations"})
 
 app = FastAPI(title="Sentinel-KE", openapi_tags=tags_metadata)
+
+if settings.cors_allow_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.cors_allow_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
 app.include_router(ingest_router, dependencies=[Depends(require_api_key)])
 app.include_router(events_router, dependencies=[Depends(require_api_key)])
@@ -105,7 +116,8 @@ app.include_router(infra_graph_router, dependencies=[Depends(require_api_key)])
 app.include_router(anomalies_router, dependencies=[Depends(require_api_key)])
 app.include_router(mitigations_router, dependencies=[Depends(require_api_key)])
 app.include_router(metrics_router, dependencies=[Depends(require_api_key)])
-app.include_router(ai_router, dependencies=[Depends(require_api_key)])
+if settings.ai_api_enabled:
+    app.include_router(ai_router, dependencies=[Depends(require_api_key)])
 app.include_router(integrations_router, dependencies=[Depends(require_api_key)])
 app.include_router(legal_router, dependencies=[Depends(require_api_key)])
 app.include_router(economy_router, dependencies=[Depends(require_api_key)])

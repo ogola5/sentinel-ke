@@ -10,6 +10,11 @@ def env_bool(name: str, default: bool = False) -> bool:
     return v.strip().lower() in ("1", "true", "yes", "y", "on")
 
 
+def env_csv(name: str, default: str = "") -> list[str]:
+    raw = os.environ.get(name, default)
+    return [x.strip() for x in raw.split(",") if x.strip()]
+
+
 class Settings:
     app_env = os.environ.get("APP_ENV", "development").lower()
 
@@ -49,6 +54,7 @@ class Settings:
     gnn_component_min_indicator_ratio = float(os.environ.get("GNN_COMPONENT_MIN_INDICATOR_RATIO", "0.5"))
     gnn_seed = int(os.environ.get("GNN_SEED", "7"))
     gnn_artifact_dir = os.environ.get("GNN_ARTIFACT_DIR", "/app/artifacts/gnn")
+    ai_api_enabled = env_bool("AI_API_ENABLED", True)
 
     # ---------------------------------------------------------
     # Platform hardening
@@ -58,6 +64,7 @@ class Settings:
     api_auth_optional_dev = env_bool("API_AUTH_OPTIONAL_DEV", False)
     frontend_api_key = os.environ.get("FRONTEND_API_KEY", "").strip()
     db_auto_create = env_bool("DB_AUTO_CREATE", app_env == "development")
+    cors_allow_origins = env_csv("CORS_ALLOW_ORIGINS", "")
 
     # ---------------------------------------------------------
     # Ingestion API Security

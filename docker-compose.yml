@@ -1,12 +1,19 @@
-x-backend-build: &backend-build
+x-backend-build-lite: &backend-build-lite
   context: ./backend
   args:
     INSTALL_DEV: "1"
+    INSTALL_ML: ${INSTALL_ML_IN_BACKEND:-0}
+
+x-backend-build-ml: &backend-build-ml
+  context: ./backend
+  args:
+    INSTALL_DEV: "1"
+    INSTALL_ML: "1"
 
 services:
 
   backend:
-    build: *backend-build
+    build: *backend-build-lite
     container_name: sentinel-backend
     env_file:
       - .env
@@ -22,7 +29,7 @@ services:
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
   notebook:
-    build: *backend-build
+    build: *backend-build-ml
     container_name: sentinel-notebook
     env_file:
       - .env
@@ -119,7 +126,7 @@ services:
       - "9644:9644"
 
   redpanda-consumer:
-    build: *backend-build
+    build: *backend-build-lite
     container_name: sentinel-redpanda-consumer
     command: python -m app.streaming.ingest_consumer --topics sentinel.ingest
     depends_on:
@@ -134,7 +141,7 @@ services:
     restart: unless-stopped
 
   mule-campaign-worker:
-    build: *backend-build
+    build: *backend-build-lite
     container_name: sentinel-mule-campaign-worker
     command: /bin/sh -c "while true; do python -m app.analytics.layer3.mule_campaign_worker --minutes 180 --min-senders 2 --min-tx 4; sleep 300; done"
     depends_on:
