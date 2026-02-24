@@ -1,15 +1,18 @@
 # backend/app/analytics/layer3/claim_projection_worker.py
 from __future__ import annotations
 
+import logging
+
 from sqlalchemy.orm import Session
 
 from app.graph.delta_store import DeltaStore
-from app.campaign.models_claim import CampaignClaim
-from app.analytics.layer3.claim_projector import project_campaign_claim
+from app.campaign.claims import CampaignClaim
+from app.graph.claim_projection import project_claim_to_delta
 from app.graph.models import GraphDeltaLog
 
 
 CURSOR_NAME = "layer3_claims"
+log = logging.getLogger("sentinel.claim_projection_worker")
 
 
 def project_claims_once(
@@ -45,7 +48,12 @@ def project_claims_once(
     last_ts = None
 
     for claim in rows:
-        delta = project_campaign_claim(claim_row=claim)
+        try:
+            delta = project_claim_to_delta(db=db, claim=claim)
+        except Exception as exc:
+            log.warning("claim_projection_failed claim_id=%s error=%s", claim.id, exc)
+            last_ts = claim.created_at
+            continue
 
         db.add(
             GraphDeltaLog(

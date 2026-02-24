@@ -86,6 +86,8 @@ def approval_payload(payload: ApprovalPayloadRequest):
 def verify_grant(
     action_type: str,
     target: str,
+    model_action: str | None = None,
+    model_version: str | None = None,
     x_legal_grant_token: str | None = Header(default=None, alias="X-Legal-Grant-Token"),
     mark_used: bool = False,
     actor_id: str = "api",
@@ -98,6 +100,8 @@ def verify_grant(
             execution_token=x_legal_grant_token,
             action_type=action_type,
             target=target,
+            model_action=model_action,
+            model_version=model_version,
             mark_used=mark_used,
             actor_id=actor_id,
         )
@@ -113,6 +117,7 @@ def verify_grant(
             "grant_expired",
             "grant_action_mismatch",
             "grant_target_mismatch",
+            "grant_model_scope_mismatch",
             "grant_token_already_used",
         }:
             raise HTTPException(status_code=403, detail=detail)

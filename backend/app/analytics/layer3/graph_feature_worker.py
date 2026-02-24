@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.analytics.ai_models import GraphFeatureSnapshot
 from app.analytics.infra_windows import last_minutes
 from app.analytics.ddos_alerts import DDoSAlert
+from app.analytics.layer3.ai_intel import event_types_to_attack_techniques, event_types_to_kill_chain_stage
 from app.campaign.models import CampaignEntity
 from app.ledger.infra_clusters import InfraCluster, InfraClusterMember
 from app.ledger.db import SessionLocal
@@ -141,6 +142,14 @@ def run_once(
             entity_key = str(stat["entity_key"])
             entity_type, raw = _entity_parts(entity_key)
             flags: List[str] = []
+            raw_event_types = dict(event_types.get(entity_key, {}))
+            ranked_event_types = sorted(
+                ((str(k), int(v or 0)) for k, v in raw_event_types.items()),
+                key=lambda x: x[1],
+                reverse=True,
+            )
+            top_event_types = {k: v for k, v in ranked_event_types[:10]}
+            other_event_count = sum(v for _, v in ranked_event_types[10:])
 
             if entity_key in campaign_entities:
                 flags.append("CAMPAIGN_ENTITY")
@@ -166,8 +175,12 @@ def run_once(
 
             features = {
                 "source_count": int(stat["source_count"]),
-                "event_types": event_types.get(entity_key, {}),
+                "event_types": top_event_types,
+                "event_types_other_count": int(other_event_count),
                 "last_seen_age_sec": age_sec,
+                "attack_techniques": event_types_to_attack_techniques(top_event_types),
+                "kill_chain_stage": event_types_to_kill_chain_stage(top_event_types),
+                "source_confidence": round(min(1.0, 0.4 + 0.15 * int(stat["source_count"])), 6),
             }
 
             rows.append(

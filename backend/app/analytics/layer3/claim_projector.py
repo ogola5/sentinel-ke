@@ -1,10 +1,6 @@
 # backend/app/analytics/layer3/claim_projector.py
 from __future__ import annotations
 
-from typing import List
-
-from sqlalchemy.orm import Session
-
 from app.graph.ontology import NodeRef, make_node, make_edge, dedupe_nodes, dedupe_edges
 from app.graph.projector import GraphDelta
 
@@ -26,6 +22,8 @@ def project_campaign_claim(
     nodes.append(make_node(a_ref))
     nodes.append(make_node(b_ref))
 
+    window = getattr(claim_row, "window_key", None) or getattr(claim_row, "window", None)
+
     edges.append(
         make_edge(
             "SUPPORTED_BY",
@@ -34,7 +32,7 @@ def project_campaign_claim(
             evidence=claim_row.evidence_hashes or [],
             claim_type=claim_row.claim_type,
             confidence=claim_row.confidence,
-            window_key=claim_row.window_key,
+            window=window,
         )
     )
 

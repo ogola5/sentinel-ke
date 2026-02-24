@@ -4,6 +4,7 @@ from app.campaign.models import (
     CampaignEntity,
     CampaignEvidence,
 )
+from app.campaign.claims import CampaignClaim
 
 from app.graph.models import GraphDeltaLog, ProjectionCursor
 from app.ledger.models import *
@@ -29,5 +30,29 @@ from app.analytics.ai_models import (
     GNNTrainingRun,
     AIRiskThreshold,
     AICampaignRiskIndicator,
+    AIAttackTechniqueHit,
+    AIAttackPathScore,
+    AILinkPrediction,
+    AIDecisionFusion,
+    AIDriftReport,
+    AIInputAnomalyAlert,
+    AIFeedbackLabel,
+    AIModelRollout,
+    AIModelLineage,
+    EntityRiskBaseline,
+    ThreatIntelIndicator,
+    ThreatIntelSyncLog,
 )
-from app.legal.models import LegalOrder, LegalAuthorizationGrant, LegalEvidenceBundle, LegalEvidenceAnchor
+from app.legal.models import (
+    LegalOrder,
+    LegalAuthorizationGrant,
+    LegalEvidenceBundle,
+    LegalEvidenceAnchor,
+    LegalEvidenceCertificate,
+)
+from app.auth.models import (
+    AuthUser,
+    AuthSession,
+    AuthLoginEvent,
+    AuthRolePolicy,
+)

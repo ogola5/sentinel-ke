@@ -16,7 +16,12 @@ from app.core.security import compute_event_hash, hmac_verify, sha256_hex, stabl
 from app.ledger.models import AuditLog
 from app.ledger.repository import LedgerRepository
 from app.legal.anchoring import LegalEvidenceAnchoringService
-from app.legal.models import LegalAuthorizationGrant, LegalEvidenceBundle, LegalOrder
+from app.legal.models import (
+    LegalAuthorizationGrant,
+    LegalEvidenceBundle,
+    LegalEvidenceCertificate,
+    LegalOrder,
+)
 from app.legal.schemas import (
     ApprovalPayloadRequest,
     LegalAuthorizationRequest,
@@ -97,6 +102,28 @@ def _match_target(target: str, allowed_targets: Sequence[str]) -> bool:
         except ValueError:
             pass
     return False
+
+
+def _model_scope_allowed(
+    *,
+    scope: Dict[str, Any],
+    model_action: str | None,
+    model_version: str | None,
+) -> bool:
+    if not scope:
+        return True
+    if not model_action and not model_version:
+        return True
+
+    allowed_actions = _norm_str_list(scope.get("allowed_model_actions") or [])
+    if model_action and allowed_actions and not _match_action(model_action, allowed_actions):
+        return False
+
+    allowed_versions = _norm_str_list(scope.get("allowed_model_versions") or [])
+    if model_version and allowed_versions and model_version not in allowed_versions:
+        return False
+
+    return True
 
 
 def _compute_token_material(material: Dict[str, Any]) -> str:
@@ -225,6 +252,8 @@ class LegalAuthorizationService:
             requested_by=payload.requested_by,
             approved_by_json=_norm_str_list(payload.approved_by),
             justification=payload.justification,
+            policy_version=payload.policy_version,
+            model_action_scope_json=dict(payload.model_action_scope or {}),
             status=decision.status,
             reason_codes_json=decision.reason_codes,
             evidence_json={
@@ -254,6 +283,8 @@ class LegalAuthorizationService:
         execution_token: str,
         action_type: str,
         target: str,
+        model_action: str | None = None,
+        model_version: str | None = None,
         mark_used: bool = False,
         actor_id: str = "system",
     ) -> Dict[str, Any]:
@@ -288,6 +319,12 @@ class LegalAuthorizationService:
             raise ValueError("grant_action_mismatch")
         if not _match_target(target, [grant.target]):
             raise ValueError("grant_target_mismatch")
+        if not _model_scope_allowed(
+            scope=dict(grant.model_action_scope_json or {}),
+            model_action=model_action,
+            model_version=model_version,
+        ):
+            raise ValueError("grant_model_scope_mismatch")
 
         single_use = bool((order.constraints_json or {}).get("single_use_token", False))
         if mark_used or single_use:
@@ -309,6 +346,7 @@ class LegalAuthorizationService:
             "status": grant.status,
             "action_type": grant.action_type,
             "target": grant.target,
+            "policy_version": grant.policy_version,
             "valid_until": grant.valid_until.isoformat(),
         }
 
@@ -440,13 +478,23 @@ class LegalAuthorizationService:
         )
 
         anchor = self.anchor.anchor_bundle(bundle=row)
+        cert = self._create_evidence_certificate(
+            bundle=row,
+            actor_id=payload.exported_by,
+            notes=payload.notes,
+        )
         self.ledger.audit(
             actor_type="analyst",
             actor_id=payload.exported_by,
             action=f"legal_evidence_anchor.{anchor.get('anchor_status', 'unknown')}",
             target=row.bundle_id,
         )
-        return self._evidence_bundle_to_dict(row, include_payload=True, anchor=anchor)
+        return self._evidence_bundle_to_dict(
+            row,
+            include_payload=True,
+            anchor=anchor,
+            certificate=cert,
+        )
 
     def list_orders(self, *, status: str | None, limit: int, offset: int) -> Dict[str, Any]:
         q = self.db.query(LegalOrder)
@@ -477,11 +525,19 @@ class LegalAuthorizationService:
         items: List[Dict[str, Any]] = []
         for x in rows:
             anchor = None
+            cert = None
             try:
                 anchor = self.anchor.get_anchor(bundle_id=x.bundle_id)
             except ValueError:
                 anchor = None
-            items.append(self._evidence_bundle_to_dict(x, anchor=anchor))
+            cert_row = (
+                self.db.query(LegalEvidenceCertificate)
+                .filter(LegalEvidenceCertificate.bundle_id == x.bundle_id)
+                .first()
+            )
+            if cert_row:
+                cert = self._certificate_to_dict(cert_row)
+            items.append(self._evidence_bundle_to_dict(x, anchor=anchor, certificate=cert))
         return {"limit": limit, "offset": offset, "items": items}
 
     def get_evidence_bundle(self, bundle_id: str) -> Dict[str, Any]:
@@ -489,11 +545,19 @@ class LegalAuthorizationService:
         if not row:
             raise ValueError("legal_evidence_bundle_not_found")
         anchor = None
+        cert = None
         try:
             anchor = self.anchor.get_anchor(bundle_id=bundle_id)
         except ValueError:
             anchor = None
-        return self._evidence_bundle_to_dict(row, include_payload=True, anchor=anchor)
+        cert_row = (
+            self.db.query(LegalEvidenceCertificate)
+            .filter(LegalEvidenceCertificate.bundle_id == row.bundle_id)
+            .first()
+        )
+        if cert_row:
+            cert = self._certificate_to_dict(cert_row)
+        return self._evidence_bundle_to_dict(row, include_payload=True, anchor=anchor, certificate=cert)
 
     def get_evidence_anchor(self, bundle_id: str) -> Dict[str, Any]:
         row = self.db.get(LegalEvidenceBundle, bundle_id)
@@ -513,6 +577,60 @@ class LegalAuthorizationService:
             target=bundle_id,
         )
         return anchor
+
+    def _create_evidence_certificate(
+        self,
+        *,
+        bundle: LegalEvidenceBundle,
+        actor_id: str,
+        notes: str | None,
+    ) -> Dict[str, Any]:
+        statement_payload = {
+            "bundle_id": bundle.bundle_id,
+            "order_id": bundle.order_id,
+            "campaign_id": bundle.campaign_id,
+            "root_hash": bundle.root_hash,
+            "chain_hash": bundle.chain_hash,
+            "issued_at": _now_utc().isoformat(),
+            "notes": notes or "",
+            "jurisdiction": "KE",
+            "framework": "evidence_act_sec_106b",
+        }
+        statement_hash = compute_event_hash(statement_payload)
+        signature = sha256_hex(
+            stable_json_dumps(statement_payload).encode("utf-8")
+            + b"|"
+            + actor_id.encode("utf-8")
+        )
+
+        row = (
+            self.db.query(LegalEvidenceCertificate)
+            .filter(LegalEvidenceCertificate.bundle_id == bundle.bundle_id)
+            .first()
+        )
+        if row:
+            row.framework = "evidence_act_sec_106b"
+            row.jurisdiction = "KE"
+            row.statement_hash = statement_hash
+            row.signed_by = actor_id
+            row.signature_method = "sha256_attestation"
+            row.signature = signature
+            row.metadata_json = statement_payload
+        else:
+            row = LegalEvidenceCertificate(
+                certificate_id=str(uuid.uuid4()),
+                bundle_id=bundle.bundle_id,
+                framework="evidence_act_sec_106b",
+                jurisdiction="KE",
+                statement_hash=statement_hash,
+                signed_by=actor_id,
+                signature_method="sha256_attestation",
+                signature=signature,
+                metadata_json=statement_payload,
+            )
+            self.db.add(row)
+        self.db.commit()
+        return self._certificate_to_dict(row)
 
     def _evaluate(self, *, order: LegalOrder, req: LegalAuthorizationRequest) -> AuthorizationDecision:
         now = _now_utc()
@@ -608,12 +726,14 @@ class LegalAuthorizationService:
             "action_type": row.action_type,
             "target": row.target,
             "requested_by": row.requested_by,
-            "approved_by": row.approved_by_json or [],
+            "approved_by": getattr(row, "approved_by_json", None) or [],
             "status": row.status,
-            "reason_codes": row.reason_codes_json or [],
+            "reason_codes": getattr(row, "reason_codes_json", None) or [],
+            "policy_version": getattr(row, "policy_version", "v1"),
+            "model_action_scope": getattr(row, "model_action_scope_json", None) or {},
             "valid_from": row.valid_from.isoformat(),
             "valid_until": row.valid_until.isoformat(),
-            "evidence": row.evidence_json or {},
+            "evidence": getattr(row, "evidence_json", None) or {},
             "created_at": row.created_at.isoformat(),
         }
         if include_execution_token:
@@ -626,6 +746,7 @@ class LegalAuthorizationService:
         *,
         include_payload: bool = False,
         anchor: Dict[str, Any] | None = None,
+        certificate: Dict[str, Any] | None = None,
     ) -> Dict[str, Any]:
         out = {
             "bundle_id": row.bundle_id,
@@ -640,9 +761,26 @@ class LegalAuthorizationService:
         }
         if anchor is not None:
             out["anchor"] = anchor
+        if certificate is not None:
+            out["certificate"] = certificate
         if include_payload:
             out["payload"] = row.payload_json or {}
         return out
+
+    @staticmethod
+    def _certificate_to_dict(row: LegalEvidenceCertificate) -> Dict[str, Any]:
+        return {
+            "certificate_id": row.certificate_id,
+            "bundle_id": row.bundle_id,
+            "framework": row.framework,
+            "jurisdiction": row.jurisdiction,
+            "statement_hash": row.statement_hash,
+            "signed_by": row.signed_by,
+            "signature_method": row.signature_method,
+            "signature": row.signature,
+            "metadata": row.metadata_json or {},
+            "created_at": row.created_at.isoformat(),
+        }
 
 
 def greedy_select_candidates(

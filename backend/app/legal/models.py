@@ -54,6 +54,9 @@ class LegalAuthorizationGrant(Base):
     approved_by_json = Column(JSONB, nullable=False, default=list)
     justification = Column(String, nullable=True)
 
+    policy_version = Column(String, nullable=False, default="v1")
+    model_action_scope_json = Column(JSONB, nullable=False, default=dict)
+
     status = Column(String, nullable=False)
     reason_codes_json = Column(JSONB, nullable=False, default=list)
     evidence_json = Column(JSONB, nullable=False, default=dict)
@@ -129,4 +132,29 @@ class LegalEvidenceAnchor(Base):
         Index("ix_legal_anchor_bundle", "bundle_id"),
         Index("ix_legal_anchor_status", "anchor_status"),
         Index("ix_legal_anchor_created_at", "created_at"),
+    )
+
+
+class LegalEvidenceCertificate(Base):
+    __tablename__ = "legal_evidence_certificate"
+
+    certificate_id = Column(String, primary_key=True)
+    bundle_id = Column(
+        String,
+        ForeignKey("legal_evidence_bundle.bundle_id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+    )
+    framework = Column(String, nullable=False, default="evidence_act_sec_106b")
+    jurisdiction = Column(String, nullable=False, default="KE")
+    statement_hash = Column(String, nullable=False, unique=True)
+    signed_by = Column(String, nullable=False)
+    signature_method = Column(String, nullable=False, default="sha256_attestation")
+    signature = Column(String, nullable=False)
+    metadata_json = Column(JSONB, nullable=False, default=dict)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+    __table_args__ = (
+        Index("ix_legal_certificate_bundle", "bundle_id"),
+        Index("ix_legal_certificate_created", "created_at"),
     )

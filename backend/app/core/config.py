@@ -55,6 +55,16 @@ class Settings:
     gnn_seed = int(os.environ.get("GNN_SEED", "7"))
     gnn_artifact_dir = os.environ.get("GNN_ARTIFACT_DIR", "/app/artifacts/gnn")
     ai_api_enabled = env_bool("AI_API_ENABLED", True)
+    ai_uncertainty_abstain_threshold = float(os.environ.get("AI_UNCERTAINTY_ABSTAIN_THRESHOLD", "0.45"))
+    ai_attack_technique_enabled = env_bool("AI_ATTACK_TECHNIQUE_ENABLED", True)
+    ai_temporal_edge_decay = float(os.environ.get("AI_TEMPORAL_EDGE_DECAY", "0.015"))
+    ai_drift_enabled = env_bool("AI_DRIFT_ENABLED", True)
+    ai_drift_warn_threshold = float(os.environ.get("AI_DRIFT_WARN_THRESHOLD", "0.12"))
+    ai_drift_critical_threshold = float(os.environ.get("AI_DRIFT_CRITICAL_THRESHOLD", "0.2"))
+    ai_lineage_signing_secret = os.environ.get("AI_LINEAGE_SIGNING_SECRET", "").strip()
+    ai_rollout_mode_default = os.environ.get("AI_ROLLOUT_MODE_DEFAULT", "single").strip().lower()
+    ai_canary_ratio_default = float(os.environ.get("AI_CANARY_RATIO_DEFAULT", "0.1"))
+    ai_feedback_enabled = env_bool("AI_FEEDBACK_ENABLED", True)
 
     # ---------------------------------------------------------
     # Platform hardening
@@ -65,6 +75,30 @@ class Settings:
     frontend_api_key = os.environ.get("FRONTEND_API_KEY", "").strip()
     db_auto_create = env_bool("DB_AUTO_CREATE", app_env == "development")
     cors_allow_origins = env_csv("CORS_ALLOW_ORIGINS", "")
+
+    # ---------------------------------------------------------
+    # User authentication / RBAC
+    # ---------------------------------------------------------
+    auth_enabled = env_bool("AUTH_ENABLED", True)
+    auth_access_token_minutes = int(os.environ.get("AUTH_ACCESS_TOKEN_MINUTES", "20"))
+    auth_refresh_token_minutes = int(os.environ.get("AUTH_REFRESH_TOKEN_MINUTES", "1440"))
+    auth_password_iterations = int(os.environ.get("AUTH_PASSWORD_ITERATIONS", "450000"))
+    auth_password_pepper = os.environ.get("AUTH_PASSWORD_PEPPER", "").strip()
+    auth_login_max_failures = int(os.environ.get("AUTH_LOGIN_MAX_FAILURES", "5"))
+    auth_lock_minutes = int(os.environ.get("AUTH_LOCK_MINUTES", "30"))
+    auth_token_issuer = os.environ.get("AUTH_TOKEN_ISSUER", "sentinel-ke-auth").strip()
+    auth_token_audience = os.environ.get("AUTH_TOKEN_AUDIENCE", "sentinel-ke-api").strip()
+    _auth_token_secret = os.environ.get("AUTH_TOKEN_SECRET", "").strip()
+    auth_token_secret = _auth_token_secret or (
+        "dev-insecure-auth-token-secret-change-me" if app_env == "development" else ""
+    )
+    auth_bootstrap_admin_enabled = env_bool("AUTH_BOOTSTRAP_ADMIN_ENABLED", False)
+    auth_bootstrap_admin_username = os.environ.get("AUTH_BOOTSTRAP_ADMIN_USERNAME", "central-admin").strip()
+    auth_bootstrap_admin_password = os.environ.get("AUTH_BOOTSTRAP_ADMIN_PASSWORD", "").strip()
+    auth_bootstrap_admin_display_name = os.environ.get(
+        "AUTH_BOOTSTRAP_ADMIN_DISPLAY_NAME",
+        "Central Admin",
+    ).strip()
 
     # ---------------------------------------------------------
     # Ingestion API Security

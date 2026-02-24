@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import datetime, timezone
+import logging
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Set, Tuple
 
@@ -15,13 +16,23 @@ from app.analytics.ai_models import (
     AIPrediction,
     AICampaignRiskIndicator,
     AIRiskThreshold,
+    AIAttackTechniqueHit,
+    AILinkPrediction,
+    AIModelLineage,
     EntityEmbedding,
     GNNTrainingRun,
+)
+from app.analytics.layer3.ai_intel import (
+    build_counterfactual,
+    event_types_to_attack_techniques,
+    event_types_to_kill_chain_stage,
+    reason_codes_to_d3fend_controls,
 )
 from app.analytics.layer3.gnn_backbone import GNNDataset, load_dataset
 from app.analytics.layer3.gnn_model import train_graphsage
 from app.campaign.models import Campaign, CampaignEntity
 from app.core.config import settings
+from app.core.security import compute_event_hash, sha256_hex, stable_json_dumps
 from app.db.base import Base
 from app.ledger.db import SessionLocal, engine
 import app.db.registry  # noqa: F401
@@ -35,6 +46,7 @@ LEGAL_RISK_NOTICE = (
 
 COMPONENT_CAMPAIGN_TYPE = "GNN_COMPONENT"
 COMPONENT_RULE_VERSION = "gnn.component.v1"
+log = logging.getLogger("sentinel.gnn_train_worker")
 
 
 def _ensure_ai_tables() -> None:
@@ -49,6 +61,9 @@ def _ensure_ai_tables() -> None:
             GNNTrainingRun.__table__,
             AIRiskThreshold.__table__,
             AICampaignRiskIndicator.__table__,
+            AIAttackTechniqueHit.__table__,
+            AILinkPrediction.__table__,
+            AIModelLineage.__table__,
         ],
     )
 
@@ -163,19 +178,31 @@ def _persist_artifact(
 ) -> Optional[str]:
     try:
         import torch
+    except Exception as exc:
+        log.warning("gnn_artifact_persist_failed torch_missing error=%s", exc)
+        return None
 
-        d = Path(artifact_dir)
-        d.mkdir(parents=True, exist_ok=True)
-        out_path = d / f"{run_id}.pt"
-        torch.save(
-            {
-                "model_state": model_state,
-                "metadata": metadata,
-            },
-            str(out_path),
-        )
+    payload = {
+        "model_state": model_state,
+        "metadata": metadata,
+    }
+
+    def _attempt_save(out_dir: Path) -> Optional[str]:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_path = out_dir / f"{run_id}.pt"
+        torch.save(payload, str(out_path))
         return str(out_path)
-    except Exception:
+
+    try:
+        return _attempt_save(Path(artifact_dir))
+    except Exception as exc:
+        log.warning("gnn_artifact_primary_path_failed dir=%s error=%s", artifact_dir, exc)
+
+    try:
+        fallback_root = Path(__file__).resolve().parents[3] / "artifacts" / "gnn"
+        return _attempt_save(fallback_root)
+    except Exception as exc:
+        log.warning("gnn_artifact_fallback_failed error=%s", exc)
         return None
 
 
@@ -211,6 +238,185 @@ def _upsert_embeddings(
     return int(res.rowcount or 0)
 
 
+def _lineage_signature(payload: Dict[str, object]) -> str:
+    secret = settings.ai_lineage_signing_secret or "local-dev-lineage-secret"
+    canonical = stable_json_dumps(payload).encode("utf-8")
+    return sha256_hex(secret.encode("utf-8") + b":" + canonical)
+
+
+def _persist_model_lineage(
+    db: Session,
+    *,
+    run: GNNTrainingRun,
+    dataset: GNNDataset,
+    params_json: Dict[str, object],
+) -> str:
+    payload = {
+        "model_version": run.model_version,
+        "prediction_type": run.prediction_type,
+        "window_key": run.window_key,
+        "window_end": run.window_end.isoformat(),
+        "entity_keys_hash": compute_event_hash({"entity_keys": sorted(dataset.entity_keys)}),
+        "feature_dim": len(dataset.feature_matrix[0]) if dataset.feature_matrix else 0,
+        "params": params_json,
+    }
+    dataset_hash = compute_event_hash(
+        {
+            "entity_keys": sorted(dataset.entity_keys),
+            "labels": [int(v) for v in dataset.labels],
+            "window_key": dataset.window_key,
+            "window_end": dataset.window_end.isoformat(),
+        }
+    )
+    params_hash = compute_event_hash(params_json)
+    code_hash = sha256_hex(f"{__name__}:gnn_train_worker:v2".encode("utf-8"))
+    signature = _lineage_signature(payload)
+
+    row = (
+        db.query(AIModelLineage)
+        .filter(AIModelLineage.model_version == run.model_version)
+        .filter(AIModelLineage.prediction_type == run.prediction_type)
+        .first()
+    )
+    lineage_id = row.lineage_id if row else str(run.id)
+    if row:
+        row.training_run_id = run.id
+        row.dataset_hash = dataset_hash
+        row.params_hash = params_hash
+        row.code_hash = code_hash
+        row.lineage_signature = signature
+        row.metadata_json = payload
+    else:
+        db.add(
+            AIModelLineage(
+                lineage_id=lineage_id,
+                model_version=run.model_version,
+                prediction_type=run.prediction_type,
+                training_run_id=run.id,
+                dataset_hash=dataset_hash,
+                params_hash=params_hash,
+                code_hash=code_hash,
+                lineage_signature=signature,
+                metadata_json=payload,
+            )
+        )
+    return lineage_id
+
+
+def _upsert_attack_techniques(
+    db: Session,
+    *,
+    dataset: GNNDataset,
+    probabilities: Sequence[float],
+    prediction_type: str,
+) -> int:
+    rows: List[Dict[str, object]] = []
+    for i, entity_key in enumerate(dataset.entity_keys):
+        meta = dataset.node_meta[i] if i < len(dataset.node_meta) else {}
+        event_types = dict((meta or {}).get("event_types") or {})
+        techniques = event_types_to_attack_techniques(event_types)
+        for t in techniques:
+            rows.append(
+                {
+                    "entity_key": entity_key,
+                    "prediction_type": prediction_type,
+                    "window_key": dataset.window_key,
+                    "window_end": dataset.window_end,
+                    "technique_id": str(t.get("technique_id") or ""),
+                    "tactic": str(t.get("tactic") or "") or None,
+                    "confidence": float(t.get("confidence") or float(probabilities[i])),
+                    "source_json": {
+                        **t,
+                        "probability": float(probabilities[i]),
+                    },
+                }
+            )
+    if not rows:
+        return 0
+
+    stmt = insert(AIAttackTechniqueHit).values(rows)
+    stmt = stmt.on_conflict_do_update(
+        index_elements=[
+            "entity_key",
+            "prediction_type",
+            "window_key",
+            "window_end",
+            "technique_id",
+        ],
+        set_={
+            "tactic": stmt.excluded.tactic,
+            "confidence": stmt.excluded.confidence,
+            "source_json": stmt.excluded.source_json,
+            "created_at": stmt.excluded.created_at,
+        },
+    )
+    res = db.execute(stmt)
+    return int(res.rowcount or 0)
+
+
+def _upsert_link_predictions(
+    db: Session,
+    *,
+    dataset: GNNDataset,
+    embeddings: Sequence[Sequence[float]],
+    model_version: str,
+    prediction_type: str,
+    max_rows: int = 2000,
+) -> int:
+    if not embeddings or len(embeddings) != len(dataset.entity_keys):
+        return 0
+
+    rows: List[Dict[str, object]] = []
+    n = len(dataset.entity_keys)
+
+    def _dot(a: Sequence[float], b: Sequence[float]) -> float:
+        return float(sum(float(x) * float(y) for x, y in zip(a, b)))
+
+    for i in range(n):
+        for j in range(i + 1, n):
+            score = _dot(embeddings[i], embeddings[j])
+            if score <= 0:
+                continue
+            rows.append(
+                {
+                    "src_entity_key": dataset.entity_keys[i],
+                    "dst_entity_key": dataset.entity_keys[j],
+                    "prediction_type": prediction_type,
+                    "model_version": model_version,
+                    "window_key": dataset.window_key,
+                    "window_end": dataset.window_end,
+                    "score": round(score, 6),
+                    "method": "embedding_dot",
+                    "details_json": {"feature_dim": len(embeddings[i])},
+                }
+            )
+
+    if not rows:
+        return 0
+
+    rows.sort(key=lambda r: float(r["score"]), reverse=True)
+    rows = rows[: max(1, int(max_rows))]
+    stmt = insert(AILinkPrediction).values(rows)
+    stmt = stmt.on_conflict_do_update(
+        index_elements=[
+            "src_entity_key",
+            "dst_entity_key",
+            "prediction_type",
+            "model_version",
+            "window_key",
+            "window_end",
+        ],
+        set_={
+            "score": stmt.excluded.score,
+            "method": stmt.excluded.method,
+            "details_json": stmt.excluded.details_json,
+            "created_at": stmt.excluded.created_at,
+        },
+    )
+    res = db.execute(stmt)
+    return int(res.rowcount or 0)
+
+
 def _f1_for_threshold(labels: Sequence[int], scores: Sequence[float], thr: float) -> float:
     y_true = [int(v) for v in labels]
     y_pred = [1 if float(s) >= thr else 0 for s in scores]
@@ -222,6 +428,15 @@ def _f1_for_threshold(labels: Sequence[int], scores: Sequence[float], thr: float
     precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
     recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
     return (2 * precision * recall / (precision + recall)) if (precision + recall) > 0 else 0.0
+
+
+def _cost_weight_for_entity_type(entity_type: str) -> float:
+    et = (entity_type or "").lower()
+    if et in {"service_id", "endpoint", "ip", "domain", "url"}:
+        return 1.35
+    if et in {"device_id", "account_h", "phone_h"}:
+        return 1.15
+    return 1.0
 
 
 def _calibrate_thresholds(
@@ -248,12 +463,18 @@ def _calibrate_thresholds(
 
         if sample_count < max(3, int(min_samples)):
             thr_score = _default_threshold(etype)
+            cost_weight = _cost_weight_for_entity_type(etype)
             thresholds[etype] = {
                 "threshold_score": thr_score,
                 "method": "default_by_entity_type",
                 "sample_count": sample_count,
                 "positive_count": positive_count,
-                "metrics": {"f1": None, "threshold_probability": thr_score / 100.0},
+                "cost_weight": cost_weight,
+                "metrics": {
+                    "f1": None,
+                    "threshold_probability": thr_score / 100.0,
+                    "objective": "cost_weighted_f1",
+                },
                 "model_version": model_version,
                 "prediction_type": prediction_type,
             }
@@ -261,20 +482,29 @@ def _calibrate_thresholds(
 
         best_thr = 0.75
         best_f1 = -1.0
+        cost_weight = _cost_weight_for_entity_type(etype)
+        best_score = float("-inf")
         for thr in candidates:
             f1 = _f1_for_threshold(labels, probs, thr)
-            if f1 > best_f1:
+            # Higher weights bias the optimizer toward recall-sensitive thresholds
+            # for critical infrastructure entities.
+            objective = f1 + (cost_weight - 1.0) * max(0.0, 0.8 - thr)
+            if objective > best_score:
+                best_score = objective
                 best_f1 = f1
                 best_thr = thr
 
         thresholds[etype] = {
             "threshold_score": round(best_thr * 100.0, 4),
-            "method": "f1_weak_label",
+            "method": "cost_weighted_f1_weak_label",
             "sample_count": sample_count,
             "positive_count": positive_count,
+            "cost_weight": cost_weight,
             "metrics": {
                 "f1": round(best_f1, 6),
                 "threshold_probability": best_thr,
+                "objective": "cost_weighted_f1",
+                "objective_score": round(best_score, 6),
             },
             "model_version": model_version,
             "prediction_type": prediction_type,
@@ -308,6 +538,7 @@ def _persist_thresholds(
                 "method": str(cfg.get("method") or "default_by_entity_type"),
                 "sample_count": int(cfg.get("sample_count") or 0),
                 "positive_count": int(cfg.get("positive_count") or 0),
+                "cost_weight": float(cfg.get("cost_weight") or 1.0),
                 "metrics_json": dict(cfg.get("metrics") or {}),
             }
         )
@@ -326,6 +557,7 @@ def _persist_thresholds(
             "method": stmt.excluded.method,
             "sample_count": stmt.excluded.sample_count,
             "positive_count": stmt.excluded.positive_count,
+            "cost_weight": stmt.excluded.cost_weight,
             "metrics_json": stmt.excluded.metrics_json,
             "created_at": stmt.excluded.created_at,
         },
@@ -675,242 +907,328 @@ def run_once(
     dropout: float = 0.2,
     learning_rate: float = 0.001,
     weight_decay: float = 0.0001,
+    temporal_decay: float = 0.015,
+    pretrain_epochs: int = 5,
     seed: int = 7,
+    uncertainty_abstain_threshold: float = 0.45,
     model_version: str = "gnn-sage-v1",
     prediction_type: str = "risk_gnn",
     artifact_dir: str = "/app/artifacts/gnn",
 ) -> Dict[str, object]:
     _ensure_ai_tables()
 
-    dataset = load_dataset(
-        db,
-        window_key=window_key,
-        window_end=window_end,
-        max_entities=max_entities,
-        edge_backend=edge_backend,
-        min_edge_weight=min_edge_weight,
-        max_edges=max_edges,
-        negative_multiplier=negative_multiplier,
-    )
+    try:
+        dataset = load_dataset(
+            db,
+            window_key=window_key,
+            window_end=window_end,
+            max_entities=max_entities,
+            edge_backend=edge_backend,
+            min_edge_weight=min_edge_weight,
+            max_edges=max_edges,
+            negative_multiplier=negative_multiplier,
+        )
+    except Exception as exc:
+        db.rollback()
+        return {"status": "error", "stage": "load_dataset", "detail": str(exc)}
     if dataset is None:
         return {"status": "no_data", "created": 0, "updated": 0}
+    if not dataset.feature_matrix or not dataset.feature_matrix[0]:
+        return {"status": "no_features", "created": 0, "updated": 0}
 
-    train_result = train_graphsage(
-        dataset,
-        epochs=epochs,
-        hidden_dim=hidden_dim,
-        embed_dim=embed_dim,
-        dropout=dropout,
-        learning_rate=learning_rate,
-        weight_decay=weight_decay,
-        seed=seed,
-    )
+    try:
+        train_result = train_graphsage(
+            dataset,
+            epochs=epochs,
+            hidden_dim=hidden_dim,
+            embed_dim=embed_dim,
+            dropout=dropout,
+            learning_rate=learning_rate,
+            weight_decay=weight_decay,
+            seed=seed,
+            temporal_decay=temporal_decay,
+            pretrain_epochs=pretrain_epochs,
+        )
+    except Exception as exc:
+        db.rollback()
+        return {"status": "error", "stage": "train_graphsage", "detail": str(exc)}
 
-    thresholds = _calibrate_thresholds(
-        dataset=dataset,
-        probabilities=train_result.probabilities,
-        min_samples=threshold_min_samples,
-        model_version=model_version,
-        prediction_type=prediction_type,
-    )
-
-    run = GNNTrainingRun(
-        model_version=model_version,
-        prediction_type=prediction_type,
-        source_backend=dataset.source_backend_used,
-        window_key=dataset.window_key,
-        window_end=dataset.window_end,
-        node_count=len(dataset.entity_keys),
-        edge_count=len(dataset.edges),
-        feature_dim=len(dataset.feature_matrix[0]) if dataset.feature_matrix else 0,
-        positive_count=sum(int(v) for v in dataset.labels),
-        epochs=int(epochs),
-        train_loss=float(train_result.metrics.get("train_loss") or 0.0),
-        val_loss=float(train_result.metrics.get("val_loss") or 0.0),
-        auc=float(train_result.metrics.get("auc") or 0.0),
-        precision=float(train_result.metrics.get("precision") or 0.0),
-        recall=float(train_result.metrics.get("recall") or 0.0),
-        f1=float(train_result.metrics.get("f1") or 0.0),
-        params_json={
-            "edge_backend": edge_backend,
-            "max_entities": max_entities,
-            "max_edges": max_edges,
-            "min_edge_weight": min_edge_weight,
-            "negative_multiplier": negative_multiplier,
-            "threshold_min_samples": threshold_min_samples,
-            "component_discovery_enabled": component_discovery_enabled,
-            "component_min_size": component_min_size,
-            "component_min_indicator_ratio": component_min_indicator_ratio,
-            "epochs": epochs,
-            "hidden_dim": hidden_dim,
-            "embed_dim": embed_dim,
-            "dropout": dropout,
-            "learning_rate": learning_rate,
-            "weight_decay": weight_decay,
-            "seed": seed,
-        },
-        metrics_json={
-            **train_result.metrics,
-            "edge_source_counts": dataset.edge_source_counts,
-            "positive_count": dataset.positive_count,
-            "negative_count": dataset.negative_count,
-            "benign_negative_count": dataset.benign_negative_count,
-        },
-    )
-    db.add(run)
-    db.flush()
-
-    artifact_path = _persist_artifact(
-        run_id=str(run.id),
-        model_state=train_result.model_state,
-        artifact_dir=artifact_dir,
-        metadata={
-            "model_version": model_version,
-            "prediction_type": prediction_type,
-            "window_key": dataset.window_key,
-            "window_end": dataset.window_end.isoformat(),
-            "feature_dim": len(dataset.feature_matrix[0]) if dataset.feature_matrix else 0,
-            "hidden_dim": hidden_dim,
-            "embed_dim": embed_dim,
-        },
-    )
-    run.artifact_path = artifact_path
-
-    threshold_upserts = _persist_thresholds(
-        db,
-        thresholds=thresholds,
-        model_version=model_version,
-        prediction_type=prediction_type,
-        window_key=dataset.window_key,
-        window_end=dataset.window_end,
-    )
-
-    embeddings_upserted = _upsert_embeddings(
-        db,
-        dataset=dataset,
-        model_version=model_version,
-        embeddings=train_result.embeddings,
-    )
-
-    created = 0
-    updated = 0
-    indicators_by_entity: Dict[str, Dict[str, object]] = {}
-
-    for i, entity_key in enumerate(dataset.entity_keys):
-        prob = float(train_result.probabilities[i])
-        score = round(prob * 100.0, 4)
-        entity_type = str(dataset.entity_types[i])
-
-        threshold_score = float((thresholds.get(entity_type) or {}).get("threshold_score") or _default_threshold(entity_type))
-        is_indicator = score >= threshold_score
-
-        meta = dataset.node_meta[i]
-        reasons = _reason_codes(meta, prob, is_indicator=is_indicator)
-
-        details = {
-            "probability": round(prob, 6),
-            "predicted_label": int(train_result.predicted_labels[i]),
-            "entity_threshold_score": round(threshold_score, 4),
-            "risk_indicator": bool(is_indicator),
-            "severity": _severity_from_score(score),
-            "model_version": model_version,
-            "gnn_run_id": str(run.id),
-            "source_backend": dataset.source_backend_used,
-            "feature_dim": len(dataset.feature_matrix[i]),
-            "legal_notice": LEGAL_RISK_NOTICE,
-        }
-
-        pred = (
-            db.query(AIPrediction)
-            .filter(AIPrediction.entity_key == entity_key)
-            .filter(AIPrediction.prediction_type == prediction_type)
-            .filter(AIPrediction.window_key == dataset.window_key)
-            .filter(AIPrediction.window_end == dataset.window_end)
-            .first()
+    try:
+        thresholds = _calibrate_thresholds(
+            dataset=dataset,
+            probabilities=train_result.probabilities,
+            min_samples=threshold_min_samples,
+            model_version=model_version,
+            prediction_type=prediction_type,
         )
 
-        if pred:
-            pred.score = score
-            pred.reason_codes = reasons
-            pred.details_json = details
-            updated += 1
-        else:
-            pred = AIPrediction(
-                entity_key=entity_key,
-                entity_type=entity_type,
-                prediction_type=prediction_type,
-                window_key=dataset.window_key,
-                window_end=dataset.window_end,
-                score=score,
-                reason_codes=reasons,
-                details_json=details,
+        run = GNNTrainingRun(
+            model_version=model_version,
+            prediction_type=prediction_type,
+            source_backend=dataset.source_backend_used,
+            window_key=dataset.window_key,
+            window_end=dataset.window_end,
+            node_count=len(dataset.entity_keys),
+            edge_count=len(dataset.edges),
+            feature_dim=len(dataset.feature_matrix[0]) if dataset.feature_matrix else 0,
+            positive_count=sum(int(v) for v in dataset.labels),
+            epochs=int(epochs),
+            train_loss=float(train_result.metrics.get("train_loss") or 0.0),
+            val_loss=float(train_result.metrics.get("val_loss") or 0.0),
+            auc=float(train_result.metrics.get("auc") or 0.0),
+            precision=float(train_result.metrics.get("precision") or 0.0),
+            recall=float(train_result.metrics.get("recall") or 0.0),
+            f1=float(train_result.metrics.get("f1") or 0.0),
+            params_json={
+                "edge_backend": edge_backend,
+                "max_entities": max_entities,
+                "max_edges": max_edges,
+                "min_edge_weight": min_edge_weight,
+                "negative_multiplier": negative_multiplier,
+                "threshold_min_samples": threshold_min_samples,
+                "component_discovery_enabled": component_discovery_enabled,
+                "component_min_size": component_min_size,
+                "component_min_indicator_ratio": component_min_indicator_ratio,
+                "epochs": epochs,
+                "hidden_dim": hidden_dim,
+                "embed_dim": embed_dim,
+                "dropout": dropout,
+                "learning_rate": learning_rate,
+                "weight_decay": weight_decay,
+                "temporal_decay": temporal_decay,
+                "pretrain_epochs": pretrain_epochs,
+                "seed": seed,
+                "uncertainty_abstain_threshold": uncertainty_abstain_threshold,
+            },
+            metrics_json={
+                **train_result.metrics,
+                "edge_source_counts": dataset.edge_source_counts,
+                "positive_count": dataset.positive_count,
+                "negative_count": dataset.negative_count,
+                "benign_negative_count": dataset.benign_negative_count,
+            },
+        )
+        db.add(run)
+        db.flush()
+
+        artifact_path = _persist_artifact(
+            run_id=str(run.id),
+            model_state=train_result.model_state,
+            artifact_dir=artifact_dir,
+            metadata={
+                "model_version": model_version,
+                "prediction_type": prediction_type,
+                "window_key": dataset.window_key,
+                "window_end": dataset.window_end.isoformat(),
+                "feature_dim": len(dataset.feature_matrix[0]) if dataset.feature_matrix else 0,
+                "hidden_dim": hidden_dim,
+                "embed_dim": embed_dim,
+            },
+        )
+        run.artifact_path = artifact_path
+
+        threshold_upserts = _persist_thresholds(
+            db,
+            thresholds=thresholds,
+            model_version=model_version,
+            prediction_type=prediction_type,
+            window_key=dataset.window_key,
+            window_end=dataset.window_end,
+        )
+
+        embeddings_upserted = _upsert_embeddings(
+            db,
+            dataset=dataset,
+            model_version=model_version,
+            embeddings=train_result.embeddings,
+        )
+        link_predictions_upserted = _upsert_link_predictions(
+            db,
+            dataset=dataset,
+            embeddings=train_result.embeddings,
+            model_version=model_version,
+            prediction_type=prediction_type,
+        )
+        techniques_upserted = _upsert_attack_techniques(
+            db,
+            dataset=dataset,
+            probabilities=train_result.probabilities,
+            prediction_type=prediction_type,
+        )
+        lineage_id = _persist_model_lineage(
+            db,
+            run=run,
+            dataset=dataset,
+            params_json=dict(run.params_json or {}),
+        )
+
+        created = 0
+        updated = 0
+        indicators_by_entity: Dict[str, Dict[str, object]] = {}
+
+        for i, entity_key in enumerate(dataset.entity_keys):
+            prob = float(train_result.probabilities[i])
+            score = round(prob * 100.0, 4)
+            entity_type = str(dataset.entity_types[i])
+            uncertainty = float((train_result.uncertainties or [])[i] if train_result.uncertainties else (1.0 - abs(prob - 0.5) * 2.0))
+            confidence = max(0.0, min(1.0, 1.0 - uncertainty))
+
+            threshold_score = float((thresholds.get(entity_type) or {}).get("threshold_score") or _default_threshold(entity_type))
+            is_indicator = score >= threshold_score
+            abstained = uncertainty >= max(0.0, float(uncertainty_abstain_threshold))
+
+            meta = dataset.node_meta[i]
+            reasons = _reason_codes(meta, prob, is_indicator=is_indicator)
+            event_types = dict((meta or {}).get("event_types") or {})
+            kill_chain_stage = event_types_to_kill_chain_stage(event_types)
+            technique_hits = event_types_to_attack_techniques(event_types)
+            controls = reason_codes_to_d3fend_controls(reasons)
+            top_feature_hint = "event_count"
+            if bool((meta or {}).get("risk_flags")):
+                top_feature_hint = "risk_flags"
+            counterfactual = build_counterfactual(
+                probability=prob,
+                threshold_score=threshold_score,
+                top_feature_hint=top_feature_hint,
             )
-            db.add(pred)
-            db.flush()
-            created += 1
+            if abstained:
+                reasons = sorted(set(reasons + ["UNCERTAIN_REQUIRES_ANALYST_REVIEW"]))
 
-        indicators_by_entity[entity_key] = {
-            "entity_type": entity_type,
-            "score": score,
-            "risk_indicator": bool(is_indicator),
-        }
+            details = {
+                "probability": round(prob, 6),
+                "predicted_label": int(train_result.predicted_labels[i]),
+                "entity_threshold_score": round(threshold_score, 4),
+                "risk_indicator": bool(is_indicator),
+                "confidence": round(confidence, 6),
+                "uncertainty": round(uncertainty, 6),
+                "abstained": bool(abstained),
+                "kill_chain_stage": kill_chain_stage,
+                "attack_techniques": technique_hits,
+                "severity": _severity_from_score(score),
+                "model_version": model_version,
+                "gnn_run_id": str(run.id),
+                "lineage_id": lineage_id,
+                "source_backend": dataset.source_backend_used,
+                "feature_dim": len(dataset.feature_matrix[i]),
+                "legal_notice": LEGAL_RISK_NOTICE,
+            }
 
-        evidence_hashes: List[str] = []
-        if is_indicator:
-            evidence_hashes = _event_hashes(
-                db,
-                entity_key=entity_key,
-                window_start=dataset.window_start,
-                window_end=dataset.window_end,
-                limit=20,
+            pred = (
+                db.query(AIPrediction)
+                .filter(AIPrediction.entity_key == entity_key)
+                .filter(AIPrediction.prediction_type == prediction_type)
+                .filter(AIPrediction.window_key == dataset.window_key)
+                .filter(AIPrediction.window_end == dataset.window_end)
+                .first()
             )
 
-        expl = db.query(AIExplanation).filter(AIExplanation.prediction_id == pred.id).first()
-        expl_payload = {
-            "window_start": dataset.window_start.isoformat(),
-            "window_end": dataset.window_end.isoformat(),
-            "gnn_run_id": str(run.id),
-            "probability": round(prob, 6),
-            "entity_threshold_score": round(threshold_score, 4),
-            "risk_indicator": bool(is_indicator),
-            "legal_notice": LEGAL_RISK_NOTICE,
-        }
-        if expl:
-            expl.reason_codes = reasons
-            expl.evidence_hashes = evidence_hashes
-            expl.evidence_paths = []
-            expl.details_json = expl_payload
-        else:
-            db.add(
-                AIExplanation(
-                    prediction_id=pred.id,
+            if pred:
+                pred.score = score
+                pred.model_version = model_version
+                pred.confidence = confidence
+                pred.uncertainty = uncertainty
+                pred.abstained = bool(abstained)
+                pred.kill_chain_stage = kill_chain_stage
+                pred.decision_source = "gnn"
+                pred.reason_codes = reasons
+                pred.details_json = details
+                updated += 1
+            else:
+                pred = AIPrediction(
+                    entity_key=entity_key,
+                    entity_type=entity_type,
+                    prediction_type=prediction_type,
+                    window_key=dataset.window_key,
+                    window_end=dataset.window_end,
+                    model_version=model_version,
+                    score=score,
+                    confidence=confidence,
+                    uncertainty=uncertainty,
+                    abstained=bool(abstained),
+                    kill_chain_stage=kill_chain_stage,
+                    decision_source="gnn",
                     reason_codes=reasons,
-                    evidence_hashes=evidence_hashes,
-                    evidence_paths=[],
-                    details_json=expl_payload,
+                    details_json=details,
                 )
-            )
+                db.add(pred)
+                db.flush()
+                created += 1
 
-    component_stats = _materialize_component_campaigns(
-        db,
-        dataset=dataset,
-        prediction_type=prediction_type,
-        indicators_by_entity=indicators_by_entity,
-        enabled=component_discovery_enabled,
-        min_size=component_min_size,
-        min_indicator_ratio=component_min_indicator_ratio,
-    )
+            indicators_by_entity[entity_key] = {
+                "entity_type": entity_type,
+                "score": score,
+                "risk_indicator": bool(is_indicator),
+            }
 
-    campaign_indicator_stats = _upsert_campaign_indicators(
-        db,
-        model_version=model_version,
-        prediction_type=prediction_type,
-        window_key=dataset.window_key,
-        window_end=dataset.window_end,
-        thresholds=thresholds,
-    )
+            evidence_hashes: List[str] = []
+            if is_indicator:
+                evidence_hashes = _event_hashes(
+                    db,
+                    entity_key=entity_key,
+                    window_start=dataset.window_start,
+                    window_end=dataset.window_end,
+                    limit=20,
+                )
 
-    db.commit()
+            expl = db.query(AIExplanation).filter(AIExplanation.prediction_id == pred.id).first()
+            expl_payload = {
+                "window_start": dataset.window_start.isoformat(),
+                "window_end": dataset.window_end.isoformat(),
+                "gnn_run_id": str(run.id),
+                "probability": round(prob, 6),
+                "entity_threshold_score": round(threshold_score, 4),
+                "risk_indicator": bool(is_indicator),
+                "confidence": round(confidence, 6),
+                "uncertainty": round(uncertainty, 6),
+                "abstained": bool(abstained),
+                "kill_chain_stage": kill_chain_stage,
+                "recommended_controls": controls,
+                "counterfactual": counterfactual,
+                "legal_notice": LEGAL_RISK_NOTICE,
+            }
+            if expl:
+                expl.reason_codes = reasons
+                expl.evidence_hashes = evidence_hashes
+                expl.evidence_paths = []
+                expl.recommended_controls_json = controls
+                expl.counterfactual_json = counterfactual
+                expl.details_json = expl_payload
+            else:
+                db.add(
+                    AIExplanation(
+                        prediction_id=pred.id,
+                        reason_codes=reasons,
+                        evidence_hashes=evidence_hashes,
+                        evidence_paths=[],
+                        recommended_controls_json=controls,
+                        counterfactual_json=counterfactual,
+                        details_json=expl_payload,
+                    )
+                )
+
+        component_stats = _materialize_component_campaigns(
+            db,
+            dataset=dataset,
+            prediction_type=prediction_type,
+            indicators_by_entity=indicators_by_entity,
+            enabled=component_discovery_enabled,
+            min_size=component_min_size,
+            min_indicator_ratio=component_min_indicator_ratio,
+        )
+
+        campaign_indicator_stats = _upsert_campaign_indicators(
+            db,
+            model_version=model_version,
+            prediction_type=prediction_type,
+            window_key=dataset.window_key,
+            window_end=dataset.window_end,
+            thresholds=thresholds,
+        )
+
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        return {"status": "error", "stage": "persist", "detail": str(exc)}
 
     return {
         "status": "ok",
@@ -926,6 +1244,9 @@ def run_once(
         "benign_negative_count": dataset.benign_negative_count,
         "thresholds_upserted": threshold_upserts,
         "embeddings_upserted": embeddings_upserted,
+        "link_predictions_upserted": link_predictions_upserted,
+        "techniques_upserted": techniques_upserted,
+        "lineage_id": lineage_id,
         "predictions_created": created,
         "predictions_updated": updated,
         "component_campaigns_created": component_stats["campaigns_created"],
@@ -961,7 +1282,10 @@ def main() -> None:
     p.add_argument("--dropout", type=float, default=settings.gnn_dropout)
     p.add_argument("--learning-rate", type=float, default=settings.gnn_learning_rate)
     p.add_argument("--weight-decay", type=float, default=settings.gnn_weight_decay)
+    p.add_argument("--temporal-decay", type=float, default=settings.ai_temporal_edge_decay)
+    p.add_argument("--pretrain-epochs", type=int, default=5)
     p.add_argument("--seed", type=int, default=settings.gnn_seed)
+    p.add_argument("--uncertainty-abstain-threshold", type=float, default=settings.ai_uncertainty_abstain_threshold)
     p.add_argument("--model-version", default=settings.gnn_model_version)
     p.add_argument("--prediction-type", default=settings.gnn_prediction_type)
     p.add_argument("--artifact-dir", default=settings.gnn_artifact_dir)
@@ -996,7 +1320,10 @@ def main() -> None:
             dropout=args.dropout,
             learning_rate=args.learning_rate,
             weight_decay=args.weight_decay,
+            temporal_decay=args.temporal_decay,
+            pretrain_epochs=args.pretrain_epochs,
             seed=args.seed,
+            uncertainty_abstain_threshold=args.uncertainty_abstain_threshold,
             model_version=args.model_version,
             prediction_type=args.prediction_type,
             artifact_dir=args.artifact_dir,

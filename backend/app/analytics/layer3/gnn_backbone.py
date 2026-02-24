@@ -335,6 +335,8 @@ def load_dataset(
     max_edges: int = 30000,
     negative_multiplier: float = 1.5,
 ) -> Optional[GNNDataset]:
+    if max_entities is not None and int(max_entities) <= 0:
+        return None
     if window_end is None:
         window_end = _latest_window_end(db, window_key)
     if window_end is None:

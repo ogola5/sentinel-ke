@@ -1,13 +1,20 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
 from sqlalchemy import func, text
 from sqlalchemy.orm import Session
 
-from app.analytics.ai_models import AIPrediction, AIExplanation, GraphFeatureSnapshot
+from app.analytics.ai_models import AIExplanation, AIModelRollout, AIPrediction, GraphFeatureSnapshot
+from app.analytics.layer3.ai_intel import (
+    build_counterfactual,
+    event_types_to_attack_techniques,
+    event_types_to_kill_chain_stage,
+    reason_codes_to_d3fend_controls,
+)
+from app.core.config import settings
 from app.ledger.db import SessionLocal
 
 
@@ -43,6 +50,44 @@ def _event_hashes(
         {"entity_key": entity_key, "start": window_start, "end": window_end, "limit": limit},
     ).fetchall()
     return [str(r[0]) for r in rows]
+
+
+def _active_rollout(db: Session, prediction_type: str) -> Dict[str, object]:
+    r = (
+        db.query(AIModelRollout)
+        .filter(AIModelRollout.prediction_type == prediction_type)
+        .filter(AIModelRollout.status == "active")
+        .order_by(AIModelRollout.updated_at.desc())
+        .first()
+    )
+    if not r:
+        return {
+            "rollout_mode": settings.ai_rollout_mode_default,
+            "active_model_version": "heuristic-v1",
+            "shadow_model_version": None,
+            "canary_ratio": float(settings.ai_canary_ratio_default),
+        }
+    return {
+        "rollout_mode": r.rollout_mode,
+        "active_model_version": r.active_model_version,
+        "shadow_model_version": r.shadow_model_version,
+        "canary_ratio": float(r.canary_ratio or 0.0),
+    }
+
+
+def _select_model_version(*, rollout: Dict[str, object], entity_key: str) -> str:
+    mode = str(rollout.get("rollout_mode") or "single").lower()
+    active = str(rollout.get("active_model_version") or "heuristic-v1")
+    shadow = str(rollout.get("shadow_model_version") or "") or None
+    if mode not in {"shadow", "canary"}:
+        return active
+    if not shadow:
+        return active
+    if mode == "shadow":
+        return active
+    ratio = max(0.0, min(1.0, float(rollout.get("canary_ratio") or 0.0)))
+    bucket = (sum(ord(c) for c in str(entity_key)) % 1000) / 1000.0
+    return shadow if bucket < ratio else active
 
 
 def _score(snapshot: GraphFeatureSnapshot) -> Tuple[float, List[str], Dict[str, object]]:
@@ -123,6 +168,8 @@ def run_once(
     if window_end is None:
         return 0
 
+    rollout = _active_rollout(db, prediction_type)
+
     snapshots = (
         db.query(GraphFeatureSnapshot)
         .filter(GraphFeatureSnapshot.window_key == window_key)
@@ -136,6 +183,22 @@ def run_once(
     created = 0
     for snap in snapshots:
         score, reasons, details = _score(snap)
+        prob = max(0.0, min(1.0, score / 100.0))
+        uncertainty = max(0.0, min(1.0, 1.0 - abs(prob - 0.5) * 2.0))
+        confidence = 1.0 - uncertainty
+        abstained = uncertainty >= float(settings.ai_uncertainty_abstain_threshold)
+        if abstained:
+            reasons = sorted(set(reasons + ["UNCERTAIN_REQUIRES_ANALYST_REVIEW"]))
+
+        event_types = dict((snap.features or {}).get("event_types") or {})
+        kill_chain_stage = event_types_to_kill_chain_stage(event_types)
+        attack_techniques = event_types_to_attack_techniques(event_types)
+        controls = reason_codes_to_d3fend_controls(reasons)
+        counterfactual = build_counterfactual(
+            probability=prob,
+            threshold_score=75.0,
+            top_feature_hint="event_count",
+        )
 
         pred = (
             db.query(AIPrediction)
@@ -146,10 +209,28 @@ def run_once(
             .first()
         )
 
+        model_version = _select_model_version(rollout=rollout, entity_key=str(snap.entity_key))
+
+        details_json = {
+            **details,
+            "confidence": round(confidence, 6),
+            "uncertainty": round(uncertainty, 6),
+            "abstained": bool(abstained),
+            "kill_chain_stage": kill_chain_stage,
+            "attack_techniques": attack_techniques,
+            "rollout": rollout,
+        }
+
         if pred:
             pred.score = score
+            pred.model_version = model_version
+            pred.confidence = confidence
+            pred.uncertainty = uncertainty
+            pred.abstained = bool(abstained)
+            pred.kill_chain_stage = kill_chain_stage
+            pred.decision_source = "heuristic"
             pred.reason_codes = reasons
-            pred.details_json = details
+            pred.details_json = details_json
         else:
             pred = AIPrediction(
                 entity_key=snap.entity_key,
@@ -157,9 +238,15 @@ def run_once(
                 prediction_type=prediction_type,
                 window_key=window_key,
                 window_end=snap.window_end,
+                model_version=model_version,
                 score=score,
+                confidence=confidence,
+                uncertainty=uncertainty,
+                abstained=bool(abstained),
+                kill_chain_stage=kill_chain_stage,
+                decision_source="heuristic",
                 reason_codes=reasons,
-                details_json=details,
+                details_json=details_json,
             )
             db.add(pred)
             db.flush()
@@ -181,11 +268,16 @@ def run_once(
         expl_payload = {
             "window_start": snap.window_start.isoformat(),
             "window_end": snap.window_end.isoformat(),
+            "recommended_controls": controls,
+            "counterfactual": counterfactual,
+            "kill_chain_stage": kill_chain_stage,
         }
         if expl:
             expl.reason_codes = reasons
             expl.evidence_hashes = evidence
             expl.evidence_paths = []
+            expl.recommended_controls_json = controls
+            expl.counterfactual_json = counterfactual
             expl.details_json = expl_payload
         else:
             db.add(
@@ -194,6 +286,8 @@ def run_once(
                     reason_codes=reasons,
                     evidence_hashes=evidence,
                     evidence_paths=[],
+                    recommended_controls_json=controls,
+                    counterfactual_json=counterfactual,
                     details_json=expl_payload,
                 )
             )

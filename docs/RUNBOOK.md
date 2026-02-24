@@ -206,6 +206,20 @@ docker compose run --rm --no-deps -e PYTHONPATH=/app backend \
   --epochs 80
 ```
 
+AI intelligence enrichment workers:
+```
+docker compose run --rm --no-deps -e PYTHONPATH=/app backend \
+  python -m app.analytics.layer3.path_risk_worker --prediction-type risk_gnn --window-key Wmid
+docker compose run --rm --no-deps -e PYTHONPATH=/app backend \
+  python -m app.analytics.layer3.decision_fusion_worker --prediction-type risk_gnn --window-key Wmid
+docker compose run --rm --no-deps -e PYTHONPATH=/app backend \
+  python -m app.analytics.layer3.baseline_worker --prediction-type risk_gnn --window-key Wmid
+docker compose run --rm --no-deps -e PYTHONPATH=/app backend \
+  python -m app.analytics.layer3.input_anomaly_worker --prediction-type risk_gnn --window-key Wmid
+docker compose run --rm --no-deps -e PYTHONPATH=/app backend \
+  python -m app.analytics.layer3.drift_worker --prediction-type risk_gnn --window-key Wmid --model-version gnn-sage-v1
+```
+
 Economic leakage worker:
 ```
 docker compose run --rm --no-deps -e PYTHONPATH=/app backend \
@@ -240,7 +254,10 @@ docker compose exec postgres psql -U sentinel -d sentinel \
 ## 6) API endpoints (frontend consumption)
 
 All endpoints are under `http://localhost:8000`.
-If API auth is enabled, use `X-API-Key` (value: `FRONTEND_API_KEY` or `INGEST_API_KEY`).
+Auth options:
+- `X-API-Key` for service traffic (backward-compatible).
+- `Authorization: Bearer <access_token>` for user login sessions.
+- `central` access level is required for legal/economy control-plane routes.
 
 Health / readiness:
 ```
@@ -254,6 +271,19 @@ POST /v1/ingest/event
 POST /v1/ingest/batch
 POST /v1/ingest/file
 GET  /v1/ingest/schema
+```
+
+User auth + RBAC:
+```
+POST /v1/auth/login
+POST /v1/auth/refresh
+POST /v1/auth/logout
+GET  /v1/auth/me
+POST /v1/auth/users
+GET  /v1/auth/users
+POST /v1/auth/password/change
+POST /v1/auth/users/{username}/password/reset
+GET  /v1/auth/policies
 ```
 
 Integrations (external software connectors -> canonical ingest):
@@ -381,6 +411,20 @@ GET /v1/ai/gnn/runs
 GET /v1/ai/gnn/runs/{run_id}
 GET /v1/ai/thresholds
 GET /v1/ai/campaign-indicators
+GET /v1/ai/techniques
+GET /v1/ai/path-scores
+GET /v1/ai/link-predictions
+GET /v1/ai/decision-fusions
+GET /v1/ai/drift-reports
+GET /v1/ai/input-anomalies
+GET /v1/ai/baselines
+POST /v1/ai/feedback
+GET /v1/ai/feedback
+GET /v1/ai/rollouts
+POST /v1/ai/rollouts
+GET /v1/ai/threat-intel
+POST /v1/ai/threat-intel/import-stix
+POST /v1/ai/threat-intel/export-stix
 ```
 
 Cases + STIX:

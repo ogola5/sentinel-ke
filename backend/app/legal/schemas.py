@@ -46,6 +46,8 @@ class LegalAuthorizationRequest(BaseModel):
     approval_signatures: List["ApprovalSignature"] = Field(default_factory=list)
     justification: Optional[str] = None
     requested_minutes: int = Field(default=30, ge=1, le=24 * 60)
+    policy_version: str = Field(default="v1", min_length=1)
+    model_action_scope: Dict[str, Any] = Field(default_factory=dict)
     evidence: Dict[str, Any] = Field(default_factory=dict)
 
 

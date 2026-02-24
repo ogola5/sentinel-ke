@@ -23,12 +23,14 @@ from app.api.mitigations import router as mitigations_router
 from app.api.metrics import router as metrics_router
 from app.api.ai import router as ai_router
 from app.api.integrations import router as integrations_router
+from app.api.auth import router as auth_router
 from app.api.legal import router as legal_router
 from app.api.economy import router as economy_router
 from app.api.economy_guardrail import router as economy_guardrail_router
 from app.api.economy_leakage import router as economy_leakage_router
 from app.api.economy_coverup import router as economy_coverup_router
-from app.api.deps import require_api_key
+from app.api.deps import require_api_key, require_central_access, require_section_access
+from app.auth.service import AuthService
 from app.core.config import settings
 from app.search.opensearch import get_client as get_os_client
 from app.graph.neo4j_driver import get_driver
@@ -76,6 +78,7 @@ def _ensure_infra_cluster_schema() -> None:
         )
 
 tags_metadata = [
+    {"name": "auth", "description": "User authentication and RBAC"},
     {"name": "ingest", "description": "Evidence-grade ingestion"},
     {"name": "events", "description": "Event search and timeline"},
     {"name": "campaigns", "description": "Campaigns and risk"},
@@ -102,28 +105,29 @@ if settings.cors_allow_origins:
         allow_headers=["*"],
     )
 
+app.include_router(auth_router)
 app.include_router(ingest_router, dependencies=[Depends(require_api_key)])
-app.include_router(events_router, dependencies=[Depends(require_api_key)])
-app.include_router(graph_router, dependencies=[Depends(require_api_key)])
-app.include_router(timeline_router, dependencies=[Depends(require_api_key)])
-app.include_router(campaigns_router, dependencies=[Depends(require_api_key)])
-app.include_router(infra_clusters_router, dependencies=[Depends(require_api_key)])
-app.include_router(ddos_router, dependencies=[Depends(require_api_key)])
-app.include_router(campaign_evidence_router, dependencies=[Depends(require_api_key)])
-app.include_router(cases_router, dependencies=[Depends(require_api_key)])
-app.include_router(stix_router, dependencies=[Depends(require_api_key)])
-app.include_router(infra_graph_router, dependencies=[Depends(require_api_key)])
-app.include_router(anomalies_router, dependencies=[Depends(require_api_key)])
-app.include_router(mitigations_router, dependencies=[Depends(require_api_key)])
-app.include_router(metrics_router, dependencies=[Depends(require_api_key)])
+app.include_router(events_router, dependencies=[Depends(require_section_access)])
+app.include_router(graph_router, dependencies=[Depends(require_section_access)])
+app.include_router(timeline_router, dependencies=[Depends(require_section_access)])
+app.include_router(campaigns_router, dependencies=[Depends(require_section_access)])
+app.include_router(infra_clusters_router, dependencies=[Depends(require_section_access)])
+app.include_router(ddos_router, dependencies=[Depends(require_section_access)])
+app.include_router(campaign_evidence_router, dependencies=[Depends(require_section_access)])
+app.include_router(cases_router, dependencies=[Depends(require_section_access)])
+app.include_router(stix_router, dependencies=[Depends(require_section_access)])
+app.include_router(infra_graph_router, dependencies=[Depends(require_section_access)])
+app.include_router(anomalies_router, dependencies=[Depends(require_section_access)])
+app.include_router(mitigations_router, dependencies=[Depends(require_section_access)])
+app.include_router(metrics_router, dependencies=[Depends(require_section_access)])
 if settings.ai_api_enabled:
-    app.include_router(ai_router, dependencies=[Depends(require_api_key)])
-app.include_router(integrations_router, dependencies=[Depends(require_api_key)])
-app.include_router(legal_router, dependencies=[Depends(require_api_key)])
-app.include_router(economy_router, dependencies=[Depends(require_api_key)])
-app.include_router(economy_guardrail_router, dependencies=[Depends(require_api_key)])
-app.include_router(economy_leakage_router, dependencies=[Depends(require_api_key)])
-app.include_router(economy_coverup_router, dependencies=[Depends(require_api_key)])
+    app.include_router(ai_router, dependencies=[Depends(require_section_access)])
+app.include_router(integrations_router, dependencies=[Depends(require_section_access)])
+app.include_router(legal_router, dependencies=[Depends(require_central_access)])
+app.include_router(economy_router, dependencies=[Depends(require_central_access)])
+app.include_router(economy_guardrail_router, dependencies=[Depends(require_central_access)])
+app.include_router(economy_leakage_router, dependencies=[Depends(require_central_access)])
+app.include_router(economy_coverup_router, dependencies=[Depends(require_central_access)])
 
 @app.on_event("startup")
 def startup():
@@ -132,6 +136,15 @@ def startup():
     else:
         log.info("db_auto_create_disabled; skipping Base.metadata.create_all")
     _ensure_infra_cluster_schema()
+    try:
+        db = SessionLocal()
+        try:
+            out = AuthService(db).bootstrap_defaults()
+            log.info("auth_bootstrap=%s", out)
+        finally:
+            db.close()
+    except Exception:
+        log.exception("auth_bootstrap_failed")
 
 @app.get("/health")
 def health():

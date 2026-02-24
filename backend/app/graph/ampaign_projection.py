@@ -1,10 +1,11 @@
 # backend/app/graph/campaign_projection.py
+# Deprecated shim: use app.graph.claim_projection.project_claim_to_delta
 from __future__ import annotations
 
 from sqlalchemy.orm import Session
 
 from app.graph.projector import GraphDelta
-from app.analytics.layer3.claim_projector import project_campaign_claim
+from app.graph.claim_projection import project_claim_to_delta
 from app.graph.models import GraphDeltaLog
 
 
@@ -26,7 +27,7 @@ def project_claims_to_deltas(*, db: Session, limit: int = 500) -> int:
     written = 0
 
     for r in rows:
-        delta = project_campaign_claim(claim_row=r)
+        delta = project_claim_to_delta(db=db, claim=r)
 
         db.add(
             GraphDeltaLog(
