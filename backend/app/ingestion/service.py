@@ -175,6 +175,7 @@ class IngestionService:
             event_hash=event_hash,
             event_type=event.event_type,
             source_id=source.source_id,
+            section_code=getattr(source, "section_code", None),
             classification=classification,
             occurred_at=event.occurred_at,
             schema_version=event.schema_version,
@@ -211,6 +212,7 @@ class IngestionService:
             actor_id=source.source_id,
             action=f"ingest.{status}",
             target=event_hash,
+            section_code=getattr(source, "section_code", None),
         )
 
         # Everything below is best-effort and runs ONLY on "accepted"
@@ -225,6 +227,7 @@ class IngestionService:
                     event_type=event.event_type,
                     source_id=source.source_id,
                     source_type=source.source_type,
+                    section_code=getattr(source, "section_code", None),
                     classification=classification,
                     schema_version=event.schema_version,
                     signature_valid=signature_valid,
@@ -275,6 +278,7 @@ class IngestionService:
                         source={
                             "source_id": source.source_id,
                             "source_type": source.source_type,
+                            "section_code": getattr(source, "section_code", None),
                             "classification": classification,
                         },
                         event=event_doc,

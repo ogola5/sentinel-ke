@@ -14,6 +14,7 @@ class SourceRegistry(Base):
 
     source_id = Column(String, primary_key=True)
     source_type = Column(String, nullable=False)
+    section_code = Column(String, nullable=True)
 
     classification_level = Column(String, nullable=False, default="RESTRICTED")
     api_key_hash = Column(String, nullable=False, unique=True)
@@ -33,6 +34,7 @@ class EventLog(Base):
         ForeignKey("source_registry.source_id", ondelete="RESTRICT"),
         nullable=False,
     )
+    section_code = Column(String, nullable=True)
 
     classification = Column(String, nullable=False)
 
@@ -48,6 +50,7 @@ class EventLog(Base):
     __table_args__ = (
         Index("ix_event_log_occurred_at", "occurred_at"),
         Index("ix_event_log_source", "source_id"),
+        Index("ix_event_log_section", "section_code"),
         Index("ix_event_log_type_time", "event_type", "occurred_at"),
     )
 
@@ -76,5 +79,6 @@ class AuditLog(Base):
 
     action = Column(String, nullable=False)
     target = Column(String, nullable=True)
+    section_code = Column(String, nullable=True)
 
     at = Column(DateTime(timezone=True), default=utcnow, nullable=False)

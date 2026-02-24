@@ -20,6 +20,7 @@ class Source(Base):
     # metadata
     source_id = Column(String, nullable=False, unique=True)  # external identifier for audit/logs
     source_type = Column(String, nullable=False)             # e.g. DEV_TEST, KPA, KRA, TELCO
+    section_code = Column(String, nullable=True)
     classification_level = Column(String, nullable=False, default="RESTRICTED")
     enabled = Column(Boolean, nullable=False, default=True)
 

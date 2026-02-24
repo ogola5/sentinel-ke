@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from dataclasses import dataclass, field
 
 from fastapi import Depends, Header, HTTPException, Query
@@ -19,6 +20,8 @@ class AuthPrincipal:
     access_level: str = "central"
     section_code: str | None = None
     scopes: list[str] = field(default_factory=list)
+    mfa_authenticated: bool = False
+    mfa_at: str | None = None
 
     def as_dict(self) -> dict:
         return {
@@ -30,6 +33,8 @@ class AuthPrincipal:
             "access_level": self.access_level,
             "section_code": self.section_code,
             "scopes": list(self.scopes or []),
+            "mfa_authenticated": bool(self.mfa_authenticated),
+            "mfa_at": self.mfa_at,
         }
 
 
@@ -140,6 +145,8 @@ def require_request_principal(
             access_level=str(principal_dict.get("access_level") or "section"),
             section_code=principal_dict.get("section_code"),
             scopes=list(principal_dict.get("scopes") or []),
+            mfa_authenticated=bool(principal_dict.get("mfa_authenticated") is True),
+            mfa_at=principal_dict.get("mfa_at"),
         )
 
     require_api_key(x_api_key=x_api_key)
@@ -157,6 +164,8 @@ def require_section_access(
 ) -> AuthPrincipal:
     if principal.access_level not in {"section", "central"}:
         raise HTTPException(status_code=403, detail="insufficient_access_level")
+    if principal.access_level == "section" and not (principal.section_code or "").strip():
+        raise HTTPException(status_code=403, detail="principal_section_code_missing")
     return principal
 
 
@@ -176,6 +185,34 @@ def require_scope(required_scope: str):
         if "*" in scopes or required_scope in scopes:
             return principal
         raise HTTPException(status_code=403, detail="insufficient_scope")
+
+    return _dependency
+
+
+def require_step_up(max_age_minutes: int | None = None):
+    def _dependency(
+        principal: AuthPrincipal = Depends(require_central_access),
+    ) -> AuthPrincipal:
+        if not settings.auth_central_mfa_required:
+            return principal
+        if principal.principal_type != "user":
+            return principal
+        if not principal.mfa_authenticated:
+            raise HTTPException(status_code=403, detail="mfa_step_up_required")
+
+        raw = (principal.mfa_at or "").strip()
+        if not raw:
+            raise HTTPException(status_code=403, detail="mfa_step_up_required")
+        try:
+            mfa_at = datetime.fromisoformat(raw.replace("Z", "+00:00")).astimezone(timezone.utc)
+        except Exception:
+            raise HTTPException(status_code=403, detail="mfa_step_up_required")
+
+        age_min = (datetime.now(timezone.utc) - mfa_at).total_seconds() / 60.0
+        max_age = int(max_age_minutes if max_age_minutes is not None else settings.auth_step_up_minutes)
+        if age_min > max_age:
+            raise HTTPException(status_code=403, detail="mfa_step_up_expired")
+        return principal
 
     return _dependency
 

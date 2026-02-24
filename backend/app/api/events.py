@@ -2,10 +2,10 @@
 from __future__ import annotations
 
 from typing import Optional
-from datetime import datetime
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
+from app.api.deps import AuthPrincipal, require_request_principal
 from app.search.opensearch import get_client
 from app.search.bootstrap import ensure_events_index
 
@@ -15,6 +15,25 @@ router = APIRouter(prefix="/v1/events", tags=["events"])
 def _index_name() -> str:
     client = get_client()
     return ensure_events_index(client)
+
+
+def _apply_section_scope_to_must(must: list[dict], principal: AuthPrincipal) -> None:
+    if principal.access_level != "section":
+        return
+    section_code = (principal.section_code or "").strip()
+    if not section_code:
+        raise HTTPException(status_code=403, detail="principal_section_code_missing")
+    must.append({"term": {"section_code": section_code}})
+
+
+def _enforce_event_doc_scope(doc: dict, principal: AuthPrincipal) -> None:
+    if principal.access_level != "section":
+        return
+    section_code = (principal.section_code or "").strip()
+    if not section_code:
+        raise HTTPException(status_code=403, detail="principal_section_code_missing")
+    if (doc or {}).get("section_code") != section_code:
+        raise HTTPException(status_code=404, detail="event_not_found")
 
 
 # -------------------------
@@ -29,6 +48,7 @@ def search_events(
     start: Optional[str] = None,   # ISO
     end: Optional[str] = None,     # ISO
     size: int = Query(default=50, ge=1, le=200),
+    principal: AuthPrincipal = Depends(require_request_principal),
 ):
     client = get_client()
     index = _index_name()
@@ -60,6 +80,8 @@ def search_events(
             rng["lte"] = end
         must.append({"range": {"occurred_at": rng}})
 
+    _apply_section_scope_to_must(must, principal)
+
     body = {
         "query": {"bool": {"must": must or [{"match_all": {}}]}},
         "sort": [{"occurred_at": {"order": "desc"}}],
@@ -84,6 +106,7 @@ def timeline(
     interval: str = Query(default="1m", pattern=r"^\d+[smhd]$"),
     event_type: Optional[str] = None,
     source_id: Optional[str] = None,
+    principal: AuthPrincipal = Depends(require_request_principal),
 ):
     client = get_client()
     index = _index_name()
@@ -94,6 +117,7 @@ def timeline(
         must.append({"term": {"event_type": event_type}})
     if source_id:
         must.append({"term": {"source_id": source_id}})
+    _apply_section_scope_to_must(must, principal)
 
     body = {
         "size": 0,
@@ -127,12 +151,19 @@ def timeline(
 # GET EVENT BY HASH
 # -------------------------
 @router.get("/{event_hash}")
-def get_event(event_hash: str):
+def get_event(
+    event_hash: str,
+    principal: AuthPrincipal = Depends(require_request_principal),
+):
     client = get_client()
     index = _index_name()
 
     try:
         res = client.get(index=index, id=event_hash)
-        return res["_source"]
+        src = res["_source"]
+        _enforce_event_doc_scope(src, principal)
+        return src
+    except HTTPException:
+        raise
     except Exception:
         raise HTTPException(status_code=404, detail="event_not_found")

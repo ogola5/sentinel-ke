@@ -1,9 +1,16 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 import pytest
 from fastapi import HTTPException
 
-from app.api.deps import AuthPrincipal, require_central_access, require_request_principal
+from app.api.deps import (
+    AuthPrincipal,
+    require_central_access,
+    require_request_principal,
+    require_step_up,
+)
 from app.core.config import settings
 
 
@@ -71,3 +78,44 @@ def test_require_central_access_rejects_section_user():
         require_central_access(principal=principal)
     assert e.value.status_code == 403
     assert e.value.detail == "central_access_required"
+
+
+def test_require_step_up_skips_when_disabled(monkeypatch):
+    monkeypatch.setattr(settings, "auth_central_mfa_required", False)
+    dep = require_step_up()
+    principal = AuthPrincipal(
+        principal_type="user",
+        actor_id="u-1",
+        user_id="u-1",
+        username="alice",
+        role="central_operator",
+        access_level="central",
+        section_code=None,
+        scopes=["*"],
+        mfa_authenticated=False,
+        mfa_at=None,
+    )
+    out = dep(principal=principal)
+    assert out is principal
+
+
+def test_require_step_up_rejects_expired(monkeypatch):
+    monkeypatch.setattr(settings, "auth_central_mfa_required", True)
+    monkeypatch.setattr(settings, "auth_step_up_minutes", 15)
+    dep = require_step_up()
+    principal = AuthPrincipal(
+        principal_type="user",
+        actor_id="u-1",
+        user_id="u-1",
+        username="alice",
+        role="central_operator",
+        access_level="central",
+        section_code=None,
+        scopes=["*"],
+        mfa_authenticated=True,
+        mfa_at=(datetime.now(timezone.utc) - timedelta(minutes=60)).isoformat(),
+    )
+    with pytest.raises(HTTPException) as e:
+        dep(principal=principal)
+    assert e.value.status_code == 403
+    assert e.value.detail == "mfa_step_up_expired"

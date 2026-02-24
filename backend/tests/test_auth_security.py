@@ -4,6 +4,8 @@ import pytest
 
 from app.auth.security import (
     build_signed_token,
+    decrypt_mfa_secret,
+    encrypt_mfa_secret,
     fingerprint_digest,
     generate_salt,
     hash_password,
@@ -11,6 +13,7 @@ from app.auth.security import (
     verify_password,
     verify_token_claims,
 )
+from app.auth.mfa import generate_totp_secret, totp_code, verify_totp
 
 
 def test_password_hash_and_verify_roundtrip():
@@ -66,3 +69,17 @@ def test_fingerprint_digest_is_stable_and_optional():
     assert fingerprint_digest(None) == ""
     assert fingerprint_digest("") == ""
     assert fingerprint_digest("device-1") == fingerprint_digest("device-1")
+
+
+def test_mfa_secret_encrypt_decrypt_roundtrip():
+    secret = generate_totp_secret()
+    encrypted = encrypt_mfa_secret(secret, master_secret="master-secret-123")
+    decrypted = decrypt_mfa_secret(encrypted, master_secret="master-secret-123")
+    assert decrypted == secret
+
+
+def test_totp_code_generation_and_verification():
+    secret = generate_totp_secret()
+    code = totp_code(secret, at_ts=1_700_000_000)
+    assert verify_totp(secret, code, at_ts=1_700_000_000, window=0)
+    assert not verify_totp(secret, "000000", at_ts=1_700_000_000, window=0)

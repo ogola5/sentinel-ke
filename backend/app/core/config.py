@@ -92,6 +92,13 @@ class Settings:
     auth_token_secret = _auth_token_secret or (
         "dev-insecure-auth-token-secret-change-me" if app_env == "development" else ""
     )
+    auth_mfa_issuer = os.environ.get("AUTH_MFA_ISSUER", "Sentinel-KE").strip()
+    _auth_mfa_secret_key = os.environ.get("AUTH_MFA_SECRET_KEY", "").strip()
+    auth_mfa_secret_key = _auth_mfa_secret_key or (
+        "dev-insecure-auth-mfa-secret-key-change-me" if app_env == "development" else ""
+    )
+    auth_step_up_minutes = int(os.environ.get("AUTH_STEP_UP_MINUTES", "15"))
+    auth_central_mfa_required = env_bool("AUTH_CENTRAL_MFA_REQUIRED", True)
     auth_bootstrap_admin_enabled = env_bool("AUTH_BOOTSTRAP_ADMIN_ENABLED", False)
     auth_bootstrap_admin_username = os.environ.get("AUTH_BOOTSTRAP_ADMIN_USERNAME", "central-admin").strip()
     auth_bootstrap_admin_password = os.environ.get("AUTH_BOOTSTRAP_ADMIN_PASSWORD", "").strip()
@@ -99,6 +106,14 @@ class Settings:
         "AUTH_BOOTSTRAP_ADMIN_DISPLAY_NAME",
         "Central Admin",
     ).strip()
+
+    # ---------------------------------------------------------
+    # Crypto posture (quantum-readiness signaling)
+    # ---------------------------------------------------------
+    crypto_tls_mode = os.environ.get("CRYPTO_TLS_MODE", "tls1.3").strip().lower()
+    crypto_pqc_mode = os.environ.get("CRYPTO_PQC_MODE", "hybrid").strip().lower()
+    crypto_kms_provider = os.environ.get("CRYPTO_KMS_PROVIDER", "hsm").strip().lower()
+    crypto_key_rotation_days = int(os.environ.get("CRYPTO_KEY_ROTATION_DAYS", "90"))
 
     # ---------------------------------------------------------
     # Ingestion API Security

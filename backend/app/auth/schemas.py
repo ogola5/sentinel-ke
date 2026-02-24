@@ -11,6 +11,7 @@ AccessLevel = Literal["section", "central"]
 class AuthLoginRequest(BaseModel):
     username: str = Field(..., min_length=1, max_length=128)
     password: str = Field(..., min_length=8, max_length=1024)
+    otp_code: Optional[str] = Field(default=None, min_length=6, max_length=16)
     client_fingerprint: Optional[str] = Field(default=None, max_length=256)
 
 
@@ -31,6 +32,15 @@ class AuthPasswordChangeRequest(BaseModel):
 class AuthAdminPasswordResetRequest(BaseModel):
     new_password: str = Field(..., min_length=12, max_length=1024)
     revoke_existing_sessions: bool = True
+
+
+class AuthMfaEnrollVerifyRequest(BaseModel):
+    otp_code: str = Field(..., min_length=6, max_length=16)
+
+
+class AuthMfaDisableRequest(BaseModel):
+    otp_code: str = Field(..., min_length=6, max_length=16)
+    current_password: Optional[str] = Field(default=None, min_length=8, max_length=1024)
 
 
 class AuthUserCreateRequest(BaseModel):
@@ -68,6 +78,7 @@ class AuthUserOut(BaseModel):
     section_code: Optional[str] = None
     scopes: List[str] = Field(default_factory=list)
     is_active: bool
+    mfa_enabled: bool
     failed_login_count: int
     locked_until: Optional[str] = None
     created_at: str

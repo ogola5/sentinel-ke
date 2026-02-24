@@ -42,6 +42,7 @@ class LedgerRepository:
         actor_id: str,
         action: str,
         target: str | None = None,
+        section_code: str | None = None,
     ):
         self.db.add(
             AuditLog(
@@ -50,6 +51,7 @@ class LedgerRepository:
                 actor_id=actor_id,
                 action=action,
                 target=target,
+                section_code=section_code,
                 at=datetime.now(timezone.utc),
             )
         )
@@ -65,6 +67,7 @@ class LedgerRepository:
         event_hash: str,
         event_type: str,
         source_id: str,
+        section_code: str | None,
         classification: str,
         occurred_at,
         schema_version: str,
@@ -83,6 +86,7 @@ class LedgerRepository:
                     event_hash=event_hash,
                     event_type=event_type,
                     source_id=source_id,
+                    section_code=section_code,
                     classification=classification,
                     occurred_at=occurred_at,
                     schema_version=schema_version,

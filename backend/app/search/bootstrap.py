@@ -22,6 +22,7 @@ def ensure_events_index(client: OpenSearch) -> str:
                 "event_type": {"type": "keyword"},
                 "source_id": {"type": "keyword"},
                 "source_type": {"type": "keyword"},
+                "section_code": {"type": "keyword"},
                 "classification": {"type": "keyword"},
                 "schema_version": {"type": "keyword"},
                 "signature_valid": {"type": "boolean"},

@@ -191,6 +191,17 @@ def _normalize_severity(v: Optional[str], *, default: str = "medium") -> str:
     return default
 
 
+def _normalize_web_attack_status(v: Optional[str]) -> str:
+    if not v:
+        return "detected"
+    x = v.strip().lower()
+    if x in {"blocked", "deny", "denied", "mitigated"}:
+        return "blocked"
+    if x in {"allow", "allowed", "pass"}:
+        return "allowed"
+    return "detected"
+
+
 def _map_splunk_login(payload: Dict[str, Any], confidence: float, classification: Optional[str]) -> CanonicalEvent:
     occurred_at = _as_datetime(payload, ("timestamp", "_time", "time", "occurred_at", "ts"))
     username = _as_str(payload, ("username", "user", "principal", "actor"))
@@ -566,6 +577,157 @@ def _map_velociraptor_artifact(payload: Dict[str, Any], confidence: float, class
     )
 
 
+def _map_m365_bec_mail(payload: Dict[str, Any], confidence: float, classification: Optional[str]) -> CanonicalEvent:
+    occurred_at = _as_datetime(payload, ("timestamp", "time", "occurred_at", "received_at"))
+    sender = _as_str(payload, ("sender", "from", "from_address"), required=True)
+    recipient = _as_str(payload, ("recipient", "to", "target_user"))
+    subject = _as_str(payload, ("subject",))
+    domain = _as_str(payload, ("domain", "sender_domain"))
+    url = _as_str(payload, ("url", "link"))
+    msg_id = _as_str(payload, ("message_id", "internet_message_id"))
+    risk = _normalize_severity(_as_str(payload, ("severity", "risk_level")), default="high")
+
+    anchors: Dict[str, str] = {}
+    if domain:
+        anchors["domain"] = domain
+    if url:
+        anchors["url"] = url
+    recipient_h = pseudonymize(recipient, salt="integration-prehash") if recipient else None
+    if recipient_h:
+        anchors["person_h"] = recipient_h
+    if not anchors:
+        anchors["service_id"] = "mail:m365"
+
+    model_payload: Dict[str, Any] = {
+        "channel": "email",
+        "sender": sender,
+        "recipient": recipient,
+        "subject": subject,
+        "domain": domain,
+        "url": url,
+        "message_id": msg_id,
+        "threat_class": "bec",
+        "severity": risk,
+    }
+    model_payload = {k: v for k, v in model_payload.items() if v is not None}
+
+    return CanonicalEvent(
+        event_type="PHISHING_MESSAGE_EVENT",
+        occurred_at=occurred_at,
+        confidence=_coerce_confidence(confidence),
+        payload=model_payload,
+        anchors=anchors,
+        classification=classification,
+    )
+
+
+def _map_waf_api_attack(payload: Dict[str, Any], confidence: float, classification: Optional[str]) -> CanonicalEvent:
+    occurred_at = _as_datetime(payload, ("timestamp", "time", "occurred_at", "window_end"))
+    service_id = _as_str(payload, ("service_id", "app", "application"), required=True)
+    endpoint = _as_str(payload, ("endpoint", "path", "uri"))
+    attack_type = _as_str(payload, ("attack_type", "rule_family", "signature"), required=True)
+    status = _normalize_web_attack_status(_as_str(payload, ("status", "action", "decision")))
+    ip = _as_str(payload, ("ip", "src_ip", "client_ip"))
+    req_count = _as_int(payload, ("request_count", "req_count", "count"))
+
+    reason_codes = [f"web_attack:{attack_type.lower()}"]
+    if status == "allowed":
+        reason_codes.append("waf_bypass_signal")
+
+    anchors: Dict[str, str] = {"service_id": service_id}
+    if endpoint:
+        anchors["endpoint"] = endpoint
+    if ip:
+        anchors["ip"] = ip
+
+    model_payload: Dict[str, Any] = {
+        "source": "waf",
+        "service_id": service_id,
+        "endpoint": endpoint,
+        "method": _as_str(payload, ("method", "http_method")),
+        "attack_type": attack_type,
+        "status": status,
+        "req_count": req_count,
+        "src_ip": ip,
+        "user_agent": _as_str(payload, ("user_agent", "ua")),
+        "reason_codes": reason_codes,
+    }
+    model_payload = {k: v for k, v in model_payload.items() if v is not None}
+
+    return CanonicalEvent(
+        event_type="WEB_ATTACK_EVENT",
+        occurred_at=occurred_at,
+        confidence=_coerce_confidence(confidence),
+        payload=model_payload,
+        anchors=anchors,
+        classification=classification,
+    )
+
+
+def _map_kev_vuln(payload: Dict[str, Any], confidence: float, classification: Optional[str]) -> CanonicalEvent:
+    occurred_at = _as_datetime(payload, ("timestamp", "time", "occurred_at", "published_at"))
+    cve_id = (_as_str(payload, ("cve_id", "cve"), required=True) or "").upper()
+    asset_id = _as_str(payload, ("asset_id", "service_id", "hostname"), required=True)
+    severity = _normalize_severity(_as_str(payload, ("severity", "cvss_severity")), default="high")
+    epss = _as_float(payload, ("epss",))
+    kev = bool(_as_bool(payload, ("kev", "known_exploited", "known_exploited_vuln")) is True)
+    patch_due = _as_str(payload, ("patch_due_date", "due_date", "cisa_due_date"))
+
+    anchors: Dict[str, str] = {"service_id": asset_id, "endpoint": cve_id}
+    model_payload: Dict[str, Any] = {
+        "source": "kev",
+        "asset_id": asset_id,
+        "cve_id": cve_id,
+        "severity": severity,
+        "kev": kev,
+        "epss": epss,
+        "patch_due_date": patch_due,
+        "status": _as_str(payload, ("status", "patch_status")) or "open",
+        "reason_codes": ["known_exploited_vuln"] if kev else ["vulnerability_detected"],
+    }
+    model_payload = {k: v for k, v in model_payload.items() if v is not None}
+
+    return CanonicalEvent(
+        event_type="VULNERABILITY_EVENT",
+        occurred_at=occurred_at,
+        confidence=_coerce_confidence(confidence),
+        payload=model_payload,
+        anchors=anchors,
+        classification=classification,
+    )
+
+
+def _map_backup_attestation(payload: Dict[str, Any], confidence: float, classification: Optional[str]) -> CanonicalEvent:
+    occurred_at = _as_datetime(payload, ("timestamp", "time", "occurred_at", "attested_at"))
+    asset_id = _as_str(payload, ("asset_id", "service_id", "hostname"), required=True)
+    backup_id = _as_str(payload, ("backup_id", "snapshot_id"), required=True)
+    immutable = bool(_as_bool(payload, ("immutable", "object_lock_enabled")) is True)
+    object_lock_until = _as_str(payload, ("object_lock_until", "retention_until"))
+
+    anchors: Dict[str, str] = {"service_id": asset_id, "endpoint": backup_id}
+    model_payload: Dict[str, Any] = {
+        "source": "backup_system",
+        "asset_id": asset_id,
+        "backup_id": backup_id,
+        "immutable": immutable,
+        "object_lock_until": object_lock_until,
+        "backup_hash": _as_str(payload, ("backup_hash", "hash", "sha256")),
+        "storage_tier": _as_str(payload, ("storage_tier", "tier")),
+        "status": _as_str(payload, ("status",)) or ("ok" if immutable else "risk"),
+        "rpo_hours": _as_float(payload, ("rpo_hours",)),
+    }
+    model_payload = {k: v for k, v in model_payload.items() if v is not None}
+
+    return CanonicalEvent(
+        event_type="BACKUP_ATTESTATION_EVENT",
+        occurred_at=occurred_at,
+        confidence=_coerce_confidence(confidence),
+        payload=model_payload,
+        anchors=anchors,
+        classification=classification,
+    )
+
+
 _CONNECTORS: Dict[str, ConnectorDefinition] = {
     "splunk_login_v1": ConnectorDefinition(
         key="splunk_login_v1",
@@ -614,6 +776,30 @@ _CONNECTORS: Dict[str, ConnectorDefinition] = {
         description="Velociraptor artifact findings to DFIR_FINDING_EVENT",
         required_fields=("timestamp", "host|hostname|client_id", "artifact_name|artifact", "finding_type|category"),
         mapper=_map_velociraptor_artifact,
+    ),
+    "m365_bec_mail_v1": ConnectorDefinition(
+        key="m365_bec_mail_v1",
+        description="Microsoft 365 mail telemetry to PHISHING_MESSAGE_EVENT (BEC-focused)",
+        required_fields=("timestamp", "sender|from", "recipient|to"),
+        mapper=_map_m365_bec_mail,
+    ),
+    "waf_api_attack_v1": ConnectorDefinition(
+        key="waf_api_attack_v1",
+        description="WAF/API gateway attack telemetry to WEB_ATTACK_EVENT",
+        required_fields=("timestamp", "service_id|app", "attack_type|rule_family"),
+        mapper=_map_waf_api_attack,
+    ),
+    "kev_vuln_feed_v1": ConnectorDefinition(
+        key="kev_vuln_feed_v1",
+        description="KEV/CVE feed rows to VULNERABILITY_EVENT",
+        required_fields=("published_at|timestamp", "cve_id|cve", "asset_id|service_id"),
+        mapper=_map_kev_vuln,
+    ),
+    "backup_attestation_v1": ConnectorDefinition(
+        key="backup_attestation_v1",
+        description="Backup/immutable storage attestations to BACKUP_ATTESTATION_EVENT",
+        required_fields=("attested_at|timestamp", "asset_id|service_id", "backup_id|snapshot_id"),
+        mapper=_map_backup_attestation,
     ),
 }
 

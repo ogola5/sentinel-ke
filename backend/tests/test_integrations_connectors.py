@@ -15,6 +15,10 @@ def test_list_connectors_includes_expected_keys():
     assert "pgaudit_event_v1" in keys
     assert "wazuh_fim_v1" in keys
     assert "velociraptor_artifact_v1" in keys
+    assert "m365_bec_mail_v1" in keys
+    assert "waf_api_attack_v1" in keys
+    assert "kev_vuln_feed_v1" in keys
+    assert "backup_attestation_v1" in keys
 
 
 def test_map_splunk_login_event():
@@ -155,3 +159,64 @@ def test_map_velociraptor_artifact_to_dfir_finding_event():
     assert ev.payload["severity"] == "high"
     assert "log_tamper_signal" in ev.payload["reason_codes"]
     assert ev.anchors["service_id"] == "endpoint:gov-mail-01"
+
+
+def test_map_waf_api_attack_to_web_attack_event():
+    ev = map_external_event(
+        connector_key="waf_api_attack_v1",
+        payload={
+            "timestamp": "2026-02-14T10:20:00Z",
+            "service_id": "gov-api-portal",
+            "endpoint": "/v1/payments",
+            "attack_type": "sql_injection",
+            "decision": "allowed",
+            "src_ip": "41.90.0.10",
+        },
+        confidence=0.91,
+    )
+
+    assert ev.event_type == "WEB_ATTACK_EVENT"
+    assert ev.payload["status"] == "allowed"
+    assert "waf_bypass_signal" in ev.payload["reason_codes"]
+    assert ev.anchors["service_id"] == "gov-api-portal"
+    assert ev.anchors["ip"] == "41.90.0.10"
+
+
+def test_map_kev_vuln_to_vulnerability_event():
+    ev = map_external_event(
+        connector_key="kev_vuln_feed_v1",
+        payload={
+            "published_at": "2026-02-14T10:30:00Z",
+            "asset_id": "county-finance-db-01",
+            "cve": "cve-2026-1001",
+            "severity": "critical",
+            "known_exploited": True,
+            "epss": 0.87,
+            "cisa_due_date": "2026-03-01T00:00:00Z",
+        },
+        confidence=0.93,
+    )
+
+    assert ev.event_type == "VULNERABILITY_EVENT"
+    assert ev.payload["cve_id"] == "CVE-2026-1001"
+    assert ev.payload["kev"] is True
+    assert ev.anchors["service_id"] == "county-finance-db-01"
+
+
+def test_map_backup_attestation_to_backup_event():
+    ev = map_external_event(
+        connector_key="backup_attestation_v1",
+        payload={
+            "attested_at": "2026-02-14T10:40:00Z",
+            "asset_id": "ifmis-db-01",
+            "backup_id": "snap-123",
+            "immutable": False,
+            "status": "risk",
+        },
+        confidence=0.8,
+    )
+
+    assert ev.event_type == "BACKUP_ATTESTATION_EVENT"
+    assert ev.payload["backup_id"] == "snap-123"
+    assert ev.payload["status"] == "risk"
+    assert ev.anchors["service_id"] == "ifmis-db-01"

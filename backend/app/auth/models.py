@@ -25,6 +25,10 @@ class AuthUser(Base):
     failed_login_count = Column(Integer, nullable=False, default=0)
     locked_until = Column(DateTime(timezone=True), nullable=True)
     password_changed_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    mfa_enabled = Column(Boolean, nullable=False, default=False)
+    mfa_secret_enc = Column(String, nullable=True)
+    mfa_pending_secret_enc = Column(String, nullable=True)
+    mfa_enrolled_at = Column(DateTime(timezone=True), nullable=True)
 
     created_by = Column(String, nullable=False, default="system")
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)

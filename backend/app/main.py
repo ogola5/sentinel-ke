@@ -29,7 +29,14 @@ from app.api.economy import router as economy_router
 from app.api.economy_guardrail import router as economy_guardrail_router
 from app.api.economy_leakage import router as economy_leakage_router
 from app.api.economy_coverup import router as economy_coverup_router
-from app.api.deps import require_api_key, require_central_access, require_section_access
+from app.api.defense import router as defense_router
+from app.api.deps import (
+    require_api_key,
+    require_central_access,
+    require_scope,
+    require_section_access,
+    require_step_up,
+)
 from app.auth.service import AuthService
 from app.core.config import settings
 from app.search.opensearch import get_client as get_os_client
@@ -90,6 +97,7 @@ tags_metadata = [
     {"name": "legal", "description": "Court-order authorization and legal controls"},
     {"name": "metrics", "description": "Operational metrics"},
     {"name": "economy", "description": "Economic integrity and procurement anomalies"},
+    {"name": "defense", "description": "Vulnerability, incident response, backup resilience, and crypto posture"},
 ]
 if settings.ai_api_enabled:
     tags_metadata.append({"name": "ai", "description": "AI predictions and explanations"})
@@ -107,27 +115,43 @@ if settings.cors_allow_origins:
 
 app.include_router(auth_router)
 app.include_router(ingest_router, dependencies=[Depends(require_api_key)])
-app.include_router(events_router, dependencies=[Depends(require_section_access)])
-app.include_router(graph_router, dependencies=[Depends(require_section_access)])
-app.include_router(timeline_router, dependencies=[Depends(require_section_access)])
-app.include_router(campaigns_router, dependencies=[Depends(require_section_access)])
-app.include_router(infra_clusters_router, dependencies=[Depends(require_section_access)])
-app.include_router(ddos_router, dependencies=[Depends(require_section_access)])
-app.include_router(campaign_evidence_router, dependencies=[Depends(require_section_access)])
-app.include_router(cases_router, dependencies=[Depends(require_section_access)])
-app.include_router(stix_router, dependencies=[Depends(require_section_access)])
-app.include_router(infra_graph_router, dependencies=[Depends(require_section_access)])
-app.include_router(anomalies_router, dependencies=[Depends(require_section_access)])
-app.include_router(mitigations_router, dependencies=[Depends(require_section_access)])
-app.include_router(metrics_router, dependencies=[Depends(require_section_access)])
+app.include_router(events_router, dependencies=[Depends(require_section_access), Depends(require_scope("events.read"))])
+app.include_router(graph_router, dependencies=[Depends(require_central_access), Depends(require_scope("graph.read"))])
+app.include_router(timeline_router, dependencies=[Depends(require_section_access), Depends(require_scope("events.read"))])
+app.include_router(campaigns_router, dependencies=[Depends(require_section_access), Depends(require_scope("campaigns.read"))])
+app.include_router(infra_clusters_router, dependencies=[Depends(require_section_access), Depends(require_scope("infra.read"))])
+app.include_router(ddos_router, dependencies=[Depends(require_section_access), Depends(require_scope("ddos.read"))])
+app.include_router(campaign_evidence_router, dependencies=[Depends(require_section_access), Depends(require_scope("campaigns.read"))])
+app.include_router(cases_router, dependencies=[Depends(require_section_access), Depends(require_scope("cases.read"))])
+app.include_router(stix_router, dependencies=[Depends(require_section_access), Depends(require_scope("intel.read"))])
+app.include_router(infra_graph_router, dependencies=[Depends(require_central_access), Depends(require_scope("infra.read"))])
+app.include_router(anomalies_router, dependencies=[Depends(require_section_access), Depends(require_scope("anomalies.read"))])
+app.include_router(mitigations_router, dependencies=[Depends(require_section_access), Depends(require_scope("mitigations.read"))])
+app.include_router(metrics_router, dependencies=[Depends(require_section_access), Depends(require_scope("metrics.read"))])
 if settings.ai_api_enabled:
-    app.include_router(ai_router, dependencies=[Depends(require_section_access)])
-app.include_router(integrations_router, dependencies=[Depends(require_section_access)])
-app.include_router(legal_router, dependencies=[Depends(require_central_access)])
-app.include_router(economy_router, dependencies=[Depends(require_central_access)])
-app.include_router(economy_guardrail_router, dependencies=[Depends(require_central_access)])
-app.include_router(economy_leakage_router, dependencies=[Depends(require_central_access)])
-app.include_router(economy_coverup_router, dependencies=[Depends(require_central_access)])
+    app.include_router(ai_router, dependencies=[Depends(require_section_access), Depends(require_scope("ai.read"))])
+app.include_router(integrations_router, dependencies=[Depends(require_section_access), Depends(require_scope("integrations.write"))])
+app.include_router(
+    legal_router,
+    dependencies=[Depends(require_central_access), Depends(require_scope("legal.write")), Depends(require_step_up())],
+)
+app.include_router(
+    economy_router,
+    dependencies=[Depends(require_central_access), Depends(require_scope("economy.write")), Depends(require_step_up())],
+)
+app.include_router(
+    economy_guardrail_router,
+    dependencies=[Depends(require_central_access), Depends(require_scope("economy.write")), Depends(require_step_up())],
+)
+app.include_router(
+    economy_leakage_router,
+    dependencies=[Depends(require_central_access), Depends(require_scope("economy.write")), Depends(require_step_up())],
+)
+app.include_router(
+    economy_coverup_router,
+    dependencies=[Depends(require_central_access), Depends(require_scope("economy.write")), Depends(require_step_up())],
+)
+app.include_router(defense_router, dependencies=[Depends(require_section_access)])
 
 @app.on_event("startup")
 def startup():

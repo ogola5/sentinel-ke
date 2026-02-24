@@ -22,6 +22,7 @@ from app.analytics.economy_guardrails import (
     ExternalTamperAlert,
 )
 from app.analytics.mitigations import Mitigation
+from app.analytics.threat_alerts import ThreatAlert
 from app.analytics.ai_models import (
     GraphFeatureSnapshot,
     EntityEmbedding,
@@ -55,4 +56,13 @@ from app.auth.models import (
     AuthSession,
     AuthLoginEvent,
     AuthRolePolicy,
+)
+from app.defense.models import (
+    VulnerabilityFinding,
+    PatchSlaDecision,
+    BackupAttestation,
+    RestoreDrill,
+    IncidentPlaybookRun,
+    ContainmentAction,
+    CryptoPostureSnapshot,
 )

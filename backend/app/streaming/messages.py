@@ -14,6 +14,7 @@ def build_event_message(*, event_hash: str, source: Dict[str, Any], event: Dict[
         "source": {
             "source_id": source["source_id"],
             "source_type": source["source_type"],
+            "section_code": source.get("section_code"),
             "classification": source["classification"],
         },
         "event": event,  # canonical event doc (post-pseudonymization)

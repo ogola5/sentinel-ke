@@ -17,6 +17,8 @@ from app.auth.schemas import (
     AuthAdminPasswordResetRequest,
     AuthLoginRequest,
     AuthLogoutRequest,
+    AuthMfaDisableRequest,
+    AuthMfaEnrollVerifyRequest,
     AuthPasswordChangeRequest,
     AuthRefreshRequest,
     AuthUserCreateRequest,
@@ -45,6 +47,8 @@ def _map_auth_error_to_http(detail: str) -> HTTPException:
         "access_token_mismatch",
         "access_token_expired",
         "access_token_user_mismatch",
+        "mfa_code_required",
+        "invalid_mfa_code",
     }:
         return HTTPException(status_code=401, detail=detail)
     if detail == "account_locked":
@@ -55,6 +59,14 @@ def _map_auth_error_to_http(detail: str) -> HTTPException:
         return HTTPException(status_code=404, detail=detail)
     if detail == "username_conflict":
         return HTTPException(status_code=409, detail=detail)
+    if detail in {
+        "mfa_already_enabled",
+        "mfa_enrollment_not_started",
+        "mfa_secret_missing",
+        "mfa_secret_invalid",
+        "current_password_required",
+    }:
+        return HTTPException(status_code=422, detail=detail)
     return HTTPException(status_code=422, detail=detail)
 
 
@@ -221,3 +233,60 @@ def list_role_policies(
 ):
     del principal
     return AuthService(db).get_role_policies()
+
+
+@router.post("/mfa/enroll/start")
+def mfa_enroll_start(
+    principal: AuthPrincipal = Depends(require_section_access),
+    db: Session = Depends(get_db),
+):
+    if principal.principal_type != "user" or not principal.user_id:
+        raise HTTPException(status_code=403, detail="user_session_required")
+    try:
+        return AuthService(db).start_mfa_enrollment(user_id=principal.user_id)
+    except ValueError as e:
+        raise _map_auth_error_to_http(str(e))
+    except Exception:
+        log.exception("auth_mfa_enroll_start_failed")
+        raise HTTPException(status_code=500, detail="internal_error")
+
+
+@router.post("/mfa/enroll/verify")
+def mfa_enroll_verify(
+    payload: AuthMfaEnrollVerifyRequest,
+    principal: AuthPrincipal = Depends(require_section_access),
+    db: Session = Depends(get_db),
+):
+    if principal.principal_type != "user" or not principal.user_id:
+        raise HTTPException(status_code=403, detail="user_session_required")
+    try:
+        return AuthService(db).verify_mfa_enrollment(
+            user_id=principal.user_id,
+            otp_code=payload.otp_code,
+        )
+    except ValueError as e:
+        raise _map_auth_error_to_http(str(e))
+    except Exception:
+        log.exception("auth_mfa_enroll_verify_failed")
+        raise HTTPException(status_code=500, detail="internal_error")
+
+
+@router.post("/mfa/disable")
+def mfa_disable(
+    payload: AuthMfaDisableRequest,
+    principal: AuthPrincipal = Depends(require_section_access),
+    db: Session = Depends(get_db),
+):
+    if principal.principal_type != "user" or not principal.user_id:
+        raise HTTPException(status_code=403, detail="user_session_required")
+    try:
+        return AuthService(db).disable_mfa(
+            user_id=principal.user_id,
+            otp_code=payload.otp_code,
+            current_password=payload.current_password,
+        )
+    except ValueError as e:
+        raise _map_auth_error_to_http(str(e))
+    except Exception:
+        log.exception("auth_mfa_disable_failed")
+        raise HTTPException(status_code=500, detail="internal_error")

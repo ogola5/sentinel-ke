@@ -8,12 +8,15 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.orm import Session
 
+from app.auth.mfa import build_provisioning_uri, generate_totp_secret, verify_totp
 from app.auth.models import AuthLoginEvent, AuthRolePolicy, AuthSession, AuthUser
 from app.auth.schemas import AuthLoginRequest, AuthRefreshRequest, AuthUserCreateRequest
 from app.auth.security import (
     PASSWORD_KDF,
     SIGNING_ALG,
     build_signed_token,
+    decrypt_mfa_secret,
+    encrypt_mfa_secret,
     fingerprint_digest,
     generate_salt,
     hash_password,
@@ -39,10 +42,15 @@ DEFAULT_ROLE_POLICIES = [
         "allowed_scopes": [
             "events.read",
             "campaigns.read",
+            "ddos.read",
+            "infra.read",
+            "cases.read",
+            "intel.read",
             "anomalies.read",
             "mitigations.read",
             "ai.read",
             "metrics.read",
+            "defense.read",
         ],
         "central_only": False,
     },
@@ -54,11 +62,18 @@ DEFAULT_ROLE_POLICIES = [
             "events.write",
             "campaigns.read",
             "campaigns.write",
+            "ddos.read",
+            "infra.read",
+            "cases.read",
+            "intel.read",
             "anomalies.read",
             "mitigations.read",
             "ai.read",
             "ai.feedback.write",
+            "integrations.write",
             "metrics.read",
+            "defense.read",
+            "defense.write",
         ],
         "central_only": False,
     },
@@ -68,8 +83,15 @@ DEFAULT_ROLE_POLICIES = [
         "allowed_scopes": [
             "events.read",
             "events.write",
+            "graph.read",
             "campaigns.read",
             "campaigns.write",
+            "ddos.read",
+            "infra.read",
+            "cases.read",
+            "intel.read",
+            "anomalies.read",
+            "mitigations.read",
             "legal.read",
             "legal.write",
             "economy.read",
@@ -77,9 +99,10 @@ DEFAULT_ROLE_POLICIES = [
             "ai.read",
             "ai.feedback.write",
             "ai.rollout.write",
-            "intel.read",
-            "intel.write",
+            "integrations.write",
             "metrics.read",
+            "defense.read",
+            "defense.write",
         ],
         "central_only": True,
     },
@@ -160,9 +183,20 @@ class AuthService:
             return {"status": "skipped", "reason": "auth_role_policy_table_missing"}
 
         created = 0
+        updated = 0
         for item in DEFAULT_ROLE_POLICIES:
             row = self._find_role_policy(role=item["role"], access_level=item["access_level"])
             if row:
+                existing = set(self._effective_allowed(row.allowed_scopes_json))
+                target = set(self._normalize_scopes(list(item["allowed_scopes"])))
+                if existing != target or bool(row.central_only) != bool(item["central_only"]):
+                    row.allowed_scopes_json = sorted(target)
+                    row.central_only = bool(item["central_only"])
+                    md = dict(row.metadata_json or {})
+                    md["seeded"] = True
+                    md["updated_by_bootstrap"] = True
+                    row.metadata_json = md
+                    updated += 1
                 continue
             self.db.add(
                 AuthRolePolicy(
@@ -204,12 +238,13 @@ class AuthService:
                     )
                     admin_created = True
 
-        if created or admin_created:
+        if created or updated or admin_created:
             self.db.commit()
 
         return {
             "status": "ok",
             "seeded_policies": created,
+            "updated_policies": updated,
             "bootstrap_admin_created": admin_created,
         }
 
@@ -234,7 +269,13 @@ class AuthService:
             )
         )
 
-    def _principal_dict(self, user: AuthUser) -> Dict[str, Any]:
+    def _principal_dict(
+        self,
+        user: AuthUser,
+        *,
+        mfa_authenticated: bool = False,
+        mfa_at: str | None = None,
+    ) -> Dict[str, Any]:
         return {
             "principal_type": "user",
             "actor_id": str(user.user_id),
@@ -244,6 +285,8 @@ class AuthService:
             "access_level": user.access_level,
             "section_code": user.section_code,
             "scopes": list(user.scopes_json or []),
+            "mfa_authenticated": bool(mfa_authenticated),
+            "mfa_at": mfa_at,
         }
 
     def _session_to_tokens(
@@ -253,6 +296,9 @@ class AuthService:
         session: AuthSession,
     ) -> Dict[str, Any]:
         now = utcnow()
+        metadata = dict(session.metadata_json or {})
+        mfa_authenticated = bool(metadata.get("mfa_authenticated") is True)
+        mfa_at = metadata.get("mfa_at")
         access_payload = {
             "iss": settings.auth_token_issuer,
             "aud": settings.auth_token_audience,
@@ -269,6 +315,8 @@ class AuthService:
             "exp": int(session.access_expires_at.timestamp()),
             "sig_alg": SIGNING_ALG,
             "kdf_alg": PASSWORD_KDF,
+            "mfa": mfa_authenticated,
+            "mfa_at": mfa_at,
         }
         refresh_payload = {
             "iss": settings.auth_token_issuer,
@@ -291,7 +339,11 @@ class AuthService:
             "refresh_token": refresh_token,
             "access_expires_at": session.access_expires_at.isoformat(),
             "refresh_expires_at": session.refresh_expires_at.isoformat(),
-            "principal": self._principal_dict(user),
+            "principal": self._principal_dict(
+                user,
+                mfa_authenticated=mfa_authenticated,
+                mfa_at=mfa_at,
+            ),
         }
 
     def _enforce_scope_rules(
@@ -459,6 +511,64 @@ class AuthService:
         user.failed_login_count = 0
         user.locked_until = None
 
+        mfa_authenticated = False
+        mfa_at_iso: str | None = None
+        if bool(user.mfa_enabled):
+            otp_code = (payload.otp_code or "").strip()
+            if not otp_code:
+                self._log_login(
+                    user=user,
+                    username=username,
+                    outcome="failed",
+                    reason="mfa_code_required",
+                    ip_address=ip_address,
+                    user_agent=user_agent,
+                )
+                self.db.commit()
+                raise ValueError("mfa_code_required")
+
+            enc = (user.mfa_secret_enc or "").strip()
+            if not enc:
+                self._log_login(
+                    user=user,
+                    username=username,
+                    outcome="failed",
+                    reason="mfa_secret_missing",
+                    ip_address=ip_address,
+                    user_agent=user_agent,
+                )
+                self.db.commit()
+                raise ValueError("mfa_secret_missing")
+            try:
+                secret = decrypt_mfa_secret(enc, master_secret=settings.auth_mfa_secret_key)
+            except ValueError:
+                self._log_login(
+                    user=user,
+                    username=username,
+                    outcome="failed",
+                    reason="mfa_secret_invalid",
+                    ip_address=ip_address,
+                    user_agent=user_agent,
+                )
+                self.db.commit()
+                raise ValueError("mfa_secret_invalid")
+            if not verify_totp(secret, otp_code):
+                user.failed_login_count = int(user.failed_login_count or 0) + 1
+                if user.failed_login_count >= settings.auth_login_max_failures:
+                    user.locked_until = now + timedelta(minutes=settings.auth_lock_minutes)
+                self._log_login(
+                    user=user,
+                    username=username,
+                    outcome="failed",
+                    reason="invalid_mfa_code",
+                    ip_address=ip_address,
+                    user_agent=user_agent,
+                )
+                self.db.commit()
+                raise ValueError("invalid_mfa_code")
+            mfa_authenticated = True
+            mfa_at_iso = now.isoformat()
+
         access_expires_at = now + timedelta(minutes=settings.auth_access_token_minutes)
         refresh_expires_at = now + timedelta(minutes=settings.auth_refresh_token_minutes)
 
@@ -474,6 +584,8 @@ class AuthService:
             metadata_json={
                 "sig_alg": SIGNING_ALG,
                 "kdf_alg": PASSWORD_KDF,
+                "mfa_authenticated": bool(mfa_authenticated),
+                "mfa_at": mfa_at_iso,
             },
         )
         self.db.add(session)
@@ -598,7 +710,17 @@ class AuthService:
         if not bool(user.is_active):
             raise ValueError("account_inactive")
 
-        return self._principal_dict(user)
+        mfa_authenticated = bool(payload.get("mfa") is True)
+        mfa_at = payload.get("mfa_at")
+        if not mfa_at:
+            mfa_at = (session.metadata_json or {}).get("mfa_at")
+            mfa_authenticated = bool((session.metadata_json or {}).get("mfa_authenticated") is True)
+
+        return self._principal_dict(
+            user,
+            mfa_authenticated=mfa_authenticated,
+            mfa_at=mfa_at,
+        )
 
     def logout(
         self,
@@ -724,6 +846,87 @@ class AuthService:
 
         return {"status": "ok", "username": row.username, "revoked_sessions": revoked}
 
+    def _get_user_by_id(self, user_id: str) -> AuthUser:
+        try:
+            user_uuid = uuid.UUID(str(user_id))
+        except ValueError:
+            raise ValueError("user_not_found")
+        user = self.db.query(AuthUser).filter(AuthUser.user_id == user_uuid).first()
+        if not user:
+            raise ValueError("user_not_found")
+        return user
+
+    def start_mfa_enrollment(self, *, user_id: str) -> Dict[str, Any]:
+        user = self._get_user_by_id(user_id)
+        if bool(user.mfa_enabled) and (user.mfa_secret_enc or "").strip():
+            raise ValueError("mfa_already_enabled")
+        secret = generate_totp_secret()
+        enc = encrypt_mfa_secret(secret, master_secret=settings.auth_mfa_secret_key)
+        user.mfa_pending_secret_enc = enc
+        user.updated_at = utcnow()
+        self.db.commit()
+        return {
+            "status": "pending_verification",
+            "username": user.username,
+            "secret": secret,
+            "issuer": settings.auth_mfa_issuer,
+            "provisioning_uri": build_provisioning_uri(
+                issuer=settings.auth_mfa_issuer,
+                username=user.username,
+                secret=secret,
+            ),
+        }
+
+    def verify_mfa_enrollment(self, *, user_id: str, otp_code: str) -> Dict[str, Any]:
+        user = self._get_user_by_id(user_id)
+        pending = (user.mfa_pending_secret_enc or "").strip()
+        if not pending:
+            raise ValueError("mfa_enrollment_not_started")
+        secret = decrypt_mfa_secret(pending, master_secret=settings.auth_mfa_secret_key)
+        if not verify_totp(secret, otp_code):
+            raise ValueError("invalid_mfa_code")
+        user.mfa_secret_enc = pending
+        user.mfa_pending_secret_enc = None
+        user.mfa_enabled = True
+        user.mfa_enrolled_at = utcnow()
+        user.updated_at = utcnow()
+        self.db.commit()
+        revoked = self.revoke_all_user_sessions(user_id=str(user.user_id), reason="mfa_enrolled")
+        return {"status": "ok", "mfa_enabled": True, "revoked_sessions": revoked}
+
+    def disable_mfa(
+        self,
+        *,
+        user_id: str,
+        otp_code: str,
+        current_password: str | None,
+    ) -> Dict[str, Any]:
+        user = self._get_user_by_id(user_id)
+        if not bool(user.mfa_enabled):
+            return {"status": "ok", "mfa_enabled": False, "revoked_sessions": 0}
+        if not current_password:
+            raise ValueError("current_password_required")
+        if not verify_password(
+            current_password,
+            user.password_salt,
+            user.password_hash,
+            pepper=settings.auth_password_pepper,
+        ):
+            raise ValueError("invalid_credentials")
+        secret_enc = (user.mfa_secret_enc or "").strip()
+        if not secret_enc:
+            raise ValueError("mfa_secret_missing")
+        secret = decrypt_mfa_secret(secret_enc, master_secret=settings.auth_mfa_secret_key)
+        if not verify_totp(secret, otp_code):
+            raise ValueError("invalid_mfa_code")
+        user.mfa_enabled = False
+        user.mfa_secret_enc = None
+        user.mfa_pending_secret_enc = None
+        user.updated_at = utcnow()
+        self.db.commit()
+        revoked = self.revoke_all_user_sessions(user_id=str(user.user_id), reason="mfa_disabled")
+        return {"status": "ok", "mfa_enabled": False, "revoked_sessions": revoked}
+
     def _user_to_dict(self, row: AuthUser) -> Dict[str, Any]:
         return {
             "user_id": str(row.user_id),
@@ -734,6 +937,7 @@ class AuthService:
             "section_code": row.section_code,
             "scopes": list(row.scopes_json or []),
             "is_active": bool(row.is_active),
+            "mfa_enabled": bool(row.mfa_enabled),
             "failed_login_count": int(row.failed_login_count or 0),
             "locked_until": row.locked_until.isoformat() if row.locked_until else None,
             "created_at": row.created_at.isoformat() if row.created_at else None,

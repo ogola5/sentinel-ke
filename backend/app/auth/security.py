@@ -162,3 +162,48 @@ def fingerprint_digest(value: Optional[str]) -> str:
     if not v:
         return ""
     return hashlib.sha3_256(v.encode("utf-8")).hexdigest()
+
+
+def _derive_master_key(master_secret: str) -> bytes:
+    seed = (master_secret or "").strip()
+    if not seed:
+        raise ValueError("auth_mfa_secret_key_missing")
+    return hashlib.sha3_512(seed.encode("utf-8")).digest()
+
+
+def _stream_xor(data: bytes, *, key: bytes, nonce: bytes) -> bytes:
+    out = bytearray()
+    counter = 0
+    while len(out) < len(data):
+        block = hashlib.sha3_512(key + nonce + counter.to_bytes(4, "big")).digest()
+        out.extend(block)
+        counter += 1
+    return bytes(a ^ b for a, b in zip(data, out[: len(data)]))
+
+
+def encrypt_mfa_secret(secret: str, *, master_secret: str) -> str:
+    key = _derive_master_key(master_secret)
+    nonce = secrets.token_bytes(16)
+    plaintext = secret.encode("utf-8")
+    ciphertext = _stream_xor(plaintext, key=key, nonce=nonce)
+    tag = hmac.new(key, nonce + ciphertext, hashlib.sha3_256).digest()
+    token = nonce + ciphertext + tag
+    return base64.urlsafe_b64encode(token).decode("ascii")
+
+
+def decrypt_mfa_secret(token: str, *, master_secret: str) -> str:
+    key = _derive_master_key(master_secret)
+    try:
+        blob = base64.urlsafe_b64decode(token.encode("ascii"))
+    except Exception as exc:
+        raise ValueError("mfa_secret_invalid") from exc
+    if len(blob) < 16 + 32:
+        raise ValueError("mfa_secret_invalid")
+    nonce = blob[:16]
+    tag = blob[-32:]
+    ciphertext = blob[16:-32]
+    expected = hmac.new(key, nonce + ciphertext, hashlib.sha3_256).digest()
+    if not hmac.compare_digest(expected, tag):
+        raise ValueError("mfa_secret_invalid")
+    plaintext = _stream_xor(ciphertext, key=key, nonce=nonce)
+    return plaintext.decode("utf-8")

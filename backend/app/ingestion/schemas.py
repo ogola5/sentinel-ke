@@ -18,6 +18,10 @@ EventType = Literal[
     "DB_AUDIT_EVENT",
     "FILE_INTEGRITY_EVENT",
     "DFIR_FINDING_EVENT",
+    "WEB_ATTACK_EVENT",
+    "VULNERABILITY_EVENT",
+    "BACKUP_ATTESTATION_EVENT",
+    "INCIDENT_RESPONSE_EVENT",
 ]
 
 Classification = Literal["PUBLIC", "RESTRICTED", "INTERNAL"]
@@ -152,6 +156,53 @@ class DfirFindingPayload(BaseModel):
     case_id: Optional[str] = None
     hunt_id: Optional[str] = None
     reason_codes: List[str] = Field(default_factory=list)
+
+
+class WebAttackPayload(BaseModel):
+    source: str = "waf"
+    service_id: str
+    endpoint: Optional[str] = None
+    method: Optional[str] = None
+    attack_type: str
+    status: Literal["blocked", "detected", "allowed"] = "detected"
+    req_count: Optional[int] = None
+    src_ip: Optional[str] = None
+    user_agent: Optional[str] = None
+    reason_codes: List[str] = Field(default_factory=list)
+
+
+class VulnerabilityPayload(BaseModel):
+    source: str = "kev"
+    asset_id: str
+    cve_id: str
+    severity: str = "medium"
+    kev: bool = False
+    epss: Optional[float] = None
+    patch_due_date: Optional[str] = None
+    status: Optional[str] = None
+    reason_codes: List[str] = Field(default_factory=list)
+
+
+class BackupAttestationPayload(BaseModel):
+    source: str = "backup_system"
+    asset_id: str
+    backup_id: str
+    immutable: bool = False
+    object_lock_until: Optional[str] = None
+    backup_hash: Optional[str] = None
+    storage_tier: Optional[str] = None
+    status: Optional[str] = None
+    rpo_hours: Optional[float] = None
+
+
+class IncidentResponsePayload(BaseModel):
+    source: str = "ir_orchestrator"
+    incident_key: str
+    action_type: str
+    target: str
+    status: str
+    actor: Optional[str] = None
+    reason: Optional[str] = None
 
 
 # ---- Canonical envelope ----

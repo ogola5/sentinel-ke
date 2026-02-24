@@ -18,6 +18,10 @@ from app.ingestion.schemas import (
     DbAuditPayload,
     FileIntegrityPayload,
     DfirFindingPayload,
+    WebAttackPayload,
+    VulnerabilityPayload,
+    BackupAttestationPayload,
+    IncidentResponsePayload,
 )
 
 REQUIRED_ANCHOR_GROUP = (
@@ -75,6 +79,14 @@ def _validate_typed_payload(event: CanonicalEvent) -> None:
             FileIntegrityPayload.model_validate(event.payload)
         elif event.event_type == "DFIR_FINDING_EVENT":
             DfirFindingPayload.model_validate(event.payload)
+        elif event.event_type == "WEB_ATTACK_EVENT":
+            WebAttackPayload.model_validate(event.payload)
+        elif event.event_type == "VULNERABILITY_EVENT":
+            VulnerabilityPayload.model_validate(event.payload)
+        elif event.event_type == "BACKUP_ATTESTATION_EVENT":
+            BackupAttestationPayload.model_validate(event.payload)
+        elif event.event_type == "INCIDENT_RESPONSE_EVENT":
+            IncidentResponsePayload.model_validate(event.payload)
         else:
             raise ValueError(f"unsupported event_type: {event.event_type}")
     except ValidationError as e:
