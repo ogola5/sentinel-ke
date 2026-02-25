@@ -78,4 +78,9 @@ export PYTHONPYCACHEPREFIX=/tmp/pycache
 python3 -m compileall -q backend/app backend/tests
 
 echo "[health][ok] python syntax check passed"
+
+# 6) FastAPI route conflict check (method + full path)
+python3 scripts/check_route_conflicts.py
+echo "[health][ok] route conflict check passed"
+
 echo "[health] all checks passed"

@@ -1,0 +1,123 @@
+# API Endpoint Inventory
+
+Auto-generated from FastAPI routers. Do not edit manually.
+
+Regenerate with:
+
+```bash
+python3 scripts/generate_api_inventory.py
+```
+
+| Method | Path | Tag | Handler |
+|---|---|---|---|
+| `GET` | `/v1/ai/baselines` | `ai` | `backend.app.api.ai:list_baselines` |
+| `GET` | `/v1/ai/campaign-indicators` | `ai` | `backend.app.api.ai:list_campaign_indicators` |
+| `GET` | `/v1/ai/decision-fusions` | `ai` | `backend.app.api.ai:list_decision_fusions` |
+| `GET` | `/v1/ai/drift-reports` | `ai` | `backend.app.api.ai:list_drift_reports` |
+| `GET` | `/v1/ai/explanations/{prediction_id}` | `ai` | `backend.app.api.ai:get_explanation` |
+| `GET` | `/v1/ai/feedback` | `ai` | `backend.app.api.ai:list_feedback` |
+| `POST` | `/v1/ai/feedback` | `ai` | `backend.app.api.ai:create_feedback` |
+| `GET` | `/v1/ai/gnn/runs` | `ai` | `backend.app.api.ai:list_gnn_runs` |
+| `GET` | `/v1/ai/gnn/runs/{run_id}` | `ai` | `backend.app.api.ai:get_gnn_run` |
+| `GET` | `/v1/ai/input-anomalies` | `ai` | `backend.app.api.ai:list_input_anomalies` |
+| `GET` | `/v1/ai/link-predictions` | `ai` | `backend.app.api.ai:list_link_predictions` |
+| `GET` | `/v1/ai/path-scores` | `ai` | `backend.app.api.ai:list_path_scores` |
+| `GET` | `/v1/ai/predictions` | `ai` | `backend.app.api.ai:list_predictions` |
+| `GET` | `/v1/ai/predictions/{prediction_id}` | `ai` | `backend.app.api.ai:get_prediction` |
+| `GET` | `/v1/ai/rollouts` | `ai` | `backend.app.api.ai:list_rollouts` |
+| `POST` | `/v1/ai/rollouts` | `ai` | `backend.app.api.ai:upsert_rollout` |
+| `GET` | `/v1/ai/techniques` | `ai` | `backend.app.api.ai:list_techniques` |
+| `GET` | `/v1/ai/threat-intel` | `ai` | `backend.app.api.ai:list_threat_intel` |
+| `POST` | `/v1/ai/threat-intel/export-stix` | `ai` | `backend.app.api.ai:export_threat_intel` |
+| `POST` | `/v1/ai/threat-intel/import-stix` | `ai` | `backend.app.api.ai:import_threat_intel` |
+| `GET` | `/v1/ai/thresholds` | `ai` | `backend.app.api.ai:list_thresholds` |
+| `GET` | `/v1/anomalies` | `anomalies` | `backend.app.api.anomalies:list_anomalies` |
+| `POST` | `/v1/auth/login` | `auth` | `backend.app.api.auth:login` |
+| `POST` | `/v1/auth/logout` | `auth` | `backend.app.api.auth:logout` |
+| `GET` | `/v1/auth/me` | `auth` | `backend.app.api.auth:me` |
+| `POST` | `/v1/auth/mfa/disable` | `auth` | `backend.app.api.auth:mfa_disable` |
+| `POST` | `/v1/auth/mfa/enroll/start` | `auth` | `backend.app.api.auth:mfa_enroll_start` |
+| `POST` | `/v1/auth/mfa/enroll/verify` | `auth` | `backend.app.api.auth:mfa_enroll_verify` |
+| `POST` | `/v1/auth/password/change` | `auth` | `backend.app.api.auth:change_password` |
+| `GET` | `/v1/auth/policies` | `auth` | `backend.app.api.auth:list_role_policies` |
+| `POST` | `/v1/auth/refresh` | `auth` | `backend.app.api.auth:refresh` |
+| `GET` | `/v1/auth/users` | `auth` | `backend.app.api.auth:list_users` |
+| `POST` | `/v1/auth/users` | `auth` | `backend.app.api.auth:create_user` |
+| `POST` | `/v1/auth/users/{username}/password/reset` | `auth` | `backend.app.api.auth:admin_reset_password` |
+| `GET` | `/v1/campaigns` | `campaigns` | `backend.app.api.campaigns:list_campaigns` |
+| `GET` | `/v1/campaigns/{campaign_id}` | `campaigns` | `backend.app.api.campaigns:get_campaign` |
+| `GET` | `/v1/campaigns/{campaign_id}/events` | `campaigns` | `backend.app.api.campaigns:campaign_events` |
+| `GET` | `/v1/campaigns/{campaign_id}/evidence` | `campaign-evidence` | `backend.app.api.campaign_evidence:campaign_evidence` |
+| `GET` | `/v1/campaigns/{campaign_id}/risk` | `campaigns` | `backend.app.api.campaigns:campaign_risk` |
+| `POST` | `/v1/cases/from-campaign/{campaign_id}` | `cases` | `backend.app.cases.api:create_case_packet` |
+| `GET` | `/v1/ddos/alerts` | `ddos` | `backend.app.api.ddos:list_ddos_alerts` |
+| `GET` | `/v1/ddos/indicators` | `ddos` | `backend.app.api.ddos:ddos_indicators` |
+| `GET` | `/v1/ddos/overview` | `ddos` | `backend.app.api.ddos:ddos_overview` |
+| `GET` | `/v1/ddos/signals` | `ddos` | `backend.app.api.ddos:ddos_signals_hint` |
+| `GET` | `/v1/defense/backups/attest` | `defense` | `backend.app.api.defense:list_backup_attestations` |
+| `POST` | `/v1/defense/backups/attest` | `defense` | `backend.app.api.defense:upsert_backup_attestation` |
+| `GET` | `/v1/defense/backups/restore-drills` | `defense` | `backend.app.api.defense:list_restore_drills` |
+| `POST` | `/v1/defense/backups/restore-drills` | `defense` | `backend.app.api.defense:create_restore_drill` |
+| `GET` | `/v1/defense/crypto/posture` | `defense` | `backend.app.api.defense:current_crypto_posture` |
+| `POST` | `/v1/defense/crypto/posture/snapshot` | `defense` | `backend.app.api.defense:snapshot_crypto_posture` |
+| `GET` | `/v1/defense/incidents/runs` | `defense` | `backend.app.api.defense:list_incident_runs` |
+| `POST` | `/v1/defense/incidents/runs` | `defense` | `backend.app.api.defense:create_incident_run` |
+| `POST` | `/v1/defense/incidents/runs/{run_id}/actions` | `defense` | `backend.app.api.defense:execute_incident_actions` |
+| `GET` | `/v1/defense/threat-alerts` | `defense` | `backend.app.api.defense:list_threat_alerts` |
+| `POST` | `/v1/defense/threat-alerts/refresh` | `defense` | `backend.app.api.defense:refresh_threat_alerts` |
+| `GET` | `/v1/defense/vulnerabilities` | `defense` | `backend.app.api.defense:list_vulnerabilities` |
+| `POST` | `/v1/defense/vulnerabilities` | `defense` | `backend.app.api.defense:upsert_vulnerability` |
+| `POST` | `/v1/defense/vulnerabilities/score-sla` | `defense` | `backend.app.api.defense:score_patch_sla` |
+| `GET` | `/v1/economy/coverup/alerts` | `economy` | `backend.app.api.economy_coverup:list_coverup_alerts` |
+| `POST` | `/v1/economy/coverup/run` | `economy` | `backend.app.api.economy_coverup:run_coverup` |
+| `GET` | `/v1/economy/coverup/summary` | `economy` | `backend.app.api.economy_coverup:coverup_summary` |
+| `GET` | `/v1/economy/guardrail/decisions` | `economy` | `backend.app.api.economy_guardrail:list_guardrail_decisions` |
+| `POST` | `/v1/economy/guardrail/evaluate` | `economy` | `backend.app.api.economy_guardrail:evaluate_procurement_guardrail` |
+| `GET` | `/v1/economy/integrity/alerts` | `economy` | `backend.app.api.economy_guardrail:list_integrity_alerts` |
+| `POST` | `/v1/economy/integrity/snapshot` | `economy` | `backend.app.api.economy_guardrail:create_integrity_snapshot` |
+| `GET` | `/v1/economy/leakage/alerts` | `economy` | `backend.app.api.economy_leakage:list_leakage_alerts` |
+| `POST` | `/v1/economy/leakage/run` | `economy` | `backend.app.api.economy_leakage:run_leakage` |
+| `GET` | `/v1/economy/leakage/summary` | `economy` | `backend.app.api.economy_leakage:leakage_summary` |
+| `POST` | `/v1/economy/procurement/analyze` | `economy` | `backend.app.api.economy:analyze_procurement` |
+| `GET` | `/v1/economy/procurement/anomalies` | `economy` | `backend.app.api.economy:list_procurement_anomalies` |
+| `GET` | `/v1/economy/signals` | `economy` | `backend.app.api.economy:list_signals` |
+| `POST` | `/v1/economy/signals` | `economy` | `backend.app.api.economy:create_signal` |
+| `GET` | `/v1/events/search` | `events` | `backend.app.api.events:search_events` |
+| `GET` | `/v1/events/timeline` | `events` | `backend.app.api.events:timeline` |
+| `GET` | `/v1/events/{event_hash}` | `events` | `backend.app.api.events:get_event` |
+| `GET` | `/v1/graph/entity/{entity_key}` | `graph` | `backend.app.api.graph:get_entity` |
+| `GET` | `/v1/graph/evidence/{event_hash}` | `graph` | `backend.app.api.graph:get_evidence` |
+| `POST` | `/v1/graph/infra/project-recent` | `graph-infra` | `backend.app.api.infra_graph:project_recent_clusters` |
+| `POST` | `/v1/graph/infra/project/{cluster_id}` | `graph-infra` | `backend.app.api.infra_graph:project_one_cluster` |
+| `GET` | `/v1/graph/neighbors/{entity_key}` | `graph` | `backend.app.api.graph:get_neighbors` |
+| `GET` | `/v1/graph/path` | `graph` | `backend.app.api.graph:explain_path` |
+| `GET` | `/v1/infra/clusters` | `infra-clusters` | `backend.app.api.infra_clusters:list_clusters` |
+| `GET` | `/v1/infra/clusters/{cluster_id}` | `infra-clusters` | `backend.app.api.infra_clusters:get_cluster` |
+| `POST` | `/v1/infra/clusters/{cluster_id}/project` | `infra-clusters` | `backend.app.api.infra_clusters:project_cluster` |
+| `POST` | `/v1/infra/from-campaign/{campaign_id}` | `infra-clusters` | `backend.app.api.infra_clusters:build_from_campaign` |
+| `GET` | `/v1/infra/ip/{ip}` | `infra` | `backend.app.api.infra:ip_context` |
+| `POST` | `/v1/infra/rebuild` | `infra-clusters` | `backend.app.api.infra_clusters:rebuild_clusters` |
+| `GET` | `/v1/integrations/connectors` | `integrations` | `backend.app.api.integrations:get_connectors` |
+| `POST` | `/v1/integrations/{connector_key}/batch` | `integrations` | `backend.app.api.integrations:ingest_connector_batch` |
+| `POST` | `/v1/integrations/{connector_key}/event` | `integrations` | `backend.app.api.integrations:ingest_connector_event` |
+| `POST` | `/v1/legal/approval/payload` | `legal` | `backend.app.api.legal:approval_payload` |
+| `POST` | `/v1/legal/authorize` | `legal` | `backend.app.api.legal:authorize_operation` |
+| `GET` | `/v1/legal/evidence/bundles` | `legal` | `backend.app.api.legal:list_evidence_bundles` |
+| `GET` | `/v1/legal/evidence/bundles/{bundle_id}` | `legal` | `backend.app.api.legal:get_evidence_bundle` |
+| `GET` | `/v1/legal/evidence/bundles/{bundle_id}/anchor` | `legal` | `backend.app.api.legal:get_evidence_anchor` |
+| `POST` | `/v1/legal/evidence/bundles/{bundle_id}/anchor/refresh` | `legal` | `backend.app.api.legal:refresh_evidence_anchor` |
+| `POST` | `/v1/legal/evidence/export` | `legal` | `backend.app.api.legal:export_legal_evidence` |
+| `GET` | `/v1/legal/grants` | `legal` | `backend.app.api.legal:list_legal_grants` |
+| `POST` | `/v1/legal/grants/verify` | `legal` | `backend.app.api.legal:verify_grant` |
+| `GET` | `/v1/legal/orders` | `legal` | `backend.app.api.legal:list_legal_orders` |
+| `POST` | `/v1/legal/orders` | `legal` | `backend.app.api.legal:create_legal_order` |
+| `POST` | `/v1/legal/orders/{order_id}/revoke` | `legal` | `backend.app.api.legal:revoke_legal_order` |
+| `POST` | `/v1/legal/scan-plan` | `legal` | `backend.app.api.legal:build_scan_plan` |
+| `GET` | `/v1/metrics` | `metrics` | `backend.app.api.metrics:metrics` |
+| `GET` | `/v1/mitigations` | `mitigations` | `backend.app.api.mitigations:list_mitigations` |
+| `GET` | `/v1/mitigations/export` | `mitigations` | `backend.app.api.mitigations:export_iocs` |
+| `GET` | `/v1/stix/campaign/{campaign_id}` | `stix` | `backend.app.api.stix:stix_campaign_alias` |
+| `GET` | `/v1/stix/case/{campaign_id}` | `stix` | `backend.app.api.stix:stix_case_alias` |
+| `GET` | `/v1/stix/from-campaign/{campaign_id}` | `stix` | `backend.app.api.stix:stix_from_campaign` |
+| `GET` | `/v1/stix/from-case/{campaign_id}` | `stix` | `backend.app.api.stix:stix_from_case` |
+| `GET` | `/v1/stix/mitigations` | `stix` | `backend.app.api.stix:stix_from_mitigations` |

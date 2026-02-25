@@ -10,7 +10,6 @@ from app.ledger.models import Base
 from app.ingestion.router import router as ingest_router
 from app.api.events import router as events_router
 from app.api.graph import router as graph_router
-from app.api.timeline import router as timeline_router
 from app.api.campaigns import router as campaigns_router
 from app.api.infra_clusters import router as infra_clusters_router
 from app.api.ddos import router as ddos_router
@@ -117,7 +116,6 @@ app.include_router(auth_router)
 app.include_router(ingest_router, dependencies=[Depends(require_api_key)])
 app.include_router(events_router, dependencies=[Depends(require_section_access), Depends(require_scope("events.read"))])
 app.include_router(graph_router, dependencies=[Depends(require_central_access), Depends(require_scope("graph.read"))])
-app.include_router(timeline_router, dependencies=[Depends(require_section_access), Depends(require_scope("events.read"))])
 app.include_router(campaigns_router, dependencies=[Depends(require_section_access), Depends(require_scope("campaigns.read"))])
 app.include_router(infra_clusters_router, dependencies=[Depends(require_section_access), Depends(require_scope("infra.read"))])
 app.include_router(ddos_router, dependencies=[Depends(require_section_access), Depends(require_scope("ddos.read"))])

@@ -301,5 +301,7 @@ This checks:
 
 - Quick start + commands: `docs/RUNBOOK.md`
 - Cloud backend deployment: `docs/RENDER_BACKEND_ONLY.md`
+- API consumer examples: `docs/API_CONSUMER_GUIDE.md`
+- Generated endpoint inventory: `docs/API_ENDPOINT_INVENTORY.md`
 - Delivery tracker: `docs/PHASES_90_TRACKER.md`
 - This backend reference: `docs/BACKEND_DOCUMENTATION.md`

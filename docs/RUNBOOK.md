@@ -10,6 +10,9 @@ Backend architecture and security reference:
 API examples for frontend/integration consumers:
 `docs/API_CONSUMER_GUIDE.md`
 
+Generated endpoint inventory:
+`docs/API_ENDPOINT_INVENTORY.md`
+
 ## 1) Start the stack
 
 ```

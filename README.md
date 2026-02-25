@@ -66,6 +66,11 @@ Frontend/integration request examples:
 docs/API_CONSUMER_GUIDE.md
 ```
 
+Generated endpoint inventory:
+```
+docs/API_ENDPOINT_INVENTORY.md
+```
+
 Backend-only cloud deployment (skip ML runtime in API service):
 ```
 docs/RENDER_BACKEND_ONLY.md
