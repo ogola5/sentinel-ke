@@ -3,12 +3,14 @@ x-backend-build-lite: &backend-build-lite
   args:
     INSTALL_DEV: "1"
     INSTALL_ML: ${INSTALL_ML_IN_BACKEND:-0}
+    INSTALL_ALL_REQUIREMENTS: ${INSTALL_ALL_REQUIREMENTS:-0}
 
 x-backend-build-ml: &backend-build-ml
   context: ./backend
   args:
     INSTALL_DEV: "1"
     INSTALL_ML: "1"
+    INSTALL_ALL_REQUIREMENTS: ${INSTALL_ALL_REQUIREMENTS:-0}
 
 services:
 

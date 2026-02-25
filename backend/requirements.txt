@@ -1,2 +1,7 @@
--r requirements-runtime.txt
+# Full backend dependency bundle for one-shot installs/builds.
+# Includes:
+# - runtime API/worker dependencies (via requirements-dev -> requirements-runtime)
+# - dev/test/tooling dependencies
+# - ML dependencies (torch CPU wheel)
+-r requirements-dev.txt
 -r requirements-ml.txt

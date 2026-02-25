@@ -8,26 +8,30 @@ ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_RETRIES=25 \
     PIP_NO_CACHE_DIR=0
 
-ARG INSTALL_ML=0
-# Heavy ML dependencies are optional and installed in their own cacheable layer.
-COPY requirements-ml.txt .
-RUN --mount=type=cache,target=/root/.cache/pip \
-    if [ "$INSTALL_ML" = "1" ]; then \
-        pip install --retries 25 --timeout 600 -r requirements-ml.txt; \
-    else \
-        echo "Skipping ML dependencies (INSTALL_ML=$INSTALL_ML)"; \
-    fi
-
-COPY requirements-runtime.txt .
 COPY requirements.txt .
+COPY requirements-runtime.txt .
 COPY requirements-dev.txt .
+COPY requirements-ml.txt .
 
+ARG INSTALL_ML=0
 ARG INSTALL_DEV=0
+ARG INSTALL_ALL_REQUIREMENTS=0
+
 RUN --mount=type=cache,target=/root/.cache/pip \
-    if [ "$INSTALL_DEV" = "1" ]; then \
-        pip install --retries 25 --timeout 600 -r requirements-dev.txt; \
+    if [ "$INSTALL_ALL_REQUIREMENTS" = "1" ]; then \
+        echo "Installing full backend dependency bundle from requirements.txt"; \
+        pip install --retries 25 --timeout 600 -r requirements.txt; \
     else \
-        pip install --retries 25 --timeout 600 -r requirements-runtime.txt; \
+        if [ "$INSTALL_ML" = "1" ]; then \
+            pip install --retries 25 --timeout 600 -r requirements-ml.txt; \
+        else \
+            echo "Skipping ML dependencies (INSTALL_ML=$INSTALL_ML)"; \
+        fi; \
+        if [ "$INSTALL_DEV" = "1" ]; then \
+            pip install --retries 25 --timeout 600 -r requirements-dev.txt; \
+        else \
+            pip install --retries 25 --timeout 600 -r requirements-runtime.txt; \
+        fi; \
     fi
 
 COPY app app
