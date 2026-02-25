@@ -28,6 +28,23 @@ export default function Campaigns({
   onOpenInfra,
   onOpenEvidence,
 }: CampaignsProps) {
+  if (campaigns.length === 0) {
+    return (
+      <section className="screen">
+        <div className="screen-header">
+          <div>
+            <p className="eyebrow">S4</p>
+            <h2>Campaign Console</h2>
+            <p className="subtle">Coordinated operations with confidence growth.</p>
+          </div>
+        </div>
+        <div className="panel">
+          <p className="muted">No campaigns found in backend storage.</p>
+        </div>
+      </section>
+    );
+  }
+
   const selected = campaigns.find((campaign) => campaign.id === selectedId) ?? campaigns[0];
 
   return (

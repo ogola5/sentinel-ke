@@ -14,62 +14,42 @@ const communityColors: Record<string, string> = {
   support: "var(--ink-muted)",
 };
 
-const extraNodes: GraphNode[] = [
-  { id: "ip-rot-1", label: "45.83.19.33", type: "IP", x: 360, y: 280, community: "infra" },
-  { id: "ip-rot-2", label: "45.83.21.55", type: "IP", x: 520, y: 280, community: "infra" },
-];
-
-const extraEdges: GraphEdge[] = [
-  {
-    id: "edge-9",
-    source: "ip-rot-1",
-    target: "asn-9009",
-    evidence: [
-      { event_hash: "ev_2c8bde1", source: "infra", detail: "Rotation interval 09:06" },
-    ],
-    first_seen: "09:06",
-    last_seen: "09:08",
-    count: 312,
-    sources: ["infra"],
-  },
-  {
-    id: "edge-10",
-    source: "ip-rot-2",
-    target: "asn-9009",
-    evidence: [
-      { event_hash: "ev_3b8f11d", source: "telco", detail: "Rotation interval 09:08" },
-    ],
-    first_seen: "09:08",
-    last_seen: "09:10",
-    count: 288,
-    sources: ["telco"],
-  },
-];
-
-const pathEdges = new Set(["edge-1", "edge-2", "edge-3", "edge-5"]);
-
 export default function GraphExplorer({
   graph,
   onSelectNode,
   onSelectEdge,
 }: GraphExplorerProps) {
-  const [expanded, setExpanded] = useState(false);
   const [pinned, setPinned] = useState<GraphNode[]>([]);
   const [selectedEdge, setSelectedEdge] = useState<GraphEdge | null>(null);
   const [showPath, setShowPath] = useState(false);
   const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null);
 
-  const data = useMemo<GraphData>(() => {
-    if (!expanded) return graph;
-    return {
-      nodes: [...graph.nodes, ...extraNodes],
-      edges: [...graph.edges, ...extraEdges],
-    };
-  }, [expanded, graph]);
+  const data = graph;
+  const pathEdges = useMemo(
+    () => new Set(data.edges.slice(0, Math.min(4, data.edges.length)).map((edge) => edge.id)),
+    [data.edges],
+  );
 
   const nodeById = useMemo(() => {
     return new Map(data.nodes.map((node) => [node.id, node]));
   }, [data.nodes]);
+
+  if (graph.nodes.length === 0) {
+    return (
+      <section className="screen">
+        <div className="screen-header">
+          <div>
+            <p className="eyebrow">S3</p>
+            <h2>Threat Graph Explorer</h2>
+            <p className="subtle">Entity relationships with evidence-grade edges.</p>
+          </div>
+        </div>
+        <div className="panel">
+          <p className="muted">No graph neighborhood data is available from backend yet.</p>
+        </div>
+      </section>
+    );
+  }
 
   return (
     <section className="screen">
@@ -80,11 +60,8 @@ export default function GraphExplorer({
           <p className="subtle">Entity relationships with evidence-grade edges.</p>
         </div>
         <div className="chip-row">
-          <button className="ghost" type="button" onClick={() => setExpanded((prev) => !prev)}>
-            {expanded ? "Collapse neighbors" : "Expand neighbors"}
-          </button>
           <button className="ghost" type="button" onClick={() => setShowPath((prev) => !prev)}>
-            {showPath ? "Hide shortest path" : "Highlight shortest path"}
+            {showPath ? "Hide highest-volume links" : "Highlight highest-volume links"}
           </button>
         </div>
       </div>
@@ -181,8 +158,7 @@ export default function GraphExplorer({
             </div>
           ) : (
             <p className="muted">
-              Evidence paths reference event_hash values from the live feed. Pins allow side-by-side
-              comparison in the inspector.
+              Evidence paths reference `event_hash` values returned by backend APIs.
             </p>
           )}
         </div>

@@ -113,6 +113,16 @@
   padding: 24px 28px 100px;
 }
 
+.connection-panel {
+  margin: 16px 28px 0;
+}
+
+.connection-panel label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
 .primary {
   display: flex;
   flex-direction: column;

@@ -1,4 +1,18 @@
-const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? "").replace(/\/$/, "");
+const resolveApiBase = (): string => {
+  const fromEnv = String(import.meta.env.VITE_API_BASE_URL ?? "").trim();
+  if (fromEnv) {
+    return fromEnv.replace(/\/$/, "");
+  }
+  if (typeof window !== "undefined") {
+    const host = window.location.hostname;
+    if (host === "localhost" || host === "127.0.0.1") {
+      return "http://localhost:8000";
+    }
+  }
+  return "";
+};
+
+const API_BASE = resolveApiBase();
 
 const withBase = (path: string) => `${API_BASE}${path}`;
 

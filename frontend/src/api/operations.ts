@@ -67,7 +67,7 @@ const toCounts = (input: Record<string, unknown> | undefined): Record<string, nu
   return Object.fromEntries(Object.entries(input).map(([k, v]) => [k, asNumber(v, 0)]));
 };
 
-const fallbackSnapshot: OperationsSnapshot = {
+export const emptyOperationsSnapshot: OperationsSnapshot = {
   metrics: { events: 0, graphDeltas: 0, anomalies: 0, mitigations: 0 },
   anomalies: [],
   mitigations: [],
@@ -87,11 +87,16 @@ const fallbackSnapshot: OperationsSnapshot = {
   },
 };
 
-const safeFetch = async <T>(fn: () => Promise<T>, fallback: T): Promise<T> => {
+type ApiSliceResult<T> = {
+  ok: boolean;
+  value: T;
+};
+
+const safeFetch = async <T>(fn: () => Promise<T>, fallback: T): Promise<ApiSliceResult<T>> => {
   try {
-    return await fn();
+    return { ok: true, value: await fn() };
   } catch {
-    return fallback;
+    return { ok: false, value: fallback };
   }
 };
 
@@ -130,7 +135,24 @@ export async function fetchOperationsSnapshot(): Promise<OperationsSnapshot> {
     safeFetch(() => apiFetchJson<LeakageSummaryResponse>(endpoints.economyLeakageSummary(30)), {}),
   ]);
 
-  const predictionItems = predictionsRes.items ?? [];
+  const slices = [
+    metricsRes,
+    anomaliesRes,
+    mitigationsRes,
+    iocExportRes,
+    predictionsRes,
+    economySignalsRes,
+    procurementRes,
+    guardrailRes,
+    integrityRes,
+    leakageAlertsRes,
+    leakageSummaryRes,
+  ];
+  if (slices.every((slice) => !slice.ok)) {
+    throw new Error("operations_endpoints_unavailable");
+  }
+
+  const predictionItems = predictionsRes.value.items ?? [];
   const explanations = await Promise.all(
     predictionItems.slice(0, 8).map(async (item) => {
       const id = asString(item.id, "");
@@ -141,7 +163,7 @@ export async function fetchOperationsSnapshot(): Promise<OperationsSnapshot> {
       );
       return {
         id,
-        evidenceCount: Array.isArray(explanation.evidence_hashes) ? explanation.evidence_hashes.length : 0,
+        evidenceCount: Array.isArray(explanation.value.evidence_hashes) ? explanation.value.evidence_hashes.length : 0,
       };
     }),
   );
@@ -149,12 +171,12 @@ export async function fetchOperationsSnapshot(): Promise<OperationsSnapshot> {
 
   return {
     metrics: {
-      events: asNumber(metricsRes.events, 0),
-      graphDeltas: asNumber(metricsRes.graph_deltas, 0),
-      anomalies: asNumber(metricsRes.anomalies, 0),
-      mitigations: asNumber(metricsRes.mitigations, 0),
+      events: asNumber(metricsRes.value.events, 0),
+      graphDeltas: asNumber(metricsRes.value.graph_deltas, 0),
+      anomalies: asNumber(metricsRes.value.anomalies, 0),
+      mitigations: asNumber(metricsRes.value.mitigations, 0),
     },
-    anomalies: (anomaliesRes.items ?? []).map((item) => ({
+    anomalies: (anomaliesRes.value.items ?? []).map((item) => ({
       id: asString(item.id, ""),
       serviceId: asString(item.service_id, "unknown"),
       endpoint: asString(item.endpoint, "n/a"),
@@ -162,7 +184,7 @@ export async function fetchOperationsSnapshot(): Promise<OperationsSnapshot> {
       reasonCodes: asStringArray(item.reason_codes),
       windowEnd: toClock(item.window_end),
     })),
-    mitigations: (mitigationsRes.items ?? []).map((item) => ({
+    mitigations: (mitigationsRes.value.items ?? []).map((item) => ({
       id: asString(item.id, ""),
       kind: asString(item.kind, "mitigation"),
       refId: asString(item.ref_id, "n/a"),
@@ -170,12 +192,12 @@ export async function fetchOperationsSnapshot(): Promise<OperationsSnapshot> {
       createdAt: toClock(item.created_at),
     })),
     iocExport: {
-      records: asNumber(iocExportRes.count, 0),
-      actions: Array.isArray(iocExportRes.actions) ? iocExportRes.actions.length : 0,
-      ips: Array.isArray(iocExportRes.iocs?.ips) ? iocExportRes.iocs?.ips.length : 0,
-      domains: Array.isArray(iocExportRes.iocs?.domains) ? iocExportRes.iocs?.domains.length : 0,
-      providers: Array.isArray(iocExportRes.iocs?.providers) ? iocExportRes.iocs?.providers.length : 0,
-      endpoints: Array.isArray(iocExportRes.iocs?.endpoints) ? iocExportRes.iocs?.endpoints.length : 0,
+      records: asNumber(iocExportRes.value.count, 0),
+      actions: Array.isArray(iocExportRes.value.actions) ? iocExportRes.value.actions.length : 0,
+      ips: Array.isArray(iocExportRes.value.iocs?.ips) ? iocExportRes.value.iocs?.ips.length : 0,
+      domains: Array.isArray(iocExportRes.value.iocs?.domains) ? iocExportRes.value.iocs?.domains.length : 0,
+      providers: Array.isArray(iocExportRes.value.iocs?.providers) ? iocExportRes.value.iocs?.providers.length : 0,
+      endpoints: Array.isArray(iocExportRes.value.iocs?.endpoints) ? iocExportRes.value.iocs?.endpoints.length : 0,
     },
     predictions: predictionItems.map((item) => {
       const id = asString(item.id, "");
@@ -188,7 +210,7 @@ export async function fetchOperationsSnapshot(): Promise<OperationsSnapshot> {
         evidenceCount: evidenceMap.get(id) ?? 0,
       };
     }),
-    economySignals: (economySignalsRes.items ?? []).map((item) => ({
+    economySignals: (economySignalsRes.value.items ?? []).map((item) => ({
       id: asString(item.id, ""),
       signalType: asString(item.signal_type, "signal"),
       agency: asString(item.agency, "unknown"),
@@ -196,7 +218,7 @@ export async function fetchOperationsSnapshot(): Promise<OperationsSnapshot> {
       severity: asString(item.severity, "low"),
       score: asNumber(item.score, 0),
     })),
-    procurementAnomalies: (procurementRes.items ?? []).map((item) => ({
+    procurementAnomalies: (procurementRes.value.items ?? []).map((item) => ({
       id: asString(item.id, ""),
       tenderId: asString(item.tender_id, "n/a"),
       vendorId: asString(item.vendor_id, "n/a"),
@@ -204,7 +226,7 @@ export async function fetchOperationsSnapshot(): Promise<OperationsSnapshot> {
       severity: asString(item.severity, "low"),
       score: asNumber(item.score, 0),
     })),
-    guardrailDecisions: (guardrailRes.items ?? []).map((item) => ({
+    guardrailDecisions: (guardrailRes.value.items ?? []).map((item) => ({
       id: asString(item.id, ""),
       tenderId: asString(item.tender_id, "n/a"),
       vendorId: asString(item.vendor_id, "n/a"),
@@ -212,7 +234,7 @@ export async function fetchOperationsSnapshot(): Promise<OperationsSnapshot> {
       severity: asString(item.severity, "low"),
       score: asNumber(item.score, 0),
     })),
-    integrityAlerts: (integrityRes.items ?? []).map((item) => ({
+    integrityAlerts: (integrityRes.value.items ?? []).map((item) => ({
       id: asString(item.id, ""),
       sourceSystem: asString(item.source_system, "unknown"),
       recordType: asString(item.record_type, "record"),
@@ -221,7 +243,7 @@ export async function fetchOperationsSnapshot(): Promise<OperationsSnapshot> {
       status: asString(item.status, "open"),
       confidence: asNumber(item.confidence, 0),
     })),
-    leakageAlerts: (leakageAlertsRes.items ?? []).map((item) => ({
+    leakageAlerts: (leakageAlertsRes.value.items ?? []).map((item) => ({
       id: asString(item.id, ""),
       detectorType: asString(item.detector_type, "detector"),
       agency: asString(item.agency, "unknown"),
@@ -229,20 +251,19 @@ export async function fetchOperationsSnapshot(): Promise<OperationsSnapshot> {
       severity: asString(item.severity, "low"),
       score: asNumber(item.score, 0),
     })),
-    leakageSummary: mapLeakageSummary(leakageSummaryRes),
+    leakageSummary: mapLeakageSummary(leakageSummaryRes.value),
   };
 }
 
 export async function runLeakageDetection(windowDays = 30): Promise<OperationsSnapshot["leakageSummary"]> {
-  await safeFetch(
-    () => apiFetchJson<Record<string, unknown>>(endpoints.economyLeakageRun(windowDays), { method: "POST" }),
-    {},
+  await apiFetchJson<Record<string, unknown>>(
+    endpoints.economyLeakageRun(windowDays),
+    { method: "POST" },
+    { requireLegalGrantToken: true },
   );
   const summary = await safeFetch(
     () => apiFetchJson<LeakageSummaryResponse>(endpoints.economyLeakageSummary(windowDays)),
     {},
   );
-  return mapLeakageSummary(summary);
+  return mapLeakageSummary(summary.value);
 }
-
-export const operationsFallbackSnapshot = fallbackSnapshot;

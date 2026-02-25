@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import "../App.css";
 import LiveFeed from "../screens/LiveFeed";
 import Timeline from "../screens/Timeline";
@@ -13,28 +13,24 @@ import {
   fetchCampaignEvidenceForDrawer,
 } from "../api/backend";
 import {
+  emptyOperationsSnapshot,
   fetchOperationsSnapshot,
   runLeakageDetection,
 } from "../api/operations";
 import { endpoints } from "../api/endpoints";
 import {
-  campaigns as demoCampaigns,
-  cases as demoCases,
-  entities as demoEntities,
-  events as demoEvents,
-  graphData,
-  indicators as demoIndicators,
-  infraClusters as demoInfraClusters,
-  operationsSnapshotDemo,
-  sourceOptions,
-  timelineCounts as demoTimelineCounts,
-} from "../data/demoData";
+  apiFetchJson,
+  loadClientCredentials,
+  saveClientCredentials,
+  type ClientCredentials,
+} from "../api/client";
 import type {
   Campaign,
   CasePacket,
   EntityProfile,
   EvidenceItem,
   EventRecord,
+  GraphData,
   GraphEdge,
   GraphNode,
   InfraCluster,
@@ -69,46 +65,57 @@ const timeWindows = [
   { id: "30d", label: "30d" },
 ] as const;
 
+const sourceOptions: SourceType[] = ["telco", "bank", "gov", "osint", "infra"];
 const sourceLabel = (source: SourceType) => source.toUpperCase();
+
+const emptyGraph: GraphData = { nodes: [], edges: [] };
 
 export default function App() {
   const [backendStatus, setBackendStatus] = useState<"connected" | "degraded" | "offline">("offline");
-  const [backendLabel, setBackendLabel] = useState("Demo mode");
+  const [backendLabel, setBackendLabel] = useState("Waiting for backend sync");
+  const [syncError, setSyncError] = useState("");
+  const [actionStatus, setActionStatus] = useState("");
   const [isSyncing, setIsSyncing] = useState(false);
+  const [syncNonce, setSyncNonce] = useState(0);
 
-  const [eventsData, setEventsData] = useState<EventRecord[]>(demoEvents);
-  const [timelineData, setTimelineData] = useState<TimelinePoint[]>(demoTimelineCounts);
-  const [indicatorsData, setIndicatorsData] = useState<ServiceIndicator[]>(demoIndicators);
-  const [campaignsData, setCampaignsData] = useState<Campaign[]>(demoCampaigns);
-  const [infraClustersData, setInfraClustersData] = useState<InfraCluster[]>(demoInfraClusters);
-  const [entitiesData, setEntitiesData] = useState<EntityProfile[]>(demoEntities);
-  const [casesData, setCasesData] = useState<CasePacket[]>(demoCases);
-  const [operationsData, setOperationsData] = useState<OperationsSnapshot>(operationsSnapshotDemo);
+  const [eventsData, setEventsData] = useState<EventRecord[]>([]);
+  const [timelineData, setTimelineData] = useState<TimelinePoint[]>([]);
+  const [indicatorsData, setIndicatorsData] = useState<ServiceIndicator[]>([]);
+  const [campaignsData, setCampaignsData] = useState<Campaign[]>([]);
+  const [infraClustersData, setInfraClustersData] = useState<InfraCluster[]>([]);
+  const [entitiesData, setEntitiesData] = useState<EntityProfile[]>([]);
+  const [graphData, setGraphData] = useState<GraphData>(emptyGraph);
+  const [casesData, setCasesData] = useState<CasePacket[]>([]);
+  const [operationsData, setOperationsData] = useState<OperationsSnapshot>(emptyOperationsSnapshot);
   const [leakageActionLabel, setLeakageActionLabel] = useState("Run leakage detector");
 
   const [activeScreen, setActiveScreen] = useState<ScreenId>("live");
   const [timeWindow, setTimeWindow] = useState("1h");
-  const [sourceFilters, setSourceFilters] = useState<Record<SourceType, boolean>>(() => {
-    return sourceOptions.reduce((acc, source) => {
-      acc[source] = true;
-      return acc;
-    }, {} as Record<SourceType, boolean>);
-  });
-  const [selectedEntity, setSelectedEntity] = useState<EntityProfile>(demoEntities[0]);
-  const [selectedCampaignId, setSelectedCampaignId] = useState(demoCampaigns[0]?.id ?? "");
-  const [selectedClusterId, setSelectedClusterId] = useState(demoInfraClusters[0]?.id ?? "");
-  const [selectedServiceId, setSelectedServiceId] = useState(demoIndicators[0]?.serviceId ?? "");
-  const [selectedCaseId, setSelectedCaseId] = useState(demoCases[0]?.id ?? "");
+  const [sourceFilters, setSourceFilters] = useState<Record<SourceType, boolean>>(() =>
+    sourceOptions.reduce(
+      (acc, source) => {
+        acc[source] = true;
+        return acc;
+      },
+      {} as Record<SourceType, boolean>,
+    ),
+  );
+  const [selectedEntity, setSelectedEntity] = useState<EntityProfile | null>(null);
+  const [selectedCampaignId, setSelectedCampaignId] = useState("");
+  const [selectedClusterId, setSelectedClusterId] = useState("");
+  const [selectedServiceId, setSelectedServiceId] = useState("");
+  const [selectedCaseId, setSelectedCaseId] = useState("");
   const [evidence, setEvidence] = useState<EvidenceState>({ open: false, title: "", items: [] });
-  const [demoOpen, setDemoOpen] = useState(false);
-  const [demoStatus, setDemoStatus] = useState("Idle");
   const [entityQuery, setEntityQuery] = useState("");
+  const [connectionPanelOpen, setConnectionPanelOpen] = useState(false);
+  const [credentials, setCredentials] = useState<ClientCredentials>(() => loadClientCredentials());
 
   useEffect(() => {
     let cancelled = false;
 
     const syncWithBackend = async () => {
       setIsSyncing(true);
+      setSyncError("");
       try {
         const [snapshot, operationsSnapshot] = await Promise.all([
           fetchBackendSnapshot(),
@@ -116,21 +123,24 @@ export default function App() {
         ]);
         if (cancelled) return;
 
-        if (snapshot.events.length > 0) setEventsData(snapshot.events);
-        if (snapshot.timelineCounts.length > 0) setTimelineData(snapshot.timelineCounts);
-        if (snapshot.indicators.length > 0) setIndicatorsData(snapshot.indicators);
-        if (snapshot.campaigns.length > 0) setCampaignsData(snapshot.campaigns);
-        if (snapshot.infraClusters.length > 0) setInfraClustersData(snapshot.infraClusters);
-        if (snapshot.entities.length > 0) setEntitiesData(snapshot.entities);
+        setEventsData(snapshot.events);
+        setTimelineData(snapshot.timelineCounts);
+        setIndicatorsData(snapshot.indicators);
+        setCampaignsData(snapshot.campaigns);
+        setInfraClustersData(snapshot.infraClusters);
+        setEntitiesData(snapshot.entities);
+        setGraphData(snapshot.graph);
         setOperationsData(operationsSnapshot);
 
         setBackendStatus(snapshot.mode === "live" ? "connected" : "degraded");
-        setBackendLabel(snapshot.connectionLabel);
-      } catch {
+        const warnings = snapshot.warnings.length > 0 ? ` / warnings: ${snapshot.warnings.join(", ")}` : "";
+        setBackendLabel(`${snapshot.connectionLabel}${warnings}`);
+      } catch (error) {
         if (cancelled) return;
+        const message = error instanceof Error ? error.message : "backend_unreachable";
         setBackendStatus("offline");
-        setBackendLabel("Backend unavailable, using demo data");
-        setOperationsData(operationsSnapshotDemo);
+        setBackendLabel("Backend unavailable");
+        setSyncError(message);
       } finally {
         if (!cancelled) setIsSyncing(false);
       }
@@ -145,45 +155,71 @@ export default function App() {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, []);
+  }, [syncNonce]);
 
   useEffect(() => {
-    if (campaignsData.length === 0) return;
+    if (campaignsData.length === 0) {
+      setSelectedCampaignId("");
+      return;
+    }
     if (!campaignsData.find((item) => item.id === selectedCampaignId)) {
       setSelectedCampaignId(campaignsData[0].id);
     }
   }, [campaignsData, selectedCampaignId]);
 
   useEffect(() => {
-    if (infraClustersData.length === 0) return;
+    if (infraClustersData.length === 0) {
+      setSelectedClusterId("");
+      return;
+    }
     if (!infraClustersData.find((item) => item.id === selectedClusterId)) {
       setSelectedClusterId(infraClustersData[0].id);
     }
   }, [infraClustersData, selectedClusterId]);
 
   useEffect(() => {
-    if (indicatorsData.length === 0) return;
+    if (indicatorsData.length === 0) {
+      setSelectedServiceId("");
+      return;
+    }
     if (!indicatorsData.find((item) => item.serviceId === selectedServiceId)) {
       setSelectedServiceId(indicatorsData[0].serviceId);
     }
   }, [indicatorsData, selectedServiceId]);
 
   useEffect(() => {
-    if (entitiesData.length === 0) return;
-    if (!entitiesData.find((item) => item.id === selectedEntity.id)) {
+    if (entitiesData.length === 0) {
+      setSelectedEntity(null);
+      return;
+    }
+    if (!selectedEntity || !entitiesData.find((item) => item.id === selectedEntity.id)) {
       setSelectedEntity(entitiesData[0]);
     }
-  }, [entitiesData, selectedEntity.id]);
+  }, [entitiesData, selectedEntity]);
 
   useEffect(() => {
-    if (casesData.length === 0) return;
+    if (casesData.length === 0) {
+      setSelectedCaseId("");
+      return;
+    }
     if (!casesData.find((item) => item.id === selectedCaseId)) {
       setSelectedCaseId(casesData[0].id);
     }
   }, [casesData, selectedCaseId]);
 
-  const activeCase = casesData.find((item) => item.id === selectedCaseId) ?? casesData[0];
-  const selectedCampaign = campaignsData.find((item) => item.id === selectedCampaignId) ?? campaignsData[0];
+  const activeCase = casesData.find((item) => item.id === selectedCaseId);
+  const selectedCampaign = campaignsData.find((item) => item.id === selectedCampaignId);
+
+  const timelineEvidenceRefs = useMemo(() => {
+    if (!selectedServiceId) return [];
+    return Array.from(
+      new Set(
+        eventsData
+          .filter((item) => item.service_id === selectedServiceId)
+          .map((item) => item.event_hash),
+      ),
+    ).slice(0, 12);
+  }, [eventsData, selectedServiceId]);
 
   const toggleSource = (source: SourceType) => {
     setSourceFilters((prev) => ({ ...prev, [source]: !prev[source] }));
@@ -198,13 +234,13 @@ export default function App() {
   };
 
   const handleSelectEvent = (event: EventRecord) => {
-    const entity = entitiesData.find((item) =>
-      item.label.toLowerCase().includes(event.service_id.toLowerCase()) ||
-      item.label.toLowerCase().includes(event.endpoint.toLowerCase())
+    setSelectedServiceId(event.service_id);
+    const entity = entitiesData.find(
+      (item) =>
+        item.label.toLowerCase().includes(event.service_id.toLowerCase()) ||
+        item.label.toLowerCase().includes(event.endpoint.toLowerCase()),
     );
-    if (entity) {
-      setSelectedEntity(entity);
-    }
+    if (entity) setSelectedEntity(entity);
   };
 
   const handleShowGraph = (event: EventRecord) => {
@@ -218,24 +254,18 @@ export default function App() {
   };
 
   const handleOpenCampaign = () => {
-    if (campaignsData.length > 0) {
-      setSelectedCampaignId(campaignsData[0].id);
-    }
+    if (campaignsData.length > 0) setSelectedCampaignId(campaignsData[0].id);
     setActiveScreen("campaigns");
   };
 
   const handleShowInfra = () => {
-    if (infraClustersData.length > 0) {
-      setSelectedClusterId(infraClustersData[0].id);
-    }
+    if (infraClustersData.length > 0) setSelectedClusterId(infraClustersData[0].id);
     setActiveScreen("infra");
   };
 
   const handleGraphNode = (node: GraphNode) => {
     const entity = entitiesData.find((item) => item.label.toLowerCase().includes(node.label.toLowerCase()));
-    if (entity) {
-      setSelectedEntity(entity);
-    }
+    if (entity) setSelectedEntity(entity);
   };
 
   const handleGraphEdge = (edge: GraphEdge) => {
@@ -246,19 +276,19 @@ export default function App() {
     });
   };
 
-  const handleScenario = async (path: string, method: "POST" | "GET" = "POST") => {
-    setDemoStatus(`${method} ${path}`);
+  const triggerBackendAction = async (path: string, method: "POST" | "GET" = "POST") => {
+    setActionStatus(`${method} ${path}`);
     try {
-      await fetch(path, { method });
-      setDemoStatus(`Completed ${method} ${path}`);
-    } catch {
-      setDemoStatus(`Failed ${method} ${path}`);
+      await apiFetchJson<Record<string, unknown>>(path, { method });
+      setActionStatus(`completed ${method} ${path}`);
+    } catch (error) {
+      setActionStatus(`failed ${method} ${path}: ${error instanceof Error ? error.message : "request_failed"}`);
     }
   };
 
   const handleGenerateCase = async () => {
     if (!selectedCampaignId) return;
-    setDemoStatus(`POST ${endpoints.caseFromCampaign(selectedCampaignId)}`);
+    setActionStatus(`POST ${endpoints.caseFromCampaign(selectedCampaignId)}`);
     try {
       const packet = await createCasePacketFromCampaign(selectedCampaignId);
       setCasesData((prev) => {
@@ -267,12 +297,9 @@ export default function App() {
       });
       setSelectedCaseId(packet.id);
       setActiveScreen("cases");
-      setDemoStatus(`Case generated ${packet.id}`);
-    } catch {
-      if (casesData.length > 0) {
-        setSelectedCaseId(casesData[0].id);
-      }
-      setDemoStatus("Case generation failed");
+      setActionStatus(`case generated ${packet.id}`);
+    } catch (error) {
+      setActionStatus(`case generation failed: ${error instanceof Error ? error.message : "request_failed"}`);
       setActiveScreen("cases");
     }
   };
@@ -283,8 +310,10 @@ export default function App() {
       const summary = await runLeakageDetection(30);
       setOperationsData((prev) => ({ ...prev, leakageSummary: summary }));
       setLeakageActionLabel(`Leakage scan complete (${summary.totalAlerts} alerts)`);
-    } catch {
+      setActionStatus("leakage detector completed");
+    } catch (error) {
       setLeakageActionLabel("Leakage detector failed");
+      setActionStatus(`leakage detector failed: ${error instanceof Error ? error.message : "request_failed"}`);
     }
   };
 
@@ -293,9 +322,26 @@ export default function App() {
   const handleSearch = (value: string) => {
     setEntityQuery(value);
     const entity = entitiesData.find((item) => item.label === value);
-    if (entity) {
-      setSelectedEntity(entity);
-    }
+    if (entity) setSelectedEntity(entity);
+  };
+
+  const saveCredentialsAndResync = () => {
+    const persisted = saveClientCredentials(credentials);
+    setCredentials(persisted);
+    setConnectionPanelOpen(false);
+    setSyncNonce((prev) => prev + 1);
+  };
+
+  const clearCredentials = () => {
+    const cleared = saveClientCredentials({
+      apiKey: "",
+      accessToken: "",
+      legalGrantToken: "",
+      legalTarget: "",
+    });
+    setCredentials(cleared);
+    setActionStatus("local client credentials cleared");
+    setSyncNonce((prev) => prev + 1);
   };
 
   return (
@@ -305,10 +351,19 @@ export default function App() {
           <div>
             <p className="eyebrow">Sentinel-Ke</p>
             <h1>National SOC Console</h1>
-            <p className="muted">{backendLabel}{isSyncing ? " / syncing..." : ""}</p>
+            <p className="muted">
+              {backendLabel}
+              {isSyncing ? " / syncing..." : ""}
+            </p>
+            {syncError && <p className="muted">Sync error: {syncError}</p>}
+            {actionStatus && <p className="muted">Action: {actionStatus}</p>}
           </div>
           <div className="status-badge">
-            {backendStatus === "connected" ? "Backend Live" : backendStatus === "degraded" ? "Backend Degraded" : "Demo Mode"}
+            {backendStatus === "connected"
+              ? "Backend Live"
+              : backendStatus === "degraded"
+                ? "Backend Degraded"
+                : "Backend Offline"}
           </div>
         </div>
         <nav className="nav-list">
@@ -378,11 +433,73 @@ export default function App() {
             </div>
           </div>
           <div className="topbar-group align-right">
-            <button className="ghost" type="button" onClick={() => setDemoOpen((prev) => !prev)}>
-              Scenario Controller
-            </button>
+            <div className="chip-row">
+              <button className="ghost" type="button" onClick={() => setConnectionPanelOpen((prev) => !prev)}>
+                API Credentials
+              </button>
+              <button className="ghost" type="button" onClick={() => setSyncNonce((prev) => prev + 1)}>
+                Resync
+              </button>
+            </div>
           </div>
         </header>
+
+        {connectionPanelOpen && (
+          <div className="panel connection-panel">
+            <div className="panel-header">
+              <h3>Client Credentials</h3>
+              <span className="muted">Stored in browser localStorage</span>
+            </div>
+            <div className="grid-two">
+              <label>
+                <p className="label">X-API-Key</p>
+                <input
+                  className="search"
+                  value={credentials.apiKey}
+                  onChange={(event) => setCredentials((prev) => ({ ...prev, apiKey: event.target.value }))}
+                  placeholder="Frontend API key"
+                />
+              </label>
+              <label>
+                <p className="label">Bearer Token</p>
+                <input
+                  className="search"
+                  value={credentials.accessToken}
+                  onChange={(event) => setCredentials((prev) => ({ ...prev, accessToken: event.target.value }))}
+                  placeholder="Access token"
+                />
+              </label>
+            </div>
+            <div className="grid-two">
+              <label>
+                <p className="label">Legal Grant Token</p>
+                <input
+                  className="search"
+                  value={credentials.legalGrantToken}
+                  onChange={(event) => setCredentials((prev) => ({ ...prev, legalGrantToken: event.target.value }))}
+                  placeholder="X-Legal-Grant-Token"
+                />
+              </label>
+              <label>
+                <p className="label">Legal Target</p>
+                <input
+                  className="search"
+                  value={credentials.legalTarget}
+                  onChange={(event) => setCredentials((prev) => ({ ...prev, legalTarget: event.target.value }))}
+                  placeholder="economy:procurement"
+                />
+              </label>
+            </div>
+            <div className="chip-row">
+              <button className="ghost" type="button" onClick={saveCredentialsAndResync}>
+                Save & Resync
+              </button>
+              <button className="ghost" type="button" onClick={clearCredentials}>
+                Clear Stored Credentials
+              </button>
+            </div>
+          </div>
+        )}
 
         <div className="content">
           <main className="primary">
@@ -401,6 +518,7 @@ export default function App() {
               <Timeline
                 indicators={indicatorsData}
                 selectedService={selectedServiceId}
+                evidenceRefs={timelineEvidenceRefs}
                 onSelectService={setSelectedServiceId}
                 onOpenCampaign={handleOpenCampaign}
                 onShowInfra={handleShowInfra}
@@ -422,19 +540,15 @@ export default function App() {
                 onGenerateCase={handleGenerateCase}
                 onOpenInfra={() => setActiveScreen("infra")}
                 onOpenEvidence={async () => {
+                  if (!selectedCampaignId) return;
                   try {
                     const evidenceItems = await fetchCampaignEvidenceForDrawer(selectedCampaignId);
-                    openEvidence(
-                      `Campaign evidence (${selectedCampaignId})`,
-                      evidenceItems.length > 0
-                        ? evidenceItems
-                        : eventsData.slice(0, 3).flatMap((item) => item.evidence.slice(0, 1)),
+                    openEvidence(`Campaign evidence (${selectedCampaignId})`, evidenceItems);
+                  } catch (error) {
+                    setActionStatus(
+                      `campaign evidence failed: ${error instanceof Error ? error.message : "request_failed"}`,
                     );
-                  } catch {
-                    openEvidence(
-                      `Campaign evidence (${selectedCampaignId})`,
-                      eventsData.slice(0, 3).flatMap((item) => item.evidence.slice(0, 1)),
-                    );
+                    openEvidence(`Campaign evidence (${selectedCampaignId})`, []);
                   }
                 }}
               />
@@ -451,8 +565,12 @@ export default function App() {
             {activeScreen === "cases" && (
               <CasePackets
                 packet={activeCase}
-                onExportJson={() => handleScenario(endpoints.caseFromCampaign(selectedCampaignId), "POST")}
-                onExportStix={() => handleScenario(endpoints.stixCaseByCampaign(selectedCampaignId), "GET")}
+                onExportJson={() =>
+                  selectedCampaignId ? triggerBackendAction(endpoints.caseFromCampaign(selectedCampaignId), "POST") : undefined
+                }
+                onExportStix={() =>
+                  selectedCampaignId ? triggerBackendAction(endpoints.stixCaseByCampaign(selectedCampaignId), "GET") : undefined
+                }
               />
             )}
             {activeScreen === "ops" && (
@@ -470,63 +588,62 @@ export default function App() {
                 <h3>Entity Profile</h3>
                 <span className="muted">Right-side inspector</span>
               </div>
-              <div className="profile">
-                <h4>{selectedEntity.label}</h4>
-                <p className="muted">{selectedEntity.type}</p>
-                <div className="detail-grid">
-                  <div>
-                    <p className="label">Risk</p>
-                    <p className="stat">{selectedEntity.risk}</p>
+              {!selectedEntity ? (
+                <p className="muted">No entity selected.</p>
+              ) : (
+                <div className="profile">
+                  <h4>{selectedEntity.label}</h4>
+                  <p className="muted">{selectedEntity.type}</p>
+                  <div className="detail-grid">
+                    <div>
+                      <p className="label">Risk</p>
+                      <p className="stat">{selectedEntity.risk}</p>
+                    </div>
+                    <div>
+                      <p className="label">First seen</p>
+                      <p className="stat">{selectedEntity.first_seen}</p>
+                    </div>
+                    <div>
+                      <p className="label">Last seen</p>
+                      <p className="stat">{selectedEntity.last_seen}</p>
+                    </div>
+                    <div>
+                      <p className="label">Sources</p>
+                      <p className="stat">{selectedEntity.sources.map(sourceLabel).join(" / ")}</p>
+                    </div>
                   </div>
-                  <div>
-                    <p className="label">First seen</p>
-                    <p className="stat">{selectedEntity.first_seen}</p>
-                  </div>
-                  <div>
-                    <p className="label">Last seen</p>
-                    <p className="stat">{selectedEntity.last_seen}</p>
-                  </div>
-                  <div>
-                    <p className="label">Sources</p>
-                    <p className="stat">{selectedEntity.sources.map(sourceLabel).join(" / ")}</p>
+                  <div className="panel-subsection">
+                    <h4>Notes</h4>
+                    <ul>
+                      {selectedEntity.notes.map((note) => (
+                        <li key={note}>{note}</li>
+                      ))}
+                    </ul>
                   </div>
                 </div>
-                <div className="panel-subsection">
-                  <h4>Notes</h4>
-                  <ul>
-                    {selectedEntity.notes.map((note) => (
-                      <li key={note}>{note}</li>
-                    ))}
-                  </ul>
-                </div>
-              </div>
+              )}
             </div>
 
             <div className="panel">
               <div className="panel-header">
                 <h3>Active campaign</h3>
-                <span className="muted">{selectedCampaign.id}</span>
+                <span className="muted">{selectedCampaign?.id ?? "-"}</span>
               </div>
-              <p className="label">{selectedCampaign.name}</p>
-              <p className="muted">{selectedCampaign.type} / {selectedCampaign.status}</p>
-              <button className="ghost" type="button" onClick={() => setActiveScreen("campaigns")}>View campaign</button>
+              {selectedCampaign ? (
+                <>
+                  <p className="label">{selectedCampaign.name}</p>
+                  <p className="muted">
+                    {selectedCampaign.type} / {selectedCampaign.status}
+                  </p>
+                  <button className="ghost" type="button" onClick={() => setActiveScreen("campaigns")}>
+                    View campaign
+                  </button>
+                </>
+              ) : (
+                <p className="muted">No campaign selected.</p>
+              )}
             </div>
           </aside>
-        </div>
-      </div>
-
-      <div className={demoOpen ? "demo-panel open" : "demo-panel"}>
-        <div className="panel-header">
-          <h3>Scenario Controller</h3>
-          <span className="muted">Deterministic demo</span>
-        </div>
-        <p className="muted">Status: {demoStatus}</p>
-        <div className="demo-actions">
-          <button className="ghost" type="button" onClick={() => handleScenario("/v1/demo/scenario/start/A")}>Start Scenario A</button>
-          <button className="ghost" type="button" onClick={() => handleScenario("/v1/demo/scenario/start/B")}>Start Scenario B</button>
-          <button className="ghost" type="button" onClick={() => handleScenario("/v1/demo/scenario/start/C")}>Start Scenario C</button>
-          <button className="ghost" type="button" onClick={() => handleScenario("/v1/demo/scenario/reset")}>Reset</button>
-          <button className="ghost" type="button" onClick={() => handleScenario("/v1/demo/replay")}>Replay last 10m</button>
         </div>
       </div>
 

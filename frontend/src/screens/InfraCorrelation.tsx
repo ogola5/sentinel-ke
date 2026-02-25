@@ -17,7 +17,25 @@ export default function InfraCorrelation({
   onOpenGraph,
   onOpenEvidence,
 }: InfraCorrelationProps) {
+  if (clusters.length === 0) {
+    return (
+      <section className="screen">
+        <div className="screen-header">
+          <div>
+            <p className="eyebrow">S5</p>
+            <h2>Infrastructure & VPN Correlation</h2>
+            <p className="subtle">Operator inference without unmasking real IPs.</p>
+          </div>
+        </div>
+        <div className="panel">
+          <p className="muted">No infrastructure clusters available from backend.</p>
+        </div>
+      </section>
+    );
+  }
+
   const selected = clusters.find((cluster) => cluster.id === selectedId) ?? clusters[0];
+  const topologyCounts = [selected.members.length, selected.reasons.length, selected.evidence.length];
 
   return (
     <section className="screen">
@@ -129,16 +147,16 @@ export default function InfraCorrelation({
         <div className="panel">
           <div className="panel-header">
             <h3>Provider / ASN view</h3>
-            <span className="muted">Traffic share</span>
+            <span className="muted">Cluster structure</span>
           </div>
-          <SmallStack data={[62, 21, 17]} labels={["VPN", "Hosting", "Residential"]} />
+          <SmallStack data={topologyCounts} labels={["Members", "Reasons", "Evidence"]} />
           <div className="stack-legend">
-            <span>VPN 62%</span>
-            <span>Hosting 21%</span>
-            <span>Residential 17%</span>
+            <span>Members {selected.members.length}</span>
+            <span>Reasons {selected.reasons.length}</span>
+            <span>Evidence {selected.evidence.length}</span>
           </div>
           <p className="muted">
-            Recommended mitigations target ASN-level levers instead of attempting de-anonymization.
+            Counts reflect current backend cluster metadata.
           </p>
         </div>
       </div>

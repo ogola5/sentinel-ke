@@ -3,13 +3,6 @@ import type { EventRecord, SourceType } from "../types/domain";
 import { BarChart } from "../components/Charts";
 import { shortHash } from "../utils/formatters";
 
-const eventTypes = [
-  "DDOS_SIGNAL_EVENT",
-  "SERVICE_HEALTH_EVENT",
-  "DNS_RESOLUTION_EVENT",
-  "OSINT_PROVIDER_EVENT",
-];
-
 const sourceLabel = (source: SourceType) => source.toUpperCase();
 
 type LiveFeedProps = {
@@ -32,6 +25,10 @@ export default function LiveFeed({
   onShowEvidence,
 }: LiveFeedProps) {
   const [typeFilter, setTypeFilter] = useState("all");
+  const availableEventTypes = useMemo(
+    () => Array.from(new Set(events.map((event) => event.type))).sort(),
+    [events],
+  );
 
   const filtered = useMemo(() => {
     return events.filter((event) => {
@@ -45,6 +42,11 @@ export default function LiveFeed({
     });
   }, [events, activeSources, typeFilter]);
 
+  const activeSourceCount = useMemo(
+    () => new Set(filtered.map((event) => event.source)).size,
+    [filtered],
+  );
+
   return (
     <section className="screen">
       <div className="screen-header">
@@ -55,7 +57,7 @@ export default function LiveFeed({
         </div>
         <div className="live-indicator">
           <span className="pulse" />
-          <span>Ingesting 4 sources</span>
+          <span>{activeSourceCount} active sources</span>
         </div>
       </div>
 
@@ -71,7 +73,7 @@ export default function LiveFeed({
                 onChange={(event) => setTypeFilter(event.target.value)}
               >
                 <option value="all">All</option>
-                {eventTypes.map((type) => (
+                {availableEventTypes.map((type) => (
                   <option key={type} value={type}>
                     {type}
                   </option>
@@ -144,13 +146,16 @@ export default function LiveFeed({
                 </span>
               </div>
             ))}
+            {filtered.length === 0 && (
+              <p className="muted">No backend events matched current filters.</p>
+            )}
           </div>
         </div>
 
         <div className="panel">
           <div className="panel-header">
             <h3>Events per minute</h3>
-            <span className="muted">Counts per minute (GET /v1/events/timeline)</span>
+            <span className="muted">Counts from `/v1/events/timeline`</span>
           </div>
           <BarChart data={timeline.map((item) => item.value)} />
           <div className="timeline-labels">
@@ -158,14 +163,15 @@ export default function LiveFeed({
               <span key={item.label}>{item.label}</span>
             ))}
           </div>
+          {timeline.length === 0 && <p className="muted">No timeline points returned by backend.</p>}
           <div className="insight-row">
             <div>
               <p className="label">Provenance coverage</p>
-              <p className="stat">4 agencies + infra sensors</p>
+              <p className="stat">{activeSourceCount} active source classes</p>
             </div>
             <div>
               <p className="label">Audit trail</p>
-              <p className="stat">event_hash anchored per signal</p>
+              <p className="stat">{events.length} event hashes loaded</p>
             </div>
           </div>
         </div>

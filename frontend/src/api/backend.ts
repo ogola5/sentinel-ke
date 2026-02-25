@@ -4,6 +4,7 @@ import type {
   EvidenceItem,
   EntityProfile,
   EventRecord,
+  GraphData,
   InfraCluster,
   ServiceIndicator,
   SourceType,
@@ -89,14 +90,16 @@ type CasePacketApiResponse = {
 };
 
 export type BackendSnapshot = {
-  mode: "live" | "demo-fallback";
+  mode: "live" | "degraded";
   connectionLabel: string;
+  warnings: string[];
   events: EventRecord[];
   timelineCounts: TimelinePoint[];
   indicators: ServiceIndicator[];
   campaigns: Campaign[];
   infraClusters: InfraCluster[];
   entities: EntityProfile[];
+  graph: GraphData;
 };
 
 const sourceSet = new Set<SourceType>(["telco", "bank", "gov", "osint", "infra"]);
@@ -372,14 +375,225 @@ const deriveEntities = (events: EventRecord[], indicators: ServiceIndicator[]): 
   });
 };
 
+const toGraphCommunity = (type: string): string => {
+  const raw = type.toLowerCase();
+  if (raw === "campaign") return "campaign";
+  if (raw === "service" || raw === "endpoint") return "target";
+  if (raw === "cluster" || raw === "ip" || raw === "provider" || raw === "asn") return "infra";
+  return "support";
+};
+
+type MutableGraphNode = {
+  id: string;
+  label: string;
+  type: string;
+  community: string;
+};
+
+const buildGraphFromSnapshot = (
+  events: EventRecord[],
+  campaigns: Campaign[],
+  infraClusters: InfraCluster[],
+): GraphData => {
+  const nodes = new Map<string, MutableGraphNode>();
+  const edges = new Map<
+    string,
+    {
+      source: string;
+      target: string;
+      first_seen: string;
+      last_seen: string;
+      count: number;
+      sources: Set<SourceType>;
+      evidence: EvidenceItem[];
+    }
+  >();
+
+  const upsertNode = (id: string, label: string, type: string) => {
+    if (!nodes.has(id)) {
+      nodes.set(id, { id, label, type, community: toGraphCommunity(type) });
+    }
+  };
+
+  const upsertEdge = (
+    id: string,
+    source: string,
+    target: string,
+    sourceType: SourceType,
+    firstSeen: string,
+    lastSeen: string,
+    evidence: EvidenceItem,
+  ) => {
+    const prev = edges.get(id);
+    if (!prev) {
+      edges.set(id, {
+        source,
+        target,
+        first_seen: firstSeen,
+        last_seen: lastSeen,
+        count: 1,
+        sources: new Set([sourceType]),
+        evidence: [evidence],
+      });
+      return;
+    }
+    prev.count += 1;
+    prev.sources.add(sourceType);
+    if (prev.evidence.length < 6 && !prev.evidence.find((item) => item.event_hash === evidence.event_hash)) {
+      prev.evidence.push(evidence);
+    }
+  };
+
+  for (const event of events) {
+    const serviceNodeId = `service:${event.service_id}`;
+    const endpointNodeId = `endpoint:${event.service_id}:${event.endpoint}`;
+    upsertNode(serviceNodeId, event.service_id, "Service");
+    upsertNode(endpointNodeId, event.endpoint, "Endpoint");
+
+    const edgeId = `edge:service-endpoint:${event.service_id}:${event.endpoint}`;
+    upsertEdge(
+      edgeId,
+      serviceNodeId,
+      endpointNodeId,
+      event.source,
+      event.occurred_at,
+      event.received_at,
+      {
+        event_hash: event.event_hash,
+        source: event.source,
+        detail: event.summary,
+      },
+    );
+  }
+
+  for (const cluster of infraClusters) {
+    const clusterNodeId = `cluster:${cluster.id}`;
+    upsertNode(clusterNodeId, cluster.id, "Cluster");
+
+    const provider = cluster.provider.trim();
+    if (provider && provider !== "unknown") {
+      const providerNodeId = `provider:${provider}`;
+      upsertNode(providerNodeId, provider, "Provider");
+      const detail = cluster.reasons[0] ?? "cluster_provider_link";
+      const evidence = cluster.evidence[0] ?? {
+        event_hash: `cluster-${cluster.id}`,
+        source: "infra",
+        detail,
+      };
+      upsertEdge(
+        `edge:cluster-provider:${cluster.id}:${provider}`,
+        clusterNodeId,
+        providerNodeId,
+        "infra",
+        cluster.rotation[0]?.window ?? "-",
+        cluster.rotation[cluster.rotation.length - 1]?.window ?? "-",
+        evidence,
+      );
+    }
+
+    for (const member of cluster.members.slice(0, 12)) {
+      const ipNodeId = `ip:${member}`;
+      upsertNode(ipNodeId, member, "IP");
+      const evidence = cluster.evidence[0] ?? {
+        event_hash: `cluster-${cluster.id}-${member}`,
+        source: "infra",
+        detail: cluster.reasons[0] ?? "cluster_member_link",
+      };
+      upsertEdge(
+        `edge:cluster-member:${cluster.id}:${member}`,
+        clusterNodeId,
+        ipNodeId,
+        evidence.source,
+        cluster.rotation[0]?.window ?? "-",
+        cluster.rotation[cluster.rotation.length - 1]?.window ?? "-",
+        evidence,
+      );
+    }
+  }
+
+  for (const campaign of campaigns) {
+    const campaignNodeId = `campaign:${campaign.id}`;
+    upsertNode(campaignNodeId, campaign.id, "Campaign");
+    for (const entity of campaign.top_entities) {
+      const label = entity.label.trim();
+      if (!label || label.startsWith("events:")) continue;
+      const linkedService = events.find((item) => item.service_id.toLowerCase() === label.toLowerCase());
+      const targetNodeId = linkedService
+        ? `service:${linkedService.service_id}`
+        : `campaign-entity:${campaign.id}:${label}`;
+      if (!nodes.has(targetNodeId)) {
+        upsertNode(targetNodeId, label, linkedService ? "Service" : "Entity");
+      }
+      upsertEdge(
+        `edge:campaign-entity:${campaign.id}:${targetNodeId}`,
+        campaignNodeId,
+        targetNodeId,
+        "infra",
+        campaign.first_seen,
+        campaign.last_seen,
+        {
+          event_hash: `campaign-${campaign.id}`,
+          source: "infra",
+          detail: `${entity.role}:${label}`,
+        },
+      );
+    }
+  }
+
+  const grouped = new Map<string, MutableGraphNode[]>();
+  for (const node of nodes.values()) {
+    const list = grouped.get(node.community) ?? [];
+    list.push(node);
+    grouped.set(node.community, list);
+  }
+
+  const columnX: Record<string, number> = {
+    target: 130,
+    infra: 360,
+    campaign: 590,
+    support: 640,
+  };
+
+  const graphNodes = Array.from(nodes.values()).map((node) => {
+    const group = grouped.get(node.community) ?? [node];
+    const index = group.findIndex((item) => item.id === node.id);
+    const step = Math.max(42, Math.floor(320 / Math.max(1, group.length)));
+    const y = 70 + Math.min(index, 7) * step;
+    return {
+      id: node.id,
+      label: node.label,
+      type: node.type,
+      x: columnX[node.community] ?? 680,
+      y,
+      community: node.community,
+    };
+  });
+
+  const graphEdges = Array.from(edges.entries()).map(([id, edge]) => ({
+    id,
+    source: edge.source,
+    target: edge.target,
+    evidence: edge.evidence,
+    first_seen: edge.first_seen,
+    last_seen: edge.last_seen,
+    count: edge.count,
+    sources: Array.from(edge.sources),
+  }));
+
+  return {
+    nodes: graphNodes,
+    edges: graphEdges,
+  };
+};
+
 export async function fetchBackendSnapshot(): Promise<BackendSnapshot> {
   const ready = await apiFetchJson<ReadyResponse>(endpoints.ready());
-  const mode: BackendSnapshot["mode"] = ready.status === "ok" ? "live" : "demo-fallback";
+  const warnings: string[] = [];
 
   const now = new Date();
   const start = new Date(now.getTime() - 60 * 60 * 1000);
 
-  const [eventsRes, timelineRes, campaignsRes, ddosAlertsRes, infraRes] = await Promise.all([
+  const [eventsRes, timelineRes, campaignsRes, ddosAlertsRes, infraRes] = await Promise.allSettled([
     apiFetchJson<EventsSearchResponse>(endpoints.eventsSearch(120)),
     apiFetchJson<EventsTimelineResponse>(endpoints.eventsTimeline(start.toISOString(), now.toISOString(), "5m")),
     apiFetchJson<CampaignsResponse>(endpoints.campaigns(25, 0)),
@@ -387,13 +601,20 @@ export async function fetchBackendSnapshot(): Promise<BackendSnapshot> {
     apiFetchJson<InfraClustersResponse>(endpoints.infraClusters(10, 0)),
   ]);
 
-  const events = mapEvents(eventsRes.items ?? []);
-  const timelineCounts = mapTimeline(timelineRes);
-  const campaigns = mapCampaigns(campaignsRes.items ?? []);
+  const unwrap = <T>(result: PromiseSettledResult<T>, label: string, fallback: T): T => {
+    if (result.status === "fulfilled") return result.value;
+    warnings.push(`${label}_unavailable`);
+    return fallback;
+  };
+
+  const events = mapEvents(unwrap(eventsRes, "events", { items: [] }).items ?? []);
+  const timelineCounts = mapTimeline(unwrap(timelineRes, "timeline", { points: [] }));
+  const campaigns = mapCampaigns(unwrap(campaignsRes, "campaigns", { items: [] }).items ?? []);
+  const ddosAlerts = unwrap(ddosAlertsRes, "ddos_alerts", { items: [] }).items ?? [];
 
   const uniquePairs = Array.from(
     new Set(
-      (ddosAlertsRes.items ?? []).map((a) => {
+      ddosAlerts.map((a) => {
         const serviceId = asString(a.service_id, "");
         const endpoint = asString(a.endpoint, "");
         return serviceId ? `${serviceId}||${endpoint}` : "";
@@ -403,51 +624,64 @@ export async function fetchBackendSnapshot(): Promise<BackendSnapshot> {
     .filter((x) => x !== "")
     .slice(0, 3);
 
-  const indicatorResponses = await Promise.all(
+  const indicatorResponses = await Promise.allSettled(
     uniquePairs.map(async (key) => {
       const [serviceId, endpoint] = key.split("||");
       return apiFetchJson<DdosIndicatorsResponse>(endpoints.ddosIndicators(serviceId, endpoint || undefined, 60));
     }),
   );
   const indicators = indicatorResponses
-    .map((x) => mapIndicatorsFromSeries(x))
+    .filter((result): result is PromiseFulfilledResult<DdosIndicatorsResponse> => {
+      if (result.status === "fulfilled") return true;
+      warnings.push("ddos_indicators_unavailable");
+      return false;
+    })
+    .map((x) => mapIndicatorsFromSeries(x.value))
     .filter((x): x is ServiceIndicator => x !== null);
 
-  const infraItems = infraRes.items ?? [];
+  const infraItems = unwrap(infraRes, "infra_clusters", { items: [] }).items ?? [];
   const detailTargets = infraItems.slice(0, 5);
-  const details = await Promise.all(
+  const details = await Promise.allSettled(
     detailTargets.map(async (c) => {
       const id = asString(c.cluster_id, "");
       if (!id) return null;
-      try {
-        const detail = await apiFetchJson<InfraClusterDetailResponse>(endpoints.infraClusterById(id));
-        return { id, detail };
-      } catch {
-        return { id, detail: undefined };
-      }
+      const detail = await apiFetchJson<InfraClusterDetailResponse>(endpoints.infraClusterById(id));
+      return { id, detail };
     }),
   );
-  const detailMap = new Map(details.filter((d): d is { id: string; detail?: InfraClusterDetailResponse } => d !== null).map((d) => [d.id, d.detail]));
+  const detailMap = new Map(
+    details
+      .flatMap((result) => {
+        if (result.status === "fulfilled") return result.value ? [result.value] : [];
+        warnings.push("infra_cluster_details_unavailable");
+        return [];
+      })
+      .map((d) => [d.id, d.detail]),
+  );
   const infraClusters = infraItems.map((item) => {
     const id = asString(item.cluster_id, "");
     return mapInfraCluster(item, detailMap.get(id));
   });
 
   const entities = deriveEntities(events, indicators);
+  const graph = buildGraphFromSnapshot(events, campaigns, infraClusters);
+  const mode: BackendSnapshot["mode"] = ready.status === "ok" && warnings.length === 0 ? "live" : "degraded";
   const connectionLabel =
-    ready.status === "ok"
+    mode === "live"
       ? "Backend connected"
       : `Backend degraded (${Object.entries(ready.components ?? {}).map(([k, v]) => `${k}:${v}`).join(", ")})`;
 
   return {
     mode,
     connectionLabel,
+    warnings,
     events,
     timelineCounts,
     indicators,
     campaigns,
     infraClusters,
     entities,
+    graph,
   };
 }
 

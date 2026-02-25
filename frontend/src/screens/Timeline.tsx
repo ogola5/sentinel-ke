@@ -12,6 +12,7 @@ const stageClass = (stage: string) => {
 type TimelineProps = {
   indicators: ServiceIndicator[];
   selectedService: string;
+  evidenceRefs: string[];
   onSelectService: (serviceId: string) => void;
   onOpenCampaign: () => void;
   onShowInfra: () => void;
@@ -20,17 +21,30 @@ type TimelineProps = {
 export default function Timeline({
   indicators,
   selectedService,
+  evidenceRefs,
   onSelectService,
   onOpenCampaign,
   onShowInfra,
 }: TimelineProps) {
+  if (indicators.length === 0) {
+    return (
+      <section className="screen">
+        <div className="screen-header">
+          <div>
+            <p className="eyebrow">S2</p>
+            <h2>Timeline / Indicators</h2>
+            <p className="subtle">AI baseline, early warning, and risk trajectory.</p>
+          </div>
+        </div>
+        <div className="panel">
+          <p className="muted">No indicator series returned from backend yet.</p>
+        </div>
+      </section>
+    );
+  }
+
   const current = indicators.find((item) => item.serviceId === selectedService) ?? indicators[0];
   const latestIndex = current.reqRate.length - 1;
-  const evidenceRefs = [
-    "ev_9d3f4a2",
-    "ev_5af7d21",
-    "ev_2c8bde1",
-  ];
 
   return (
     <section className="screen">
@@ -165,6 +179,7 @@ export default function Timeline({
                 {ref}
               </div>
             ))}
+            {evidenceRefs.length === 0 && <p className="muted">No event hashes linked to this indicator window.</p>}
           </div>
         </div>
       </div>
