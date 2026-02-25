@@ -7,6 +7,9 @@ Phase tracker is in:
 Backend architecture and security reference:
 `docs/BACKEND_DOCUMENTATION.md`
 
+API examples for frontend/integration consumers:
+`docs/API_CONSUMER_GUIDE.md`
+
 ## 1) Start the stack
 
 ```

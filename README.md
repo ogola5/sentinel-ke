@@ -61,6 +61,11 @@ Backend architecture, security model, and API access controls:
 docs/BACKEND_DOCUMENTATION.md
 ```
 
+Frontend/integration request examples:
+```
+docs/API_CONSUMER_GUIDE.md
+```
+
 Backend-only cloud deployment (skip ML runtime in API service):
 ```
 docs/RENDER_BACKEND_ONLY.md
