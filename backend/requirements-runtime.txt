@@ -1,10 +1,35 @@
-fastapi
-uvicorn
-pydantic
-sqlalchemy
-psycopg2-binary
-neo4j
-opensearch-py
-kafka-python
-requests
-boto3
+# =============================================================================
+# Sentinel-KE — Runtime dependencies
+# Installed in every backend container (API, workers, consumer).
+# =============================================================================
+
+# Web framework
+fastapi==0.115.5
+uvicorn[standard]==0.32.1        # [standard] adds websocket + http2 support
+starlette==0.41.2                # pinned to match fastapi
+python-multipart==0.0.12         # required by FastAPI form data / file upload
+
+# Data validation
+pydantic==2.9.2
+email-validator==2.2.0           # enables pydantic EmailStr fields
+
+# ORM & database
+sqlalchemy==2.0.36
+psycopg2-binary==2.9.10
+alembic==1.14.0                  # migrations run at container startup
+
+# Graph database
+neo4j==5.26.0
+
+# Search & analytics
+opensearch-py==2.7.1
+
+# Streaming (Kafka / Redpanda)
+kafka-python==2.0.6
+
+# HTTP & cloud
+requests==2.32.3
+boto3==1.35.76                   # used for S3 artifact storage if configured
+
+# STIX threat intelligence
+stix2==3.1.0

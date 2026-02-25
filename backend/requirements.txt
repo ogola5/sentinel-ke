@@ -1,7 +1,16 @@
-# Full backend dependency bundle for one-shot installs/builds.
-# Includes:
-# - runtime API/worker dependencies (via requirements-dev -> requirements-runtime)
-# - dev/test/tooling dependencies
-# - ML dependencies (torch CPU wheel)
+# =============================================================================
+# Sentinel-KE — Full dependency bundle  (BUILD ONCE strategy)
+#
+# Dependency tree:
+#   requirements.txt
+#     └─ requirements-dev.txt        (dev/test/notebook tools)
+#          └─ requirements-runtime.txt  (API + workers, always installed)
+#     └─ requirements-ml.txt         (PyTorch — CPU or GPU)
+#
+# Docker-compose default: INSTALL_ALL_REQUIREMENTS=1
+#   → installs this file once at build time
+#   → code changes flow through volume mounts with --reload (no rebuild)
+#   → only rebuild when YOU add a new package here
+# =============================================================================
 -r requirements-dev.txt
 -r requirements-ml.txt
