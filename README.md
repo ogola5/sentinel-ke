@@ -56,6 +56,11 @@ docker compose up -d
 docs/RUNBOOK.md
 ```
 
+Backend architecture, security model, and API access controls:
+```
+docs/BACKEND_DOCUMENTATION.md
+```
+
 Backend-only cloud deployment (skip ML runtime in API service):
 ```
 docs/RENDER_BACKEND_ONLY.md
@@ -77,11 +82,16 @@ docs/PHASES_90_TRACKER.md
 - Event ledger and entity index in Postgres
 - OpenSearch indexing + timeline/search APIs
 - GraphDelta logging and Neo4j projection worker
+- API authentication + RBAC (API keys, user sessions, scopes, section/central access)
+- MFA enrollment/login and step-up enforcement for sensitive central routes
+- Section tenancy propagation (source -> ledger -> audit -> search -> streaming)
 - DDoS alert worker (structural signals)
 - VPN/infra cluster worker (endpoint overlap + provider/time overlap)
 - Fraud demo + mule-ring campaign worker (SIM swap -> login -> transfers -> cashout)
 - Campaign claims + risk suggestions
 - Mitigation/IOC bundles + export
+- Defense module (vulnerability SLA, backup attestations, restore drills, IR playbooks, crypto posture)
+- Threat alerting for BEC/web attack/vulnerability/backup risk patterns
 - AI feature snapshots + embeddings + predictions + explanations (lightweight, deterministic)
 - Metrics + readiness endpoints
 
@@ -209,8 +219,9 @@ Key environment variables (see `.env`):
 - `OPENSEARCH_HOST`, `OPENSEARCH_INDEX_EVENTS`
 - `NEO4J_URI`, `NEO4J_USER`, `NEO4J_PASSWORD`
 - `REDPANDA_BROKERS`
-- `INGEST_API_KEY`
-- `FRONTEND_API_KEY` (optional API auth key)
+- `INGEST_API_KEY`, `FRONTEND_API_KEY`
+- `AUTH_TOKEN_SECRET`, `AUTH_PASSWORD_PEPPER`, `AUTH_MFA_SECRET_KEY`
+- `PSEUDONYM_SALT`
 
 ## Support
 

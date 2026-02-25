@@ -4,6 +4,9 @@ This runbook lists the common commands for demos, workers, and API usage.
 Phase tracker is in:
 `docs/PHASES_90_TRACKER.md`
 
+Backend architecture and security reference:
+`docs/BACKEND_DOCUMENTATION.md`
+
 ## 1) Start the stack
 
 ```
@@ -100,6 +103,13 @@ docker compose exec -w /app backend alembic -c alembic.ini upgrade head
 Create a new migration revision:
 ```
 docker compose exec -w /app backend alembic -c alembic.ini revision -m "describe_change"
+```
+
+## 1.4) Repository health gate (before push)
+
+Run from repo root:
+```
+./scripts/repo_health_check.sh
 ```
 
 ## 2) Seed sources (API keys)
@@ -220,6 +230,12 @@ docker compose run --rm --no-deps -e PYTHONPATH=/app backend \
   python -m app.analytics.layer3.drift_worker --prediction-type risk_gnn --window-key Wmid --model-version gnn-sage-v1
 ```
 
+Threat pattern alert worker:
+```
+docker compose run --rm --no-deps -e PYTHONPATH=/app backend \
+  python -m app.analytics.layer3.threat_pattern_worker --minutes 60
+```
+
 Economic leakage worker:
 ```
 docker compose run --rm --no-deps -e PYTHONPATH=/app backend \
@@ -269,7 +285,6 @@ Ingestion:
 ```
 POST /v1/ingest/event
 POST /v1/ingest/batch
-POST /v1/ingest/file
 GET  /v1/ingest/schema
 ```
 
@@ -284,6 +299,9 @@ GET  /v1/auth/users
 POST /v1/auth/password/change
 POST /v1/auth/users/{username}/password/reset
 GET  /v1/auth/policies
+POST /v1/auth/mfa/enroll/start
+POST /v1/auth/mfa/enroll/verify
+POST /v1/auth/mfa/disable
 ```
 
 Integrations (external software connectors -> canonical ingest):
@@ -363,15 +381,19 @@ PYTHONPATH=backend python -m app.integrations.local_network_probe \
 
 Events:
 ```
-GET /v1/events
-GET /v1/events/{event_hash}
+GET /v1/events/search
 GET /v1/events/timeline
+GET /v1/events/{event_hash}
 ```
 
 Graph:
 ```
-GET /v1/graph
-GET /v1/infra/graph
+GET  /v1/graph/entity/{entity_key}
+GET  /v1/graph/neighbors/{entity_key}
+GET  /v1/graph/path?from=<entity_key>&to=<entity_key>
+GET  /v1/graph/evidence/{event_hash}
+POST /v1/graph/infra/project/{cluster_id}
+POST /v1/graph/infra/project-recent
 ```
 
 Campaigns:
@@ -430,7 +452,8 @@ POST /v1/ai/threat-intel/export-stix
 Cases + STIX:
 ```
 POST /v1/cases/from-campaign/{campaign_id}
-GET  /v1/cases/{case_id}
+GET  /v1/stix/from-campaign/{campaign_id}
+GET  /v1/stix/from-case/{campaign_id}
 GET  /v1/stix/case/{campaign_id}
 GET  /v1/stix/campaign/{campaign_id}
 GET  /v1/stix/mitigations?kind=DDOS
@@ -456,6 +479,24 @@ GET  /v1/economy/coverup/alerts
 GET  /v1/economy/coverup/summary
 GET  /v1/economy/signals
 GET  /v1/economy/procurement/anomalies
+```
+
+Defense:
+```
+POST /v1/defense/vulnerabilities
+GET  /v1/defense/vulnerabilities
+POST /v1/defense/vulnerabilities/score-sla
+POST /v1/defense/backups/attest
+GET  /v1/defense/backups/attest
+POST /v1/defense/backups/restore-drills
+GET  /v1/defense/backups/restore-drills
+POST /v1/defense/incidents/runs
+GET  /v1/defense/incidents/runs
+POST /v1/defense/incidents/runs/{run_id}/actions
+GET  /v1/defense/threat-alerts
+POST /v1/defense/threat-alerts/refresh
+GET  /v1/defense/crypto/posture
+POST /v1/defense/crypto/posture/snapshot
 ```
 
 ## 7) Demo checks in Neo4j (optional)
