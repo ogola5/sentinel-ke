@@ -4,9 +4,9 @@
 #
 # GPU upgrade (for hackathon T4 CUDA 12.1):
 #   Change index URL  →  https://download.pytorch.org/whl/cu121
-#   Change package    →  torch==2.3.1+cu121
+#   Change package    →  torch (no +cpu suffix needed for CUDA build)
 # =============================================================================
 
 # CPU build (local dev default)
 --extra-index-url https://download.pytorch.org/whl/cpu
-torch==2.3.1+cpu
+torch
