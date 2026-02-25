@@ -132,6 +132,27 @@ services:
     volumes: *backend-volumes
     restart: unless-stopped
 
+  # ── AI inference consumer (Kafka → run_once) ───────────────────────────────
+  inference-consumer:
+    build: *backend-build-lite
+    container_name: sentinel-inference-consumer
+    <<: *backend-env
+    environment:
+      PYTHONPATH: /app
+      INFERENCE_CONSUMER_TOPICS: ${KAFKA_EVENTS_TOPIC:-sentinel.events.v1}
+      INFERENCE_MIN_INTERVAL_SEC: "60"
+      INFERENCE_BATCH_THRESHOLD: "50"
+      INFERENCE_WINDOW_KEY: ${GNN_WINDOW_KEY:-Wshort}
+      INFERENCE_PREDICTION_TYPE: ${GNN_PREDICTION_TYPE:-risk_gnn}
+    command: python -m app.streaming.inference_consumer
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redpanda:
+        condition: service_started
+    volumes: *backend-volumes
+    restart: unless-stopped
+
   # ── Mule campaign analytics worker ─────────────────────────────────────────
   mule-campaign-worker:
     build: *backend-build-lite

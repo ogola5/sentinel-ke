@@ -83,10 +83,37 @@ def _register_lifecycle(app: FastAPI) -> None:
 
 def _register_operational_routes(app: FastAPI) -> None:
     @app.get("/health", tags=["ops"])
-    def health() -> dict[str, str]:
+    def health() -> dict:
         with engine.connect() as conn:
             conn.execute(text("SELECT 1"))
-        return {"status": "ok"}
+
+        # Check whether a trained GNN artifact is available
+        gnn_loaded = False
+        gnn_model_version = None
+        try:
+            from app.analytics.ai_models import GNNTrainingRun  # noqa: PLC0415
+            from pathlib import Path  # noqa: PLC0415
+            db = SessionLocal()
+            try:
+                run = (
+                    db.query(GNNTrainingRun)
+                    .filter(GNNTrainingRun.artifact_path.isnot(None))
+                    .order_by(GNNTrainingRun.created_at.desc())
+                    .first()
+                )
+                if run and run.artifact_path and Path(str(run.artifact_path)).exists():
+                    gnn_loaded = True
+                    gnn_model_version = str(run.model_version)
+            finally:
+                db.close()
+        except Exception:  # noqa: BLE001
+            pass  # table may not exist yet on first boot
+
+        return {
+            "status": "ok",
+            "gnn_loaded": gnn_loaded,
+            "gnn_model_version": gnn_model_version,
+        }
 
     @app.get("/ready", tags=["ops"])
     def ready() -> dict[str, object]:
