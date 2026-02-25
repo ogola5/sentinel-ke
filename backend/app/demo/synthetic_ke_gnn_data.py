@@ -86,7 +86,6 @@ def _ensure_source(db) -> None:
     stmt = pg_insert(SourceRegistry).values(
         source_id=SYNTH_SOURCE_ID,
         source_type="synthetic",
-        section_code="SYNTH",
         classification_level=MODEL_CLASSIFICATION,
         api_key_hash=hashlib.sha256(b"synthetic-gnn-seed-key").hexdigest(),
         is_active=True,
