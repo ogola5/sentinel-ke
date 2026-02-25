@@ -3,7 +3,7 @@
 Base URL:
 ```bash
 export BASE_URL="http://localhost:8000"
-export API_KEY="dev-secret-key"
+export API_KEY="change-me-frontend-key"
 ```
 
 ## 1) Seed procurement anomalies

@@ -61,6 +61,11 @@ Backend-only cloud deployment (skip ML runtime in API service):
 docs/RENDER_BACKEND_ONLY.md
 ```
 
+Repository health gate (secrets/defaults/size/syntax checks):
+```
+./scripts/repo_health_check.sh
+```
+
 Delivery tracker (5 phases to 90% readiness):
 ```
 docs/PHASES_90_TRACKER.md

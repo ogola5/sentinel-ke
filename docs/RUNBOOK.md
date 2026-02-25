@@ -74,7 +74,7 @@ http://localhost:8888/lab?token=<JUPYTER_TOKEN>
 
 Default token (from `.env.example`):
 ```
-sentinel-notebook-token
+change-me-jupyter-token
 ```
 
 Notebook files are in:
@@ -335,8 +335,8 @@ MINIO_ANCHOR_BUCKET=sentinel-legal-evidence
 MINIO_ANCHOR_WEBHOOK_URL=
 MINIO_S3_ENDPOINT=minio:9000
 MINIO_S3_REGION=us-east-1
-MINIO_S3_ACCESS_KEY=minioadmin
-MINIO_S3_SECRET_KEY=minioadmin
+MINIO_S3_ACCESS_KEY=change-me-minio-access-key
+MINIO_S3_SECRET_KEY=change-me-minio-secret-key
 MINIO_S3_SECURE=false
 MINIO_S3_CREATE_BUCKET_IF_MISSING=false
 MINIO_OBJECT_LOCK_RETENTION_DAYS=365
@@ -357,7 +357,7 @@ Local passive network probe connector:
 #   source_api_key=local-net-probe-secret-key
 PYTHONPATH=backend python -m app.integrations.local_network_probe \
   --endpoint http://localhost:8000 \
-  --x-api-key "${INGEST_API_KEY:-dev-secret-key}" \
+  --x-api-key "${INGEST_API_KEY}" \
   --interval-seconds 10
 ```
 

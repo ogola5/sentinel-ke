@@ -14,7 +14,7 @@ Objective: remove demo-grade security risks and create stable delivery controls.
 
 - [x] Remove hardcoded compose credentials (`NEO4J_AUTH` now env-driven).
 - [x] Enforce strict API auth defaults (`API_AUTH_OPTIONAL_DEV=false` by default).
-- [x] Remove insecure API key fallback (`dev-secret-key` fallback removed).
+- [x] Remove insecure hardcoded ingest key fallback.
 - [x] Limit legal token exposure (execution token only at grant issuance).
 - [x] Replace hardcoded `demo-salt` in ingestion APIs with `PSEUDONYM_SALT`.
 - [x] Add ingest failure telemetry logs (OpenSearch/Graph/Kafka best-effort paths).
@@ -91,4 +91,3 @@ Exit criteria:
 - Monday: lock sprint scope + acceptance tests.
 - Wednesday: mid-sprint verification demo.
 - Friday: scorecard update and blocker burn-down.
-

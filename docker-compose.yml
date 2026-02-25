@@ -35,7 +35,7 @@ services:
       - .env
     environment:
       - PYTHONPATH=/app
-      - JUPYTER_TOKEN=${JUPYTER_TOKEN:-sentinel-notebook-token}
+      - JUPYTER_TOKEN=${JUPYTER_TOKEN:-change-me-jupyter-token}
     ports:
       - "8888:8888"
     depends_on:
@@ -45,7 +45,7 @@ services:
     volumes:
       - ./backend:/app
       - ./notebooks:/notebooks
-    command: /bin/sh -c "python -m jupyter lab --ip=0.0.0.0 --port=8888 --no-browser --allow-root --ServerApp.root_dir=/notebooks --IdentityProvider.token=${JUPYTER_TOKEN:-sentinel-notebook-token}"
+    command: /bin/sh -c "python -m jupyter lab --ip=0.0.0.0 --port=8888 --no-browser --allow-root --ServerApp.root_dir=/notebooks --IdentityProvider.token=${JUPYTER_TOKEN:-change-me-jupyter-token}"
 
   frontend:
     build:
