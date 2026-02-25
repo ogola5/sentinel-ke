@@ -75,6 +75,8 @@ class Settings:
     frontend_api_key = os.environ.get("FRONTEND_API_KEY", "").strip()
     db_auto_create = env_bool("DB_AUTO_CREATE", app_env == "development")
     cors_allow_origins = env_csv("CORS_ALLOW_ORIGINS", "")
+    http_security_headers_enabled = env_bool("HTTP_SECURITY_HEADERS_ENABLED", True)
+    http_request_logging_enabled = env_bool("HTTP_REQUEST_LOGGING_ENABLED", True)
 
     # ---------------------------------------------------------
     # User authentication / RBAC

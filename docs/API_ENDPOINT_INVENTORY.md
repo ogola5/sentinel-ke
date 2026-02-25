@@ -5,11 +5,13 @@ Auto-generated from FastAPI routers. Do not edit manually.
 Regenerate with:
 
 ```bash
-python3 scripts/generate_api_inventory.py
+python3 scripts/generate_api_inventory.py --write
 ```
 
 | Method | Path | Tag | Handler |
 |---|---|---|---|
+| `GET` | `/health` | `ops` | `backend.app.main:health` |
+| `GET` | `/ready` | `ops` | `backend.app.main:ready` |
 | `GET` | `/v1/ai/baselines` | `ai` | `backend.app.api.ai:list_baselines` |
 | `GET` | `/v1/ai/campaign-indicators` | `ai` | `backend.app.api.ai:list_campaign_indicators` |
 | `GET` | `/v1/ai/decision-fusions` | `ai` | `backend.app.api.ai:list_decision_fusions` |
@@ -95,8 +97,10 @@ python3 scripts/generate_api_inventory.py
 | `GET` | `/v1/infra/clusters/{cluster_id}` | `infra-clusters` | `backend.app.api.infra_clusters:get_cluster` |
 | `POST` | `/v1/infra/clusters/{cluster_id}/project` | `infra-clusters` | `backend.app.api.infra_clusters:project_cluster` |
 | `POST` | `/v1/infra/from-campaign/{campaign_id}` | `infra-clusters` | `backend.app.api.infra_clusters:build_from_campaign` |
-| `GET` | `/v1/infra/ip/{ip}` | `infra` | `backend.app.api.infra:ip_context` |
 | `POST` | `/v1/infra/rebuild` | `infra-clusters` | `backend.app.api.infra_clusters:rebuild_clusters` |
+| `POST` | `/v1/ingest/batch` | `ingestion` | `backend.app.ingestion.router:ingest_batch` |
+| `POST` | `/v1/ingest/event` | `ingestion` | `backend.app.ingestion.router:ingest_event` |
+| `GET` | `/v1/ingest/schema` | `ingestion` | `backend.app.ingestion.router:get_schema` |
 | `GET` | `/v1/integrations/connectors` | `integrations` | `backend.app.api.integrations:get_connectors` |
 | `POST` | `/v1/integrations/{connector_key}/batch` | `integrations` | `backend.app.api.integrations:ingest_connector_batch` |
 | `POST` | `/v1/integrations/{connector_key}/event` | `integrations` | `backend.app.api.integrations:ingest_connector_event` |

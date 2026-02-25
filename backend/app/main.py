@@ -1,55 +1,22 @@
-import os
 import logging
-from fastapi import FastAPI, Depends
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import create_engine, text
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy import text
 
 from app.ledger.models import Base
 
-from app.ingestion.router import router as ingest_router
-from app.api.events import router as events_router
-from app.api.graph import router as graph_router
-from app.api.campaigns import router as campaigns_router
-from app.api.infra_clusters import router as infra_clusters_router
-from app.api.ddos import router as ddos_router
-from app.api.campaign_evidence import router as campaign_evidence_router
-from app.cases.api import router as cases_router
-from app.api.stix import router as stix_router
-from app.api.infra_graph import router as infra_graph_router
-from app.api.anomalies import router as anomalies_router
-from app.api.mitigations import router as mitigations_router
-from app.api.metrics import router as metrics_router
-from app.api.ai import router as ai_router
-from app.api.integrations import router as integrations_router
-from app.api.auth import router as auth_router
-from app.api.legal import router as legal_router
-from app.api.economy import router as economy_router
-from app.api.economy_guardrail import router as economy_guardrail_router
-from app.api.economy_leakage import router as economy_leakage_router
-from app.api.economy_coverup import router as economy_coverup_router
-from app.api.defense import router as defense_router
-from app.api.deps import (
-    require_api_key,
-    require_central_access,
-    require_scope,
-    require_section_access,
-    require_step_up,
-)
+from app.api.error_contract import install_error_handlers
+from app.api.router_registry import build_router_mounts, build_tags_metadata
 from app.auth.service import AuthService
 from app.core.config import settings
+from app.core.http_hardening import install_http_hardening
+from app.core.runtime_hardening import enforce_runtime_hardening
 from app.search.opensearch import get_client as get_os_client
 from app.graph.neo4j_driver import get_driver
+from app.ledger.db import SessionLocal, engine
 import app.db.registry  # noqa: F401  # ensure all models are registered
 
 log = logging.getLogger("sentinel.main")
-
-DATABASE_URL = os.getenv("DATABASE_URL")
-if not DATABASE_URL:
-    raise RuntimeError("DATABASE_URL is not set")
-
-engine = create_engine(DATABASE_URL, pool_pre_ping=True)
-SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
 
 def _ensure_infra_cluster_schema() -> None:
@@ -83,125 +50,94 @@ def _ensure_infra_cluster_schema() -> None:
             )
         )
 
-tags_metadata = [
-    {"name": "auth", "description": "User authentication and RBAC"},
-    {"name": "ingest", "description": "Evidence-grade ingestion"},
-    {"name": "events", "description": "Event search and timeline"},
-    {"name": "campaigns", "description": "Campaigns and risk"},
-    {"name": "infra-clusters", "description": "Infrastructure clusters and graph"},
-    {"name": "ddos", "description": "DDoS indicators and alerts"},
-    {"name": "anomalies", "description": "Anomaly scores"},
-    {"name": "mitigations", "description": "IOC and mitigation bundles"},
-    {"name": "integrations", "description": "External connector ingestion bridge"},
-    {"name": "legal", "description": "Court-order authorization and legal controls"},
-    {"name": "metrics", "description": "Operational metrics"},
-    {"name": "economy", "description": "Economic integrity and procurement anomalies"},
-    {"name": "defense", "description": "Vulnerability, incident response, backup resilience, and crypto posture"},
-]
-if settings.ai_api_enabled:
-    tags_metadata.append({"name": "ai", "description": "AI predictions and explanations"})
 
-app = FastAPI(title="Sentinel-KE", openapi_tags=tags_metadata)
+def _register_routers(app: FastAPI) -> None:
+    for mount in build_router_mounts(ai_enabled=settings.ai_api_enabled):
+        if mount.dependencies:
+            app.include_router(mount.router, dependencies=list(mount.dependencies))
+        else:
+            app.include_router(mount.router)
 
-if settings.cors_allow_origins:
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=settings.cors_allow_origins,
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
 
-app.include_router(auth_router)
-app.include_router(ingest_router, dependencies=[Depends(require_api_key)])
-app.include_router(events_router, dependencies=[Depends(require_section_access), Depends(require_scope("events.read"))])
-app.include_router(graph_router, dependencies=[Depends(require_central_access), Depends(require_scope("graph.read"))])
-app.include_router(campaigns_router, dependencies=[Depends(require_section_access), Depends(require_scope("campaigns.read"))])
-app.include_router(infra_clusters_router, dependencies=[Depends(require_section_access), Depends(require_scope("infra.read"))])
-app.include_router(ddos_router, dependencies=[Depends(require_section_access), Depends(require_scope("ddos.read"))])
-app.include_router(campaign_evidence_router, dependencies=[Depends(require_section_access), Depends(require_scope("campaigns.read"))])
-app.include_router(cases_router, dependencies=[Depends(require_section_access), Depends(require_scope("cases.read"))])
-app.include_router(stix_router, dependencies=[Depends(require_section_access), Depends(require_scope("intel.read"))])
-app.include_router(infra_graph_router, dependencies=[Depends(require_central_access), Depends(require_scope("infra.read"))])
-app.include_router(anomalies_router, dependencies=[Depends(require_section_access), Depends(require_scope("anomalies.read"))])
-app.include_router(mitigations_router, dependencies=[Depends(require_section_access), Depends(require_scope("mitigations.read"))])
-app.include_router(metrics_router, dependencies=[Depends(require_section_access), Depends(require_scope("metrics.read"))])
-if settings.ai_api_enabled:
-    app.include_router(ai_router, dependencies=[Depends(require_section_access), Depends(require_scope("ai.read"))])
-app.include_router(integrations_router, dependencies=[Depends(require_section_access), Depends(require_scope("integrations.write"))])
-app.include_router(
-    legal_router,
-    dependencies=[Depends(require_central_access), Depends(require_scope("legal.write")), Depends(require_step_up())],
-)
-app.include_router(
-    economy_router,
-    dependencies=[Depends(require_central_access), Depends(require_scope("economy.write")), Depends(require_step_up())],
-)
-app.include_router(
-    economy_guardrail_router,
-    dependencies=[Depends(require_central_access), Depends(require_scope("economy.write")), Depends(require_step_up())],
-)
-app.include_router(
-    economy_leakage_router,
-    dependencies=[Depends(require_central_access), Depends(require_scope("economy.write")), Depends(require_step_up())],
-)
-app.include_router(
-    economy_coverup_router,
-    dependencies=[Depends(require_central_access), Depends(require_scope("economy.write")), Depends(require_step_up())],
-)
-app.include_router(defense_router, dependencies=[Depends(require_section_access)])
+def _register_lifecycle(app: FastAPI) -> None:
+    @app.on_event("startup")
+    def startup() -> None:
+        enforce_runtime_hardening(settings, logger=log)
 
-@app.on_event("startup")
-def startup():
-    if settings.db_auto_create:
-        Base.metadata.create_all(bind=engine)
-    else:
-        log.info("db_auto_create_disabled; skipping Base.metadata.create_all")
-    _ensure_infra_cluster_schema()
-    try:
-        db = SessionLocal()
+        if settings.db_auto_create:
+            Base.metadata.create_all(bind=engine)
+        else:
+            log.info("db_auto_create_disabled; skipping Base.metadata.create_all")
+
+        _ensure_infra_cluster_schema()
         try:
-            out = AuthService(db).bootstrap_defaults()
-            log.info("auth_bootstrap=%s", out)
-        finally:
-            db.close()
-    except Exception:
-        log.exception("auth_bootstrap_failed")
-
-@app.get("/health")
-def health():
-    with engine.connect() as conn:
-        conn.execute(text("SELECT 1"))
-    return {"status": "ok"}
+            db = SessionLocal()
+            try:
+                out = AuthService(db).bootstrap_defaults()
+                log.info("auth_bootstrap=%s", out)
+            finally:
+                db.close()
+        except Exception:
+            log.exception("auth_bootstrap_failed")
 
 
-@app.get("/ready")
-def ready():
-    status = {}
-    # Postgres
-    try:
+def _register_operational_routes(app: FastAPI) -> None:
+    @app.get("/health", tags=["ops"])
+    def health() -> dict[str, str]:
         with engine.connect() as conn:
             conn.execute(text("SELECT 1"))
-        status["postgres"] = "ok"
-    except Exception as e:
-        status["postgres"] = f"error:{e}"
+        return {"status": "ok"}
 
-    # OpenSearch
-    try:
-        client = get_os_client()
-        ok = client.ping()
-        status["opensearch"] = "ok" if ok else "error:ping_failed"
-    except Exception as e:
-        status["opensearch"] = f"error:{e}"
+    @app.get("/ready", tags=["ops"])
+    def ready() -> dict[str, object]:
+        status = {}
 
-    # Neo4j
-    try:
-        drv = get_driver()
-        with drv.session() as sess:
-            sess.run("RETURN 1").single()
-        status["neo4j"] = "ok"
-    except Exception as e:
-        status["neo4j"] = f"error:{e}"
+        try:
+            with engine.connect() as conn:
+                conn.execute(text("SELECT 1"))
+            status["postgres"] = "ok"
+        except Exception as exc:
+            status["postgres"] = f"error:{exc}"
 
-    overall = all(v == "ok" for v in status.values())
-    return {"status": "ok" if overall else "degraded", "components": status}
+        try:
+            client = get_os_client()
+            ok = client.ping()
+            status["opensearch"] = "ok" if ok else "error:ping_failed"
+        except Exception as exc:
+            status["opensearch"] = f"error:{exc}"
+
+        try:
+            drv = get_driver()
+            with drv.session() as sess:
+                sess.run("RETURN 1").single()
+            status["neo4j"] = "ok"
+        except Exception as exc:
+            status["neo4j"] = f"error:{exc}"
+
+        overall = all(value == "ok" for value in status.values())
+        return {"status": "ok" if overall else "degraded", "components": status}
+
+
+def create_application() -> FastAPI:
+    tags_metadata = build_tags_metadata(ai_enabled=settings.ai_api_enabled)
+    app = FastAPI(title="Sentinel-KE", openapi_tags=tags_metadata)
+
+    install_http_hardening(app)
+    install_error_handlers(app)
+
+    if settings.cors_allow_origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=settings.cors_allow_origins,
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
+
+    _register_routers(app)
+    _register_operational_routes(app)
+    _register_lifecycle(app)
+    return app
+
+
+app = create_application()

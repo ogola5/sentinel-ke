@@ -1,0 +1,58 @@
+from __future__ import annotations
+
+from types import SimpleNamespace
+
+from app.core.runtime_hardening import evaluate_runtime_hardening
+
+
+def _settings(**overrides):
+    base = {
+        "app_env": "development",
+        "frontend_api_key": "k" * 24,
+        "ingest_api_key": "k" * 24,
+        "pseudonym_salt": "s" * 16,
+        "auth_token_secret": "t" * 32,
+        "auth_password_pepper": "p" * 16,
+        "auth_mfa_secret_key": "m" * 32,
+        "api_auth_disabled": False,
+        "ingest_allow_unauthenticated": False,
+        "db_auto_create": False,
+        "http_security_headers_enabled": True,
+        "auth_enabled": True,
+        "auth_password_iterations": 450000,
+        "cors_allow_origins": ["https://sentinel.example"],
+        "crypto_tls_mode": "tls1.3",
+        "crypto_pqc_mode": "hybrid",
+        "crypto_kms_provider": "hsm",
+        "crypto_key_rotation_days": 90,
+        "auth_central_mfa_required": True,
+    }
+    base.update(overrides)
+    return SimpleNamespace(**base)
+
+
+def test_runtime_hardening_passes_baseline_development_profile():
+    report = evaluate_runtime_hardening(_settings())
+    assert report.errors == ()
+
+
+def test_runtime_hardening_flags_insecure_production_settings_as_errors():
+    report = evaluate_runtime_hardening(
+        _settings(
+            app_env="production",
+            api_auth_disabled=True,
+            ingest_allow_unauthenticated=True,
+            db_auto_create=True,
+            cors_allow_origins=["*"],
+        )
+    )
+    assert "API_AUTH_DISABLED_true" in report.errors
+    assert "INGEST_ALLOW_UNAUTH_true" in report.errors
+    assert "DB_AUTO_CREATE_true" in report.errors
+    assert "CORS_ALLOW_ORIGINS_wildcard" in report.errors
+
+
+def test_runtime_hardening_treats_missing_secret_as_warning_in_development():
+    report = evaluate_runtime_hardening(_settings(auth_token_secret=""))
+    assert report.errors == ()
+    assert "AUTH_TOKEN_SECRET_missing" in report.warnings

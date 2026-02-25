@@ -61,6 +61,11 @@ Backend architecture, security model, and API access controls:
 docs/BACKEND_DOCUMENTATION.md
 ```
 
+Phase 2 quality hardening controls and policy baseline:
+```
+docs/QUALITY_HARDENING_PHASE2.md
+```
+
 Frontend/integration request examples:
 ```
 docs/API_CONSUMER_GUIDE.md
@@ -76,7 +81,7 @@ Backend-only cloud deployment (skip ML runtime in API service):
 docs/RENDER_BACKEND_ONLY.md
 ```
 
-Repository health gate (secrets/defaults/size/syntax checks):
+Repository health gate (secrets/defaults/size/syntax/routes/docs checks):
 ```
 ./scripts/repo_health_check.sh
 ```

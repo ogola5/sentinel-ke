@@ -61,7 +61,28 @@ fi
 
 echo "[health][ok] no oversized tracked files"
 
-# 4) basic maintainability counters
+# 4) reject empty tracked python source files
+empty_py=0
+while IFS= read -r file; do
+  [[ -f "$file" ]] || continue
+  case "$file" in
+    backend/app/*.py|backend/app/**/*.py|backend/tests/*.py)
+      if [[ ! -s "$file" ]]; then
+        echo "[health][warn] empty python source file: $file"
+        empty_py=$((empty_py + 1))
+      fi
+      ;;
+  esac
+done < <(git ls-files '*.py')
+
+if [[ "$empty_py" -gt 0 ]]; then
+  echo "[health][fail] found $empty_py empty python source files"
+  exit 1
+fi
+
+echo "[health][ok] no empty python source files"
+
+# 5) basic maintainability counters
 test_count=$(find backend/tests -maxdepth 1 -name 'test_*.py' | wc -l | tr -d ' ')
 backend_py_count=$(find backend/app -name '*.py' | wc -l | tr -d ' ')
 
@@ -73,14 +94,18 @@ fi
 
 echo "[health][ok] test inventory threshold satisfied"
 
-# 5) syntax check (no dependency install)
+# 6) syntax check (no dependency install)
 export PYTHONPYCACHEPREFIX=/tmp/pycache
 python3 -m compileall -q backend/app backend/tests
 
 echo "[health][ok] python syntax check passed"
 
-# 6) FastAPI route conflict check (method + full path)
+# 7) FastAPI route conflict check (method + full path)
 python3 scripts/check_route_conflicts.py
 echo "[health][ok] route conflict check passed"
+
+# 8) docs inventory freshness
+python3 scripts/generate_api_inventory.py --check
+echo "[health][ok] api inventory docs are in sync"
 
 echo "[health] all checks passed"

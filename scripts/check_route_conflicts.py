@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import ast
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -13,6 +12,35 @@ class RouteDef:
     full_path: str
     file_path: str
     function_name: str
+
+
+def _resolve_target_files(root: Path) -> list[Path]:
+    registry = root / "backend" / "app" / "api" / "router_registry.py"
+    src = registry.read_text(encoding="utf-8")
+    tree = ast.parse(src, filename=str(registry))
+
+    alias_to_module: dict[str, str] = {}
+    mounted_aliases: set[str] = set()
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module:
+            for imported in node.names:
+                if imported.name == "router":
+                    alias_to_module[imported.asname or imported.name] = node.module
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "RouterMount":
+            if node.args and isinstance(node.args[0], ast.Name):
+                mounted_aliases.add(node.args[0].id)
+
+    out: list[Path] = []
+    for alias in sorted(mounted_aliases):
+        module = alias_to_module.get(alias)
+        if not module or not module.startswith("app."):
+            continue
+        rel = module.split(".", 1)[1]
+        module_file = (root / "backend" / "app" / Path(*rel.split("."))).with_suffix(".py")
+        if module_file.exists():
+            out.append(module_file)
+    return out
 
 
 def _extract_prefix(tree: ast.AST) -> str:
@@ -47,8 +75,9 @@ def _collect_routes(file_path: Path) -> list[RouteDef]:
     prefix = _extract_prefix(tree)
     out: list[RouteDef] = []
 
+    function_nodes = (ast.FunctionDef, ast.AsyncFunctionDef)
     for node in ast.walk(tree):
-        if not isinstance(node, ast.FunctionDef):
+        if not isinstance(node, function_nodes):
             continue
         for dec in node.decorator_list:
             if not isinstance(dec, ast.Call) or not isinstance(dec.func, ast.Attribute):
@@ -56,7 +85,7 @@ def _collect_routes(file_path: Path) -> list[RouteDef]:
             if not isinstance(dec.func.value, ast.Name) or dec.func.value.id != "router":
                 continue
             method = dec.func.attr.lower()
-            if method not in {"get", "post", "put", "delete", "patch"}:
+            if method not in {"get", "post", "put", "delete", "patch", "head", "options"}:
                 continue
             if not dec.args:
                 continue
@@ -77,8 +106,10 @@ def _collect_routes(file_path: Path) -> list[RouteDef]:
 
 def main() -> int:
     root = Path(__file__).resolve().parent.parent
-    targets = sorted((root / "backend" / "app" / "api").glob("*.py"))
-    targets.append(root / "backend" / "app" / "cases" / "api.py")
+    targets = _resolve_target_files(root)
+    if not targets:
+        print("[route-check][fail] unable to resolve mounted router files from router_registry.py")
+        return 1
 
     all_routes: dict[tuple[str, str], list[RouteDef]] = {}
     for fp in targets:

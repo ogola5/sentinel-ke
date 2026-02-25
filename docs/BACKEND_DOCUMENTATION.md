@@ -69,7 +69,7 @@ Role policies are stored in `auth_role_policy` and are bootstrapped at startup.
 
 ### 3.3 Scope matrix (router level)
 
-This is enforced in `app.main`:
+This is enforced from `app.api.router_registry`:
 
 - `/v1/ingest/*`: API key required.
 - `/v1/events/*`: `events.read` + section or central access.
@@ -246,6 +246,12 @@ Minimum required production configuration:
 
 Do not commit `.env`. Use `.env.example` as template only.
 
+Runtime guard:
+
+- Startup runs `app.core.runtime_hardening.enforce_runtime_hardening`.
+- In strict environments (`APP_ENV` outside development/test), insecure flags and weak secrets fail startup.
+- In development, the same issues are logged as warnings.
+
 ## 10) Operations and Release
 
 ### 10.1 Startup and migration order
@@ -269,8 +275,11 @@ This checks:
 - `.env` not tracked
 - suspicious default tokens not committed
 - no oversized tracked files
+- no empty Python source files
 - baseline test inventory threshold
 - Python syntax compilation
+- mounted route conflict detection
+- API endpoint inventory doc freshness (`docs/API_ENDPOINT_INVENTORY.md`)
 
 ### 10.3 Health endpoints
 
@@ -303,5 +312,6 @@ This checks:
 - Cloud backend deployment: `docs/RENDER_BACKEND_ONLY.md`
 - API consumer examples: `docs/API_CONSUMER_GUIDE.md`
 - Generated endpoint inventory: `docs/API_ENDPOINT_INVENTORY.md`
+- Phase 2 hardening baseline: `docs/QUALITY_HARDENING_PHASE2.md`
 - Delivery tracker: `docs/PHASES_90_TRACKER.md`
 - This backend reference: `docs/BACKEND_DOCUMENTATION.md`
