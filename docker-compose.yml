@@ -153,6 +153,26 @@ services:
     volumes: *backend-volumes
     restart: unless-stopped
 
+  # ── Corruption GNN training worker ─────────────────────────────────────────
+  corruption-train-worker:
+    build: *backend-build-full
+    container_name: sentinel-corruption-train
+    <<: *backend-env
+    environment:
+      PYTHONPATH: /app
+    command: >
+      /bin/sh -c "while true; do
+        python -m app.analytics.corruption.train_worker
+          --window-key Wcorruption
+          --epochs 60;
+        sleep 3600;
+      done"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes: *backend-volumes
+    restart: unless-stopped
+
   # ── Mule campaign analytics worker ─────────────────────────────────────────
   mule-campaign-worker:
     build: *backend-build-lite
