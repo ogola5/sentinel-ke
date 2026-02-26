@@ -87,12 +87,13 @@ def _register_operational_routes(app: FastAPI) -> None:
         with engine.connect() as conn:
             conn.execute(text("SELECT 1"))
 
-        # Check whether a trained GNN artifact is available
+        # Check whether a trained GNN artifact is available.
+        # Trust the DB record — the .pt file may live on the GNN worker's disk,
+        # not on the web service's filesystem.
         gnn_loaded = False
         gnn_model_version = None
         try:
             from app.analytics.ai_models import GNNTrainingRun  # noqa: PLC0415
-            from pathlib import Path  # noqa: PLC0415
             db = SessionLocal()
             try:
                 run = (
@@ -101,7 +102,7 @@ def _register_operational_routes(app: FastAPI) -> None:
                     .order_by(GNNTrainingRun.created_at.desc())
                     .first()
                 )
-                if run and run.artifact_path and Path(str(run.artifact_path)).exists():
+                if run and run.artifact_path:
                     gnn_loaded = True
                     gnn_model_version = str(run.model_version)
             finally:

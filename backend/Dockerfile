@@ -60,6 +60,10 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 COPY app app
 COPY alembic.ini* ./
 
+# Copy startup scripts (render_startup.sh, render_gnn_worker.sh, etc.)
+COPY scripts scripts
+RUN chmod +x scripts/*.sh 2>/dev/null || true
+
 # Artifact directory for trained GNN models (also mounted as a named volume)
 RUN mkdir -p /app/artifacts/gnn
 

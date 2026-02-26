@@ -1,32 +1,199 @@
+# =============================================================================
+# Sentinel-KE — Render Blueprint
+#
+# Deploy with:  connect this repo in Render → New Blueprint Instance
+#
+# Services:
+#   sentinel-backend     — FastAPI web service (runtime-only image, fast)
+#   sentinel-gnn-worker  — GNN training worker (full ML image with torch)
+#   sentinel-pg          — Managed PostgreSQL (free 90-day tier)
+#
+# First-deploy checklist (set these in Render dashboard → Environment):
+#   AUTH_TOKEN_SECRET         ← openssl rand -hex 32
+#   AUTH_MFA_SECRET_KEY       ← openssl rand -hex 32
+#   AUTH_PASSWORD_PEPPER      ← openssl rand -hex 32
+#   AUTH_BOOTSTRAP_ADMIN_PASSWORD ← strong password for first admin login
+#   CORS_ALLOW_ORIGINS        ← your frontend URL (e.g. https://sentinel-ke.vercel.app)
+#   LEGAL_APPROVER_SECRETS    ← approver_a=secret_a,approver_b=secret_b
+# =============================================================================
+
+databases:
+  - name: sentinel-pg
+    databaseName: sentinel
+    user: sentinel
+    plan: free
+
 services:
+  # ---------------------------------------------------------------------------
+  # 1. FastAPI Web Service
+  #    - Runtime-only deps (no PyTorch) → fast build & small image
+  #    - Reads GNN predictions from Postgres (no model artifact needed)
+  # ---------------------------------------------------------------------------
   - type: web
     name: sentinel-backend
     runtime: docker
     dockerContext: ./backend
     dockerfilePath: ./backend/Dockerfile
-    dockerCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    dockerBuildArgs:
+      - key: INSTALL_ALL_REQUIREMENTS
+        value: "0"
+    startCommand: /app/scripts/render_startup.sh
     healthCheckPath: /health
     autoDeploy: true
+    plan: free
+
     envVars:
+      # ---- App ----
       - key: APP_ENV
         value: production
+      - key: PYTHONUNBUFFERED
+        value: "1"
+
+      # ---- Database ----
+      - key: DATABASE_URL
+        fromDatabase:
+          name: sentinel-pg
+          property: connectionString
       - key: DB_AUTO_CREATE
-        value: "false"
-      - key: GNN_ENABLED
-        value: "false"
-      - key: AI_API_ENABLED
-        value: "false"
+        value: "true"
+
+      # ---- Feature flags ----
       - key: KAFKA_ENABLED
         value: "false"
+      - key: GNN_ENABLED
+        value: "true"
+      - key: AI_API_ENABLED
+        value: "true"
+      - key: GNN_EDGE_BACKEND
+        value: "postgres"
+
+      # ---- Auth ----
       - key: API_AUTH_DISABLED
         value: "false"
+      - key: AUTH_ENABLED
+        value: "true"
+      - key: AUTH_BOOTSTRAP_ADMIN_ENABLED
+        value: "true"
+      - key: AUTH_BOOTSTRAP_ADMIN_USERNAME
+        value: "admin"
+      - key: AUTH_BOOTSTRAP_ADMIN_DISPLAY_NAME
+        value: "Sentinel Admin"
+      - key: AUTH_TOKEN_ISSUER
+        value: "sentinel-ke-auth"
+      - key: AUTH_TOKEN_AUDIENCE
+        value: "sentinel-ke-api"
+      - key: AUTH_ACCESS_TOKEN_MINUTES
+        value: "60"
+      - key: AUTH_REFRESH_TOKEN_MINUTES
+        value: "10080"
+      - key: AUTH_CENTRAL_MFA_REQUIRED
+        value: "false"
+
+      # ---- Security hardening ----
+      - key: HTTP_SECURITY_HEADERS_ENABLED
+        value: "true"
+      - key: HTTP_REQUEST_LOGGING_ENABLED
+        value: "true"
+
+      # ---- Stub out services not on Render free tier ----
+      - key: MINIO_ANCHOR_MODE
+        value: "stub"
+      - key: IMMUDB_ANCHOR_MODE
+        value: "stub"
+      - key: OPENSEARCH_HOST
+        value: "disabled"
+
+      # ---- Neo4j (optional — set to your Neo4j Aura instance or leave blank) ----
+      - key: NEO4J_URI
+        value: "bolt://localhost:7687"
+
+      # ---- Auto-generated secrets ----
       - key: FRONTEND_API_KEY
         generateValue: true
       - key: INGEST_API_KEY
         generateValue: true
       - key: PSEUDONYM_SALT
         generateValue: true
+
+      # ---- Secrets: set manually in Render dashboard ----
+      - key: AUTH_TOKEN_SECRET
+        sync: false
+      - key: AUTH_MFA_SECRET_KEY
+        sync: false
+      - key: AUTH_PASSWORD_PEPPER
+        sync: false
+      - key: AUTH_BOOTSTRAP_ADMIN_PASSWORD
+        sync: false
       - key: CORS_ALLOW_ORIGINS
         sync: false
+      - key: LEGAL_APPROVER_SECRETS
+        sync: false
+
+  # ---------------------------------------------------------------------------
+  # 2. GNN Training Worker
+  #    - Full ML image (torch + numpy + sklearn)
+  #    - Seeds synthetic data then trains both GNN models on first run
+  #    - Retrains hourly to pick up new data
+  #    - Persistent disk stores .pt artifact files
+  # ---------------------------------------------------------------------------
+  - type: worker
+    name: sentinel-gnn-worker
+    runtime: docker
+    dockerContext: ./backend
+    dockerfilePath: ./backend/Dockerfile
+    dockerBuildArgs:
+      - key: INSTALL_ALL_REQUIREMENTS
+        value: "1"
+    startCommand: /app/scripts/render_gnn_worker.sh
+    autoDeploy: true
+    plan: free
+
+    disk:
+      name: gnn-artifacts
+      mountPath: /app/artifacts/gnn
+      sizeGB: 1
+
+    envVars:
+      # ---- App ----
+      - key: APP_ENV
+        value: production
+      - key: PYTHONUNBUFFERED
+        value: "1"
+
+      # ---- Database ----
       - key: DATABASE_URL
+        fromDatabase:
+          name: sentinel-pg
+          property: connectionString
+      - key: DB_AUTO_CREATE
+        value: "false"
+
+      # ---- GNN config ----
+      - key: KAFKA_ENABLED
+        value: "false"
+      - key: GNN_ENABLED
+        value: "true"
+      - key: GNN_EDGE_BACKEND
+        value: "postgres"
+      - key: GNN_ARTIFACT_DIR
+        value: "/app/artifacts/gnn"
+      - key: GNN_EPOCHS
+        value: "60"
+
+      # ---- Stub out unused services ----
+      - key: MINIO_ANCHOR_MODE
+        value: "stub"
+      - key: IMMUDB_ANCHOR_MODE
+        value: "stub"
+      - key: OPENSEARCH_HOST
+        value: "disabled"
+      - key: NEO4J_URI
+        value: "bolt://localhost:7687"
+
+      # ---- Secrets (shared with web service) ----
+      - key: PSEUDONYM_SALT
+        generateValue: true
+      - key: AUTH_TOKEN_SECRET
+        sync: false
+      - key: AUTH_PASSWORD_PEPPER
         sync: false

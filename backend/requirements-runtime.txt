@@ -6,6 +6,7 @@
 # Web framework
 fastapi
 uvicorn[standard]
+gunicorn
 starlette
 python-multipart
 
