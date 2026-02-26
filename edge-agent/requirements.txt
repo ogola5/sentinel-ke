@@ -1,0 +1,18 @@
+# Sentinel-KE Edge Agent — Python dependencies
+# Core runtime (always required)
+fastapi>=0.111.0
+uvicorn[standard]>=0.29.0
+httpx>=0.27.0
+pydantic>=2.7.0
+pydantic-settings>=2.2.0
+
+# PyTorch GNN stack (remove if running heuristic-only / lightweight mode)
+torch>=2.2.0
+torch-geometric>=2.5.0
+
+# Optional: CSV connector
+# (no extra dep — uses stdlib csv)
+
+# Optional: PostgreSQL connector
+# psycopg2-binary>=2.9
+# sqlalchemy>=2.0

@@ -1,16 +1,18 @@
 """
 Sentinel-KE GNN backbone: dataset loading, feature engineering, edge extraction.
 
-Feature vector design (42 dimensions)
+Feature vector design (44 dimensions)
 --------------------------------------
  0-9   Entity-type one-hot (10 types)
 10-14  Volume:   log(event_count), log(source_count), log(degree),
                  log(weighted_degree), source_diversity
-15-18  Temporal: recency, event_rate, window_coverage, night_flag (placeholder)
+15-18  Temporal: recency, event_rate, window_coverage,
+                 chain_score (multi-stage attack participation: DDoS+SIM-swap+phishing)
 19-24  Risk flags: ddos_alert, campaign, vpn_cluster, ddos_cluster,
                    infra_cluster, any_flag
-25-36  Event-type log counts (11 tracked types + other)
-37-41  Behavioural ratios: suspicious_ratio, multi_type_flag,
+25-38  Event-type log counts (13 tracked types + other)
+         [added: AIRTIME_TRANSFER_EVENT, BILLING_FRAUD_EVENT]
+39-43  Behavioural ratios: suspicious_ratio, multi_type_flag,
                             txn_to_login, sim_to_login, txn_spike_flag
 
 Scientific rationale
@@ -41,7 +43,7 @@ from app.graph.neo4j_driver import get_driver
 # Constants
 # ---------------------------------------------------------------------------
 
-FEATURE_DIM = 42  # canonical dimension; update if you add/remove features
+FEATURE_DIM = 44  # 10+5+4+6+14+5 — updated for airtime events + chain_score
 
 ENTITY_TYPES_ORDERED: List[str] = [
     "ip", "domain", "url", "service_id", "endpoint",
@@ -68,9 +70,10 @@ POSITIVE_RISK_FLAGS = {
     "CAMPAIGN_ENTITY",
     "VPN_CLUSTER_MEMBER",
     "DDOS_CLUSTER_MEMBER",
+    "AIRTIME_SIPHON_MEMBER",   # telco billing theft (Safaricom/Airtel)
 }
 
-# All event types tracked in the feature vector
+# All event types tracked in the feature vector (Block 4: 13 tracked + 1 other = 14 dims)
 TRACKED_EVENT_TYPES: List[str] = [
     "DDOS_SIGNAL_EVENT",
     "SIM_SWAP_EVENT",
@@ -83,13 +86,19 @@ TRACKED_EVENT_TYPES: List[str] = [
     "SERVICE_HEALTH_EVENT",
     "DNS_RESOLUTION_EVENT",
     "DOMAIN_REG_EVENT",
+    "AIRTIME_TRANSFER_EVENT",  # telco airtime siphoning — rapid unauthorized drains
+    "BILLING_FRAUD_EVENT",     # roaming / cross-carrier billing manipulation
 ]
 
 SUSPICIOUS_EVENT_TYPES = {
     "DDOS_SIGNAL_EVENT", "SIM_SWAP_EVENT", "TRANSACTION_EVENT",
     "PHISHING_MESSAGE_EVENT", "DFIR_FINDING_EVENT",
     "FILE_INTEGRITY_EVENT", "DB_AUDIT_EVENT",
+    "AIRTIME_TRANSFER_EVENT", "BILLING_FRAUD_EVENT",
 }
+
+# Event types whose co-presence signals a multi-stage coordinated attack
+_CHAIN_EVENT_TYPES = {"DDOS_SIGNAL_EVENT", "SIM_SWAP_EVENT", "PHISHING_MESSAGE_EVENT"}
 
 BENIGN_EVENT_TYPES = {
     "LOGIN_EVENT", "SERVICE_HEALTH_EVENT", "DNS_RESOLUTION_EVENT", "DOMAIN_REG_EVENT",
@@ -218,24 +227,27 @@ def build_feature_vector(
         e_span = max(0.0, (last_seen - first_seen).total_seconds())
         coverage = min(1.0, e_span / w_span)
 
-    night_flag = 0.0  # reserved for future telco hour-of-day signal
+    # Multi-stage chain score: fraction of {DDoS, SIM-swap, phishing} co-present.
+    # 0.0 = isolated threat, 0.33/0.67/1.0 = 1/2/3-stage chain.
+    chain_hits  = sum(1 for t in _CHAIN_EVENT_TYPES if int(event_types.get(t, 0)) > 0)
+    chain_score = chain_hits / len(_CHAIN_EVENT_TYPES)   # [0.0, 0.33, 0.67, 1.0]
 
     # ------------------------------------------------------------------
     # Block 3: risk flags (6 dims)
     # ------------------------------------------------------------------
     flag_ddos    = 1.0 if ("DDOS_ALERT_SERVICE" in flags or "DDOS_ALERT_ENDPOINT" in flags) else 0.0
-    flag_campaign = 1.0 if "CAMPAIGN_ENTITY" in flags else 0.0
+    flag_campaign = 1.0 if ("CAMPAIGN_ENTITY" in flags or "AIRTIME_SIPHON_MEMBER" in flags) else 0.0
     flag_vpn     = 1.0 if "VPN_CLUSTER_MEMBER" in flags else 0.0
     flag_ddos_cl = 1.0 if "DDOS_CLUSTER_MEMBER" in flags else 0.0
     flag_infra   = 1.0 if "INFRA_CLUSTER_MEMBER" in flags else 0.0
     flag_any     = 1.0 if flags else 0.0
 
     # ------------------------------------------------------------------
-    # Block 4: event-type log counts (12 dims = 11 tracked + other)
+    # Block 4: event-type log counts (14 dims = 13 tracked + other)
     # ------------------------------------------------------------------
     event_type_vec = [math.log1p(max(0, int(event_types.get(et, 0)))) for et in TRACKED_EVENT_TYPES]
     other_count    = int(f.get("event_types_other_count") or 0)
-    event_type_vec.append(math.log1p(max(0, other_count)))   # 12th slot = other
+    event_type_vec.append(math.log1p(max(0, other_count)))   # 14th slot = other
 
     # ------------------------------------------------------------------
     # Block 5: behavioural ratios (5 dims)
@@ -255,17 +267,17 @@ def build_feature_vector(
     txn_spike    = 1.0 if txn_ct > 10 else 0.0
 
     # ------------------------------------------------------------------
-    # Assemble (must sum to FEATURE_DIM = 42)
+    # Assemble (must sum to FEATURE_DIM = 44)
     # ------------------------------------------------------------------
     vec = (
         type_vec                                                    # 10
-        + [f_event, f_source, f_degree, f_wdegree, f_src_div]      # 5
-        + [recency, event_rate, coverage, night_flag]               # 4
+        + [f_event, f_source, f_degree, f_wdegree, f_src_div]      #  5
+        + [recency, event_rate, coverage, chain_score]              #  4
         + [flag_ddos, flag_campaign, flag_vpn,
-           flag_ddos_cl, flag_infra, flag_any]                      # 6
-        + event_type_vec                                            # 12
+           flag_ddos_cl, flag_infra, flag_any]                      #  6
+        + event_type_vec                                            # 14
         + [suspicious_r, multi_type, txn_to_login,
-           sim_to_login, txn_spike]                                 # 5
+           sim_to_login, txn_spike]                                 #  5
     )
     assert len(vec) == FEATURE_DIM, f"feature dim mismatch: got {len(vec)}, expected {FEATURE_DIM}"
     return vec

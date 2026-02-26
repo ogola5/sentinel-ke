@@ -66,3 +66,4 @@ from app.defense.models import (
     ContainmentAction,
     CryptoPostureSnapshot,
 )
+from app.federation.models import FederationPartner, FederationPattern

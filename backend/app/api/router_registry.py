@@ -34,6 +34,7 @@ from app.api.legal import router as legal_router
 from app.api.metrics import router as metrics_router
 from app.api.mitigations import router as mitigations_router
 from app.api.stix import router as stix_router
+from app.api.federation import router as federation_router
 from app.cases.api import router as cases_router
 from app.ingestion.router import router as ingest_router
 
@@ -61,6 +62,7 @@ def build_tags_metadata(*, ai_enabled: bool) -> list[dict[str, str]]:
         {"name": "economy", "description": "Economic integrity and procurement anomalies"},
         {"name": "defense", "description": "Vulnerability, incident response, backup resilience, and crypto posture"},
         {"name": "crypto-posture", "description": "Post-quantum cryptographic posture — FIPS 203/204/197 compliance and algorithm status"},
+        {"name": "federation", "description": "Federated intelligence network — edge-agent pattern ingestion and cross-partner threat correlations"},
     ]
     if ai_enabled:
         tags.append({"name": "ai", "description": "AI predictions and explanations"})
@@ -126,6 +128,11 @@ def build_router_mounts(*, ai_enabled: bool) -> list[RouterMount]:
             ),
         ),
         RouterMount(defense_router, (Depends(require_section_access),)),
+        # Federation router manages its own per-endpoint auth:
+        #   POST /patterns  → partner API key (edge agents)
+        #   GET  /partners, /stream, /correlations → section access (analysts)
+        #   POST /register  → central access + integrations.write (admin)
+        RouterMount(federation_router, ()),
     ]
 
     if ai_enabled:

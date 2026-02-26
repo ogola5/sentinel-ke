@@ -8,12 +8,14 @@ Inserts realistic Kenyan fraud scenario data directly into:
   - event_entity_index  (maps events → entity keys)
   - graph_feature_snapshot  (per-entity feature vectors for GNN training)
 
-Five fraud families modelled on East-African patterns:
-  1. M-Pesa Mule Network   — accounts laundering mobile money
-  2. SIM-Swap Cluster      — phone numbers used in account takeovers
-  3. VPN Fraud Ring        — IPs masked via VPN to commit financial fraud
-  4. DDoS Botnet           — IPs attacking Kenyan critical services
-  5. Phishing Campaign     — domains/phones in a smishing network
+Seven fraud families modelled on East-African patterns:
+  1. M-Pesa Mule Network    — accounts laundering mobile money
+  2. SIM-Swap Cluster       — phone numbers used in account takeovers
+  3. VPN Fraud Ring         — IPs masked via VPN to commit financial fraud
+  4. DDoS Botnet            — IPs attacking Kenyan critical services
+  5. Phishing Campaign      — domains/phones in a smishing network
+  6. Airtime Siphoning      — telco billing theft (Safaricom/Airtel/Telkom)
+  7. Multi-Stage Chain      — coordinated phishing→SIM-swap→DDoS attack
 
 Usage (inside the running backend container or local venv):
   python -m app.demo.synthetic_ke_gnn_data
@@ -482,6 +484,193 @@ def _family_phishing_campaign(
     return all_ents
 
 
+def _family_airtime_siphoning(
+    db, *, window_start: datetime, window_end: datetime, rng: random.Random
+) -> List[str]:
+    """
+    Telco airtime siphoning ring: victims drained via unauthorized USSD/API calls.
+
+    Pattern modelled on documented Safaricom/Airtel Kenya cases:
+      - Gang controls a billing gateway (provider_id) used to initiate transfers
+      - Victims (phone_h) receive USSD prompts / SIM toolkit commands that trigger
+        AIRTIME_TRANSFER_EVENT in rapid succession (balance-depletion velocity)
+      - Proceeds routed to collector accounts (account_h) — cross-carrier via
+        BILLING_FRAUD_EVENT to obscure the paper trail
+    """
+    victims   = [f"phone_h:ke_victim_airtime_{i:03d}" for i in range(12)]
+    receivers = [f"account_h:ke_siphon_acct_{i:03d}" for i in range(8)]
+    providers = [
+        "provider_id:safaricom_billing",
+        "provider_id:airtel_ke_billing",
+        "provider_id:telkom_ke_billing",
+    ]
+    gateway   = ["service_id:airtime_gateway_ke"]
+    all_ents  = victims + receivers + providers + gateway
+
+    # Victims → gateway: rapid airtime transfer events (high velocity signal)
+    _make_shared_events(db, family_entities=victims + gateway,
+                        event_type="AIRTIME_TRANSFER_EVENT",
+                        count=45, window_start=window_start, window_end=window_end,
+                        rng=rng, group_size=3)
+    # Gateway → providers: cross-carrier billing manipulation
+    _make_shared_events(db, family_entities=gateway + providers,
+                        event_type="BILLING_FRAUD_EVENT",
+                        count=20, window_start=window_start, window_end=window_end,
+                        rng=rng, group_size=2)
+    # Providers → receivers: proceeds land in collector accounts
+    _make_shared_events(db, family_entities=providers + receivers,
+                        event_type="TRANSACTION_EVENT",
+                        count=25, window_start=window_start, window_end=window_end,
+                        rng=rng, group_size=3)
+
+    for ek in victims:
+        air = rng.randint(8, 30)
+        login = rng.randint(0, 2)
+        _upsert_snapshot(db, _make_snapshot(
+            entity_key=ek, entity_type="phone_h",
+            window_key=WINDOW_KEY, window_start=window_start, window_end=window_end,
+            event_count=air + login, source_count=rng.randint(2, 4),
+            degree=rng.randint(3, 8), weighted_degree=rng.randint(4, 15),
+            risk_flags=["AIRTIME_SIPHON_MEMBER"],
+            event_types={"AIRTIME_TRANSFER_EVENT": air, "LOGIN_EVENT": login}, rng=rng,
+        ))
+    for ek in receivers:
+        txn = rng.randint(10, 35)
+        bill = rng.randint(2, 8)
+        _upsert_snapshot(db, _make_snapshot(
+            entity_key=ek, entity_type="account_h",
+            window_key=WINDOW_KEY, window_start=window_start, window_end=window_end,
+            event_count=txn + bill, source_count=rng.randint(3, 7),
+            degree=rng.randint(5, 15), weighted_degree=rng.randint(8, 25),
+            risk_flags=["CAMPAIGN_ENTITY", "AIRTIME_SIPHON_MEMBER"],
+            event_types={"TRANSACTION_EVENT": txn, "BILLING_FRAUD_EVENT": bill}, rng=rng,
+        ))
+    for ek in providers:
+        air = rng.randint(20, 80)
+        bill = rng.randint(5, 20)
+        _upsert_snapshot(db, _make_snapshot(
+            entity_key=ek, entity_type="provider_id",
+            window_key=WINDOW_KEY, window_start=window_start, window_end=window_end,
+            event_count=air + bill, source_count=rng.randint(5, 15),
+            degree=rng.randint(10, 30), weighted_degree=rng.randint(15, 50),
+            risk_flags=["AIRTIME_SIPHON_MEMBER"],
+            event_types={"AIRTIME_TRANSFER_EVENT": air, "BILLING_FRAUD_EVENT": bill},
+            rng=rng,
+        ))
+    for ek in gateway:
+        air = rng.randint(50, 150)
+        bill = rng.randint(15, 40)
+        txn = rng.randint(20, 60)
+        _upsert_snapshot(db, _make_snapshot(
+            entity_key=ek, entity_type="service_id",
+            window_key=WINDOW_KEY, window_start=window_start, window_end=window_end,
+            event_count=air + bill + txn, source_count=rng.randint(8, 20),
+            degree=rng.randint(20, 50), weighted_degree=rng.randint(30, 80),
+            risk_flags=["CAMPAIGN_ENTITY", "AIRTIME_SIPHON_MEMBER"],
+            event_types={
+                "AIRTIME_TRANSFER_EVENT": air,
+                "BILLING_FRAUD_EVENT": bill,
+                "TRANSACTION_EVENT": txn,
+            },
+            rng=rng,
+        ))
+
+    log.info("family=airtime_siphoning nodes=%d", len(all_ents))
+    return all_ents
+
+
+def _family_multistage_chain(
+    db, *, window_start: datetime, window_end: datetime, rng: random.Random
+) -> List[str]:
+    """
+    Coordinated 3-stage attack: phishing → SIM-swap → DDoS distraction.
+
+    Documented Kenya pattern (Safaricom/Equity Bank incidents):
+      Stage 1  PHISHING  — SMS lures harvest credentials / OTP codes
+      Stage 2  SIM-SWAP  — account takeover while victim is confused
+      Stage 3  DDoS      — flood bank/telco helpdesk to delay fraud reports
+
+    Pivot entities (phones, IPs, accounts) appear in ALL THREE event types.
+    Their chain_score (dim 18) = 1.0, the strongest signal for this pattern.
+    The GNN learns this via both the feature vector AND the dense cross-event
+    edges connecting entities across the three stages.
+    """
+    pivot_phones  = [f"phone_h:ke_chain_pivot_{i:02d}" for i in range(6)]
+    c2_ips        = [f"ip:ke_chain_c2_{i:03d}" for i in range(4)]
+    chain_accounts = [f"account_h:ke_chain_acct_{i:03d}" for i in range(5)]
+    all_ents       = pivot_phones + c2_ips + chain_accounts
+
+    span_sec = max(1, int((window_end - window_start).total_seconds()))
+
+    # Stage 1: phishing — pivot phones used to send/receive lures
+    _make_shared_events(db, family_entities=pivot_phones + c2_ips,
+                        event_type="PHISHING_MESSAGE_EVENT",
+                        count=18, window_start=window_start, window_end=window_end,
+                        rng=rng, group_size=3)
+    # Stage 2: SIM-swap — same phones targeted for account takeover
+    _make_shared_events(db, family_entities=pivot_phones + chain_accounts,
+                        event_type="SIM_SWAP_EVENT",
+                        count=15, window_start=window_start, window_end=window_end,
+                        rng=rng, group_size=2)
+    # Stage 3: DDoS — C2 IPs launch distraction flood against critical services
+    _make_shared_events(db, family_entities=c2_ips,
+                        event_type="DDOS_SIGNAL_EVENT",
+                        count=30, window_start=window_start, window_end=window_end,
+                        rng=rng, group_size=2)
+    # Fund movement after takeover
+    _make_shared_events(db, family_entities=chain_accounts,
+                        event_type="TRANSACTION_EVENT",
+                        count=20, window_start=window_start, window_end=window_end,
+                        rng=rng, group_size=2)
+
+    for ek in pivot_phones:
+        phish = rng.randint(3, 10)
+        sim   = rng.randint(2, 6)
+        login = rng.randint(1, 4)
+        _upsert_snapshot(db, _make_snapshot(
+            entity_key=ek, entity_type="phone_h",
+            window_key=WINDOW_KEY, window_start=window_start, window_end=window_end,
+            event_count=phish + sim + login, source_count=rng.randint(2, 5),
+            degree=rng.randint(4, 10), weighted_degree=rng.randint(5, 15),
+            risk_flags=["CAMPAIGN_ENTITY"],
+            event_types={
+                "PHISHING_MESSAGE_EVENT": phish,
+                "SIM_SWAP_EVENT": sim,
+                "LOGIN_EVENT": login,
+            },
+            rng=rng,
+        ))
+    for ek in c2_ips:
+        ddos  = rng.randint(20, 60)
+        phish = rng.randint(3, 12)
+        _upsert_snapshot(db, _make_snapshot(
+            entity_key=ek, entity_type="ip",
+            window_key=WINDOW_KEY, window_start=window_start, window_end=window_end,
+            event_count=ddos + phish, source_count=rng.randint(2, 4),
+            degree=rng.randint(5, 15), weighted_degree=rng.randint(8, 25),
+            risk_flags=["CAMPAIGN_ENTITY", "DDOS_CLUSTER_MEMBER"],
+            event_types={
+                "DDOS_SIGNAL_EVENT": ddos,
+                "PHISHING_MESSAGE_EVENT": phish,
+            },
+            rng=rng,
+        ))
+    for ek in chain_accounts:
+        sim = rng.randint(1, 3)
+        txn = rng.randint(5, 20)
+        _upsert_snapshot(db, _make_snapshot(
+            entity_key=ek, entity_type="account_h",
+            window_key=WINDOW_KEY, window_start=window_start, window_end=window_end,
+            event_count=sim + txn, source_count=rng.randint(2, 5),
+            degree=rng.randint(3, 10), weighted_degree=rng.randint(4, 15),
+            risk_flags=["CAMPAIGN_ENTITY"],
+            event_types={"SIM_SWAP_EVENT": sim, "TRANSACTION_EVENT": txn}, rng=rng,
+        ))
+
+    log.info("family=multistage_chain nodes=%d", len(all_ents))
+    return all_ents
+
+
 def _benign_nodes(
     db,
     *,
@@ -570,6 +759,10 @@ def seed(
         all_positive += _family_ddos_botnet(
             db, window_start=window_start, window_end=window_end, rng=rng)
         all_positive += _family_phishing_campaign(
+            db, window_start=window_start, window_end=window_end, rng=rng)
+        all_positive += _family_airtime_siphoning(
+            db, window_start=window_start, window_end=window_end, rng=rng)
+        all_positive += _family_multistage_chain(
             db, window_start=window_start, window_end=window_end, rng=rng)
 
         existing_keys = set(all_positive)

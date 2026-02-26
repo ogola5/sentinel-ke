@@ -1,0 +1,405 @@
+"""
+Sentinel-KE Federation API
+===========================
+
+Endpoints for the federated intelligence network.
+
+Edge agents (running at banks / telcos / hospitals) POST their GNN
+pattern batches here.  Analysts at the National Command Centre query
+these endpoints to monitor all connected partners and detect
+cross-organizational threats.
+
+Endpoints
+---------
+POST /v1/federation/patterns
+    Edge agent submits a batch of high-risk entity patterns.
+    Auth: X-API-Key header (same mechanism as the main ingest pipeline).
+
+GET  /v1/federation/partners
+    List all registered partners with liveness status.
+    Auth: section access required.
+
+GET  /v1/federation/patterns
+    Query pattern stream — filter by partner, time window, risk threshold.
+    Auth: section access required.
+
+GET  /v1/federation/correlations
+    Cross-partner threat correlations: entities flagged by 2+ independent
+    organisations in the same time window.
+    Auth: section access required.
+
+POST /v1/federation/register
+    Register a new edge agent partner (admin: central access + write scope).
+    Returns the API key to configure in the edge agent's .env.
+"""
+from __future__ import annotations
+
+import hashlib
+import hmac
+import secrets
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, List, Optional
+
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from pydantic import BaseModel, Field
+from sqlalchemy import func, text
+from sqlalchemy.orm import Session
+
+from app.api.deps import get_db, require_central_access, require_scope, require_section_access
+from app.federation.models import FederationPartner, FederationPattern
+from app.db.base import utcnow
+
+router = APIRouter(prefix="/v1/federation", tags=["federation"])
+
+
+# ---------------------------------------------------------------------------
+# Pydantic schemas
+# ---------------------------------------------------------------------------
+
+class EntityPattern(BaseModel):
+    entity_key_hash: str = Field(..., description="HMAC-SHA256 of the entity key — never the raw key")
+    entity_type: str = Field(..., description="ip / phone_h / account_h / domain / etc.")
+    risk_score: float = Field(..., ge=0.0, le=1.0)
+    uncertainty: float = Field(0.0, ge=0.0, le=1.0)
+    fraud_family: Optional[str] = None
+    chain_score: float = Field(0.0, ge=0.0, le=1.0)
+    risk_flags: List[str] = Field(default_factory=list)
+
+
+class PatternBatchSummary(BaseModel):
+    total_entities_scored: int = 0
+    high_risk_count: int = 0
+    mean_risk_score: float = 0.0
+    top_fraud_family: Optional[str] = None
+    gnn_auc: Optional[float] = None
+
+
+class PatternBatch(BaseModel):
+    """Payload sent by an edge agent after each GNN run."""
+    partner_id: str = Field(..., description="Edge agent partner ID, e.g. equity-bank-ke")
+    schema_version: str = Field("1.0")
+    window_start: datetime
+    window_end: datetime
+    gnn_model_version: Optional[str] = None
+    high_risk_entities: List[EntityPattern] = Field(default_factory=list)
+    summary: PatternBatchSummary = Field(default_factory=PatternBatchSummary)
+
+
+class PartnerRegistration(BaseModel):
+    partner_id: str = Field(..., min_length=3, max_length=64,
+                            description="Short stable ID e.g. equity-bank-ke")
+    partner_name: str = Field(..., description="Display name e.g. Equity Bank Kenya")
+    partner_type: str = Field(..., description="bank | telco | hospital | government | other")
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+# ---------------------------------------------------------------------------
+# Auth helper — verifies edge agent API key
+# ---------------------------------------------------------------------------
+
+def _require_partner_api_key(
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+    db: Session = Depends(get_db),
+) -> FederationPartner:
+    if not x_api_key:
+        raise HTTPException(status_code=401, detail="Missing X-API-Key")
+    key_hash = hashlib.sha256(x_api_key.encode()).hexdigest()
+    partner = (
+        db.query(FederationPartner)
+        .filter(FederationPartner.api_key_hash == key_hash,
+                FederationPartner.is_active.is_(True))
+        .first()
+    )
+    if not partner:
+        raise HTTPException(status_code=403, detail="Unknown or inactive partner API key")
+    return partner
+
+
+# ---------------------------------------------------------------------------
+# POST /v1/federation/patterns  — edge agent submits GNN patterns
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "/patterns",
+    summary="Submit GNN pattern batch from edge agent",
+    description=(
+        "Called automatically by the Sentinel-KE Edge Agent after each local GNN run. "
+        "Accepts a batch of high-risk entity patterns (hashed keys only — no raw data). "
+        "Auth: partner API key issued at registration."
+    ),
+    status_code=202,
+)
+def submit_patterns(
+    batch: PatternBatch,
+    partner: FederationPartner = Depends(_require_partner_api_key),
+    db: Session = Depends(get_db),
+) -> dict:
+    if partner.partner_id != batch.partner_id:
+        raise HTTPException(status_code=403,
+                            detail="partner_id in payload does not match API key owner")
+
+    now = utcnow()
+    rows = []
+    for ent in batch.high_risk_entities:
+        rows.append(FederationPattern(
+            partner_id        = partner.partner_id,
+            received_at       = now,
+            window_start      = batch.window_start,
+            window_end        = batch.window_end,
+            gnn_model_version = batch.gnn_model_version,
+            entity_key_hash   = ent.entity_key_hash,
+            entity_type       = ent.entity_type,
+            risk_score        = ent.risk_score,
+            uncertainty       = ent.uncertainty,
+            fraud_family      = ent.fraud_family,
+            chain_score       = ent.chain_score,
+            risk_flags        = list(ent.risk_flags),
+            summary_json      = batch.summary.model_dump(),
+            schema_version    = batch.schema_version,
+        ))
+
+    if rows:
+        db.bulk_save_objects(rows)
+
+    # Update partner liveness
+    partner.last_seen       = now
+    partner.last_pattern_at = now
+    partner.total_patterns  = (partner.total_patterns or 0) + len(rows)
+    db.commit()
+
+    return {
+        "accepted": len(rows),
+        "partner_id": partner.partner_id,
+        "received_at": now.isoformat(),
+    }
+
+
+# ---------------------------------------------------------------------------
+# GET /v1/federation/partners  — list all partners
+# ---------------------------------------------------------------------------
+
+@router.get(
+    "/partners",
+    summary="List registered edge-agent partners",
+    dependencies=[Depends(require_section_access)],
+)
+def list_partners(db: Session = Depends(get_db)) -> List[dict]:
+    partners = db.query(FederationPartner).order_by(
+        FederationPartner.last_seen.desc().nulls_last()
+    ).all()
+
+    now = utcnow()
+    result = []
+    for p in partners:
+        age_sec = None
+        status = "never_connected"
+        if p.last_seen:
+            age_sec = round((now - p.last_seen.replace(tzinfo=timezone.utc)
+                             if p.last_seen.tzinfo is None
+                             else now - p.last_seen).total_seconds())
+            status = "online" if age_sec < 300 else ("stale" if age_sec < 3600 else "offline")
+
+        result.append({
+            "partner_id":       p.partner_id,
+            "partner_name":     p.partner_name,
+            "partner_type":     p.partner_type,
+            "status":           status,
+            "last_seen_sec_ago": age_sec,
+            "last_pattern_at":  p.last_pattern_at.isoformat() if p.last_pattern_at else None,
+            "total_patterns":   p.total_patterns,
+            "is_active":        p.is_active,
+            "registered_at":    p.registered_at.isoformat() if p.registered_at else None,
+            "metadata":         p.metadata_json or {},
+        })
+    return result
+
+
+# ---------------------------------------------------------------------------
+# GET /v1/federation/patterns  — query pattern stream
+# ---------------------------------------------------------------------------
+
+@router.get(
+    "/stream",
+    summary="Query federation pattern stream",
+    dependencies=[Depends(require_section_access)],
+)
+def query_patterns(
+    partner_id:    Optional[str]   = Query(None,  description="Filter by partner"),
+    min_risk:      float           = Query(0.7,   description="Minimum risk score"),
+    hours:         int             = Query(1,     description="Look-back window in hours"),
+    fraud_family:  Optional[str]   = Query(None,  description="Filter by fraud family"),
+    limit:         int             = Query(100,   le=500),
+    db: Session = Depends(get_db),
+) -> List[dict]:
+    since = utcnow() - timedelta(hours=max(1, min(hours, 168)))
+    q = (
+        db.query(FederationPattern)
+        .filter(FederationPattern.received_at >= since)
+        .filter(FederationPattern.risk_score >= min_risk)
+    )
+    if partner_id:
+        q = q.filter(FederationPattern.partner_id == partner_id)
+    if fraud_family:
+        q = q.filter(FederationPattern.fraud_family == fraud_family)
+
+    rows = q.order_by(FederationPattern.risk_score.desc()).limit(limit).all()
+
+    return [
+        {
+            "id":               str(r.id),
+            "partner_id":       r.partner_id,
+            "received_at":      r.received_at.isoformat(),
+            "window_start":     r.window_start.isoformat() if r.window_start else None,
+            "window_end":       r.window_end.isoformat()   if r.window_end   else None,
+            "entity_key_hash":  r.entity_key_hash,
+            "entity_type":      r.entity_type,
+            "risk_score":       round(r.risk_score, 4),
+            "uncertainty":      round(r.uncertainty, 4),
+            "fraud_family":     r.fraud_family,
+            "chain_score":      round(r.chain_score, 4),
+            "risk_flags":       list(r.risk_flags or []),
+            "gnn_model_version": r.gnn_model_version,
+        }
+        for r in rows
+    ]
+
+
+# ---------------------------------------------------------------------------
+# GET /v1/federation/correlations  — cross-partner threat correlations
+# ---------------------------------------------------------------------------
+
+@router.get(
+    "/correlations",
+    summary="Cross-partner threat correlations",
+    description=(
+        "Returns entities flagged as high-risk by 2 or more independent partner organisations "
+        "within the same time window. A signal confirmed by multiple independent GNN runs "
+        "is near-certain evidence of a real cross-organizational attack.\n\n"
+        "Example: Equity Bank's GNN flags phone_h:abc123 at 14:30, "
+        "Safaricom's GNN flags the same hash at 14:32 → coordinated SIM-swap + mule attack."
+    ),
+    dependencies=[Depends(require_section_access)],
+)
+def cross_partner_correlations(
+    hours:     int   = Query(1,   description="Look-back window in hours"),
+    min_risk:  float = Query(0.7, description="Minimum risk score per signal"),
+    min_partners: int = Query(2,  description="Minimum number of partners that must confirm"),
+    limit:     int   = Query(50,  le=200),
+    db: Session = Depends(get_db),
+) -> dict:
+    since = utcnow() - timedelta(hours=max(1, min(hours, 168)))
+
+    rows = db.execute(
+        text("""
+            SELECT
+                entity_key_hash,
+                entity_type,
+                array_agg(DISTINCT partner_id ORDER BY partner_id) AS seen_in_partners,
+                count(DISTINCT partner_id)                          AS partner_count,
+                max(risk_score)                                     AS max_risk,
+                avg(risk_score)                                     AS avg_risk,
+                array_agg(DISTINCT fraud_family)
+                    FILTER (WHERE fraud_family IS NOT NULL)         AS fraud_families,
+                array_agg(DISTINCT unnested_flag)
+                    FILTER (WHERE unnested_flag IS NOT NULL)        AS all_risk_flags,
+                max(chain_score)                                    AS max_chain_score,
+                max(received_at)                                    AS last_seen,
+                count(*)                                            AS total_signals
+            FROM federation_pattern
+            CROSS JOIN LATERAL unnest(risk_flags) AS t(unnested_flag)
+            WHERE received_at >= :since
+              AND risk_score   >= :min_risk
+            GROUP BY entity_key_hash, entity_type
+            HAVING count(DISTINCT partner_id) >= :min_partners
+            ORDER BY partner_count DESC, max_risk DESC
+            LIMIT :lim
+        """),
+        {
+            "since":        since,
+            "min_risk":     min_risk,
+            "min_partners": max(1, int(min_partners)),
+            "lim":          limit,
+        },
+    ).fetchall()
+
+    correlations = [
+        {
+            "entity_key_hash":  r[0],
+            "entity_type":      r[1],
+            "seen_in_partners": list(r[2] or []),
+            "partner_count":    int(r[3] or 0),
+            "max_risk":         round(float(r[4] or 0), 4),
+            "avg_risk":         round(float(r[5] or 0), 4),
+            "fraud_families":   list(r[6] or []),
+            "all_risk_flags":   list(r[7] or []),
+            "max_chain_score":  round(float(r[8] or 0), 4),
+            "last_seen":        r[9].isoformat() if r[9] else None,
+            "total_signals":    int(r[10] or 0),
+            "threat_level": (
+                "CRITICAL" if int(r[3] or 0) >= 4 else
+                "HIGH"     if int(r[3] or 0) >= 3 else
+                "MEDIUM"
+            ),
+        }
+        for r in rows
+    ]
+
+    return {
+        "window_hours":   hours,
+        "min_risk":       min_risk,
+        "min_partners":   min_partners,
+        "correlations":   correlations,
+        "total_found":    len(correlations),
+        "queried_at":     utcnow().isoformat(),
+    }
+
+
+# ---------------------------------------------------------------------------
+# POST /v1/federation/register  — register a new edge agent partner (admin)
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "/register",
+    summary="Register a new edge-agent partner (admin)",
+    dependencies=[
+        Depends(require_central_access),
+        Depends(require_scope("integrations.write")),
+    ],
+    status_code=201,
+)
+def register_partner(
+    reg: PartnerRegistration,
+    db: Session = Depends(get_db),
+) -> dict:
+    existing = db.query(FederationPartner).filter(
+        FederationPartner.partner_id == reg.partner_id
+    ).first()
+    if existing:
+        raise HTTPException(status_code=409,
+                            detail=f"Partner '{reg.partner_id}' already registered")
+
+    raw_key  = secrets.token_hex(32)
+    key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
+
+    partner = FederationPartner(
+        partner_id   = reg.partner_id,
+        partner_name = reg.partner_name,
+        partner_type = reg.partner_type,
+        api_key_hash = key_hash,
+        metadata_json = reg.metadata,
+    )
+    db.add(partner)
+    db.commit()
+
+    return {
+        "partner_id":  reg.partner_id,
+        "partner_name": reg.partner_name,
+        "partner_type": reg.partner_type,
+        "api_key": raw_key,   # returned ONCE — store securely, configure in edge agent .env
+        "warning": "Store this API key securely. It cannot be retrieved again.",
+        "edge_agent_env": {
+            "PARTNER_ID":   reg.partner_id,
+            "HUB_URL":      "https://sentinel-ke.onrender.com",
+            "HUB_API_KEY":  raw_key,
+        },
+    }

@@ -1,0 +1,42 @@
+# Sentinel-KE Edge Agent — Docker Compose
+# ==========================================
+# Run locally for development / testing:
+#   docker compose up --build
+#
+# For production, add GPU resources and mount real data volumes.
+
+version: "3.9"
+
+services:
+  edge-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        INSTALL_TORCH: "1"   # set to "0" for heuristic-only mode
+    image: sentinel-edge-agent:latest
+    container_name: sentinel_edge_agent
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    env_file:
+      - .env
+    environment:
+      # Override in .env — these are safe defaults for local testing only
+      - DATA_SOURCE=demo
+      - RUN_INTERVAL_S=60        # faster cadence for local demo
+      - RISK_THRESHOLD=0.55
+    volumes:
+      # Mount a real event CSV here if DATA_SOURCE=csv
+      # - ./data:/data:ro
+      # Persist model weights between runs (optional)
+      - edge_model_cache:/tmp/edge_model
+    healthcheck:
+      test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8080/status').raise_for_status()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+volumes:
+  edge_model_cache:

@@ -6,13 +6,14 @@ Seeds the database with realistic Kenyan public-sector corruption
 patterns so the corruption GNN can be trained without waiting for
 real government data ingestion.
 
-Five fraud families modelled on documented Kenyan cases
--------------------------------------------------------
+Six fraud families modelled on documented Kenyan cases
+------------------------------------------------------
 1. Tender Cartel          — companies colluding on procurement (PPRA pattern)
 2. Ghost Workers Network  — payroll fraud (county govt pattern)
 3. Inflated Procurement   — contracts at 3-5× market rate (KEMSA-type)
 4. Shell Company Network  — officials owning shell companies via relatives
 5. Budget Absorption Fraud — end-of-FY spending surge (IFMIS audit pattern)
+6. Land Fraud             — title deed manipulation (Ardhisasa/registry fraud)
 
 Data inserted
 -------------
@@ -608,6 +609,174 @@ def _family_fy_end_fraud(
 
 
 # ---------------------------------------------------------------------------
+# Family 6 — Land Fraud / Title Deed Manipulation
+# ---------------------------------------------------------------------------
+
+def _family_land_fraud(
+    db, *, window_start: datetime, window_end: datetime, rng: random.Random,
+) -> List[str]:
+    """
+    Land registry officials collude with buyers to fraudulently transfer title deeds.
+
+    Documented Kenya patterns (Rift Valley, Nairobi suburban parcels):
+      - Registry official undervalues or forged-surveys land (COLLUDED_VALUATION)
+      - Shell firms registered days before the transfer receive title (RAPID_SHELL)
+      - Directors of shell firms are relatives of the official (DIRECTOR_CONFLICT)
+      - Proceeds split across sub-threshold payments (THRESHOLD_SPLITTING)
+      - Multiple parcels funnelled to same buyer (CONCENTRATION)
+
+    Entity-type mapping (reuses existing 10-type one-hot — no dim change):
+      official   → land registry official
+      company    → real-estate / conveyancing firm (often a shell)
+      director   → beneficial owner / buyer (relative of official)
+      contract   → title deed document
+      project    → land parcel (physical asset)
+      account    → bank account receiving sale proceeds
+    """
+    registrars = [f"official:land_registrar_{i:02d}" for i in range(2)]
+    firms      = [f"company:land_firm_{i:02d}_ltd"   for i in range(5)]
+    buyers     = [f"director:land_buyer_{i:02d}"     for i in range(4)]
+    deeds      = [f"contract:title_deed_{i:03d}"     for i in range(6)]
+    parcels    = [f"project:land_parcel_{i:03d}"     for i in range(8)]
+    proceeds   = [f"account:land_proceeds_{i:03d}"   for i in range(6)]
+    all_ents   = registrars + firms + buyers + deeds + parcels + proceeds
+
+    # Registrars ↔ firms: audit findings on deed registrations
+    _shared_events(db, entities=registrars + firms, event_type="AUDIT_FINDING_EVENT",
+                   count=8, window_start=window_start, window_end=window_end,
+                   rng=rng, group_size=2)
+    # Firms ↔ buyers: director changes (relatives added just before transfer)
+    _shared_events(db, entities=firms + buyers, event_type="DIRECTOR_CHANGE",
+                   count=12, window_start=window_start, window_end=window_end,
+                   rng=rng, group_size=3)
+    # Shell firm registration (days before title transfer)
+    _shared_events(db, entities=firms + registrars, event_type="COMPANY_REGISTRATION",
+                   count=6, window_start=window_start, window_end=window_end,
+                   rng=rng, group_size=2)
+    # Title deed address / survey manipulation
+    _shared_events(db, entities=deeds + registrars + firms, event_type="ADDRESS_CHANGE",
+                   count=10, window_start=window_start, window_end=window_end,
+                   rng=rng, group_size=3)
+    # Proceeds disbursed to proceeds accounts (sub-threshold splits)
+    _shared_events(db, entities=proceeds + buyers, event_type="PAYMENT_DISBURSEMENT",
+                   count=30, window_start=window_start, window_end=window_end,
+                   rng=rng, group_size=3)
+    # Single-source award: parcel granted without competitive process
+    _shared_events(db, entities=parcels + deeds + registrars,
+                   event_type="SINGLE_SOURCE_AWARD",
+                   count=8, window_start=window_start, window_end=window_end,
+                   rng=rng, group_size=3)
+
+    for ek in registrars:
+        val = rng.uniform(2e6, 20e6)
+        _upsert_snapshot(db, _snap(
+            entity_key=ek, entity_type="official",
+            window_start=window_start, window_end=window_end,
+            event_count=rng.randint(12, 28), degree=rng.randint(6, 14),
+            risk_flags=["AUDIT_FINDING", "DIRECTOR_CONFLICT"],
+            corruption_events={
+                "AUDIT_FINDING_EVENT":  rng.randint(2, 5),
+                "SINGLE_SOURCE_AWARD":  rng.randint(2, 6),
+                "COMPANY_REGISTRATION": rng.randint(1, 3),
+                "WEALTH_DECLARATION":   rng.randint(0, 1),
+            },
+            total_value_ksh=val, counterparty_count=rng.randint(4, 10),
+            related_party_ratio=rng.uniform(0.6, 0.9),
+            concentration_ratio=rng.uniform(0.5, 0.85),
+            rng=rng,
+        ))
+
+    for ek in firms:
+        val = rng.uniform(3e6, 50e6)
+        _upsert_snapshot(db, _snap(
+            entity_key=ek, entity_type="company",
+            window_start=window_start, window_end=window_end,
+            event_count=rng.randint(8, 20), degree=rng.randint(3, 8),
+            risk_flags=["SHELL_COMPANY", "DIRECTOR_CONFLICT", "PRICE_INFLATION"],
+            corruption_events={
+                "COMPANY_REGISTRATION": rng.randint(1, 2),
+                "DIRECTOR_CHANGE":      rng.randint(2, 5),
+                "PAYMENT_DISBURSEMENT": rng.randint(3, 10),
+                "ADDRESS_CHANGE":       rng.randint(1, 3),
+            },
+            total_value_ksh=val, counterparty_count=rng.randint(2, 5),
+            related_party_ratio=rng.uniform(0.7, 1.0),
+            amendment_ratio=rng.uniform(0.3, 0.7),
+            execution_rate=rng.uniform(0.1, 0.4),   # shell delivers nothing
+            concentration_ratio=rng.uniform(0.6, 0.95),
+            threshold_splitting=rng.uniform(0.3, 0.7),
+            rng=rng,
+        ))
+
+    for ek in buyers:
+        val = rng.uniform(1e6, 15e6)
+        _upsert_snapshot(db, _snap(
+            entity_key=ek, entity_type="director",
+            window_start=window_start, window_end=window_end,
+            event_count=rng.randint(5, 15), degree=rng.randint(2, 6),
+            risk_flags=["DIRECTOR_CONFLICT"],
+            corruption_events={
+                "DIRECTOR_CHANGE":      rng.randint(2, 4),
+                "PAYMENT_DISBURSEMENT": rng.randint(2, 6),
+            },
+            total_value_ksh=val, counterparty_count=rng.randint(2, 5),
+            related_party_ratio=rng.uniform(0.8, 1.0),
+            rng=rng,
+        ))
+
+    for ek in deeds:
+        val = rng.uniform(5e6, 80e6)
+        _upsert_snapshot(db, _snap(
+            entity_key=ek, entity_type="contract",
+            window_start=window_start, window_end=window_end,
+            event_count=rng.randint(3, 8), degree=rng.randint(2, 5),
+            risk_flags=["AUDIT_FINDING", "PRICE_INFLATION"],
+            corruption_events={
+                "SINGLE_SOURCE_AWARD": rng.randint(1, 2),
+                "ADDRESS_CHANGE":      rng.randint(1, 3),
+                "AUDIT_FINDING_EVENT": rng.randint(0, 2),
+            },
+            total_value_ksh=val, counterparty_count=rng.randint(1, 3),
+            amendment_ratio=rng.uniform(0.4, 0.9),  # deed amended multiple times
+            single_source=True,
+            rng=rng,
+        ))
+
+    for ek in parcels:
+        val = rng.uniform(2e6, 40e6)
+        _upsert_snapshot(db, _snap(
+            entity_key=ek, entity_type="project",
+            window_start=window_start, window_end=window_end,
+            event_count=rng.randint(2, 6), degree=rng.randint(1, 4),
+            risk_flags=["AUDIT_FINDING"],
+            corruption_events={
+                "AUDIT_FINDING_EVENT":  rng.randint(0, 2),
+                "PAYMENT_DISBURSEMENT": rng.randint(1, 3),
+            },
+            total_value_ksh=val, counterparty_count=1,
+            execution_rate=rng.uniform(0.0, 0.2),  # land not developed
+            concentration_ratio=rng.uniform(0.7, 1.0),
+            rng=rng,
+        ))
+
+    for ek in proceeds:
+        val = rng.uniform(500_000, 8e6)
+        _upsert_snapshot(db, _snap(
+            entity_key=ek, entity_type="account",
+            window_start=window_start, window_end=window_end,
+            event_count=rng.randint(3, 10), degree=rng.randint(2, 5),
+            risk_flags=[],   # proceeds accounts themselves are not flagged
+            corruption_events={"PAYMENT_DISBURSEMENT": rng.randint(3, 8)},
+            total_value_ksh=val, counterparty_count=rng.randint(1, 3),
+            threshold_splitting=rng.uniform(0.4, 0.85),  # payments just below KES 1M
+            rng=rng,
+        ))
+
+    log.info("family=land_fraud nodes=%d", len(all_ents))
+    return all_ents
+
+
+# ---------------------------------------------------------------------------
 # Benign nodes (negative class)
 # ---------------------------------------------------------------------------
 
@@ -683,6 +852,8 @@ def seed(
         all_positive += _family_shell_network(
             db, window_start=window_start, window_end=window_end, rng=rng)
         all_positive += _family_fy_end_fraud(
+            db, window_start=window_start, window_end=window_end, rng=rng)
+        all_positive += _family_land_fraud(
             db, window_start=window_start, window_end=window_end, rng=rng)
 
         existing = set(all_positive)
