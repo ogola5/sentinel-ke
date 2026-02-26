@@ -34,3 +34,13 @@ boto3
 
 # STIX threat intelligence
 stix2
+
+# Post-quantum cryptography (NIST FIPS 203 / 204 / 197)
+# AES-256-GCM + HKDF-SHA3-512 — replaces custom XOR cipher for MFA secret storage
+cryptography
+# ML-KEM-768 (CRYSTALS-Kyber) — FIPS 203 key encapsulation
+kyber-py
+# ML-DSA-65 (CRYSTALS-Dilithium) — FIPS 204 digital signatures for tokens
+dilithium-py
+# AES-CTR DRBG backend required by kyber-py and dilithium-py for deterministic keygen
+pycryptodome

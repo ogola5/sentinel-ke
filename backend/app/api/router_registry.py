@@ -9,6 +9,7 @@ from fastapi.routing import APIRouter
 from app.api.ai import router as ai_router
 from app.api.anomalies import router as anomalies_router
 from app.api.auth import router as auth_router
+from app.api.crypto_posture import router as crypto_posture_router
 from app.api.campaign_evidence import router as campaign_evidence_router
 from app.api.campaigns import router as campaigns_router
 from app.api.ddos import router as ddos_router
@@ -59,6 +60,7 @@ def build_tags_metadata(*, ai_enabled: bool) -> list[dict[str, str]]:
         {"name": "metrics", "description": "Operational metrics"},
         {"name": "economy", "description": "Economic integrity and procurement anomalies"},
         {"name": "defense", "description": "Vulnerability, incident response, backup resilience, and crypto posture"},
+        {"name": "crypto-posture", "description": "Post-quantum cryptographic posture — FIPS 203/204/197 compliance and algorithm status"},
     ]
     if ai_enabled:
         tags.append({"name": "ai", "description": "AI predictions and explanations"})
@@ -68,6 +70,7 @@ def build_tags_metadata(*, ai_enabled: bool) -> list[dict[str, str]]:
 def build_router_mounts(*, ai_enabled: bool) -> list[RouterMount]:
     mounts = [
         RouterMount(auth_router, ()),
+        RouterMount(crypto_posture_router, ()),  # public — no auth on /posture; self-test requires section access
         RouterMount(ingest_router, (Depends(require_api_key),)),
         RouterMount(events_router, (Depends(require_section_access), Depends(require_scope("events.read")))),
         RouterMount(graph_router, (Depends(require_central_access), Depends(require_scope("graph.read")))),
