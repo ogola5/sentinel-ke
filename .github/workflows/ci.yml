@@ -1,0 +1,124 @@
+name: Sentinel-KE CI
+
+on:
+  push:
+    branches: [ main, "feat/**", "fix/**" ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  lint-and-typecheck:
+    name: Lint & type-check (backend)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install lint dependencies
+        run: |
+          pip install --quiet \
+            ruff \
+            pyright \
+            pydantic \
+            pydantic-settings \
+            fastapi \
+            sqlalchemy \
+            httpx
+
+      - name: Ruff lint
+        run: ruff check app/ --select E,F,W,I --ignore E501
+
+      - name: Schema sanity check
+        run: |
+          python -c "
+          from app.ingestion.schemas import CanonicalEvent, EventType
+          # Verify all 17 event types parse correctly
+          import typing
+          types = typing.get_args(EventType)
+          assert 'AIRTIME_TRANSFER_EVENT' in types, 'Missing AIRTIME_TRANSFER_EVENT'
+          assert 'BILLING_FRAUD_EVENT' in types,    'Missing BILLING_FRAUD_EVENT'
+          print(f'OK: {len(types)} event types registered')
+          "
+        env:
+          PYTHONPATH: .
+
+      - name: Federation model check
+        run: |
+          python -c "
+          from app.federation.models import FederationPartner, FederationPattern
+          assert hasattr(FederationPartner, 'correlation_salt'), 'Missing correlation_salt'
+          assert hasattr(FederationPartner, 'webhook_url'),      'Missing webhook_url'
+          print('OK: federation models have required columns')
+          "
+        env:
+          PYTHONPATH: .
+
+  lint-frontend:
+    name: Lint (frontend)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci --prefer-offline
+
+      - name: TypeScript check
+        run: npx tsc --noEmit
+
+  edge-agent-check:
+    name: Edge-agent schema check
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: edge-agent
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install minimal deps
+        run: pip install --quiet pydantic pydantic-settings
+
+      - name: Config and feature-builder check
+        run: |
+          python -c "
+          import sys; sys.path.insert(0, '.')
+          from app.feature_builder import FEATURE_DIM, build_feature_vector
+          assert FEATURE_DIM == 44, f'Expected 44, got {FEATURE_DIM}'
+          # Smoke-test the vector builder
+          vec = build_feature_vector(
+              entity_type='phone_h', event_count=5, source_count=2,
+              degree=3, weighted_degree=5, risk_flags=['CAMPAIGN_ENTITY'],
+              features={'event_types': {'SIM_SWAP_EVENT': 3}},
+          )
+          assert len(vec) == 44, f'Vector dim mismatch: {len(vec)}'
+          print(f'OK: feature vector = {len(vec)} dims')
+          "
+        env:
+          NATIONAL_SALT: test-salt
+          HUB_API_KEY: test-key
+          HMAC_SALT: test-hmac

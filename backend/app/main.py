@@ -92,8 +92,11 @@ def _register_operational_routes(app: FastAPI) -> None:
         # not on the web service's filesystem.
         gnn_loaded = False
         gnn_model_version = None
+        gnn_metrics: dict = {}
+        federation_partners = 0
         try:
             from app.analytics.ai_models import GNNTrainingRun  # noqa: PLC0415
+            from app.federation.models import FederationPartner   # noqa: PLC0415
             db = SessionLocal()
             try:
                 run = (
@@ -105,15 +108,40 @@ def _register_operational_routes(app: FastAPI) -> None:
                 if run and run.artifact_path:
                     gnn_loaded = True
                     gnn_model_version = str(run.model_version)
+                    gnn_metrics = {
+                        "auc":            round(float(run.auc), 4)       if run.auc       is not None else None,
+                        "precision":      round(float(run.precision), 4) if run.precision is not None else None,
+                        "node_count":     run.node_count,
+                        "edge_count":     run.edge_count,
+                        "positive_count": run.positive_count,
+                        "feature_dim":    run.feature_dim,
+                        "prediction_type": run.prediction_type,
+                    }
+                federation_partners = (
+                    db.query(FederationPartner)
+                    .filter(FederationPartner.is_active == True)  # noqa: E712
+                    .count()
+                )
             finally:
                 db.close()
         except Exception:  # noqa: BLE001
             pass  # table may not exist yet on first boot
 
         return {
-            "status": "ok",
-            "gnn_loaded": gnn_loaded,
-            "gnn_model_version": gnn_model_version,
+            "status":               "ok",
+            "gnn_loaded":           gnn_loaded,
+            "gnn_model_version":    gnn_model_version,
+            "gnn_metrics":          gnn_metrics,
+            "federation_partners":  federation_partners,
+            "capabilities": [
+                "cyber_gnn",
+                "corruption_gnn",
+                "ddos_detection",
+                "federated_intelligence",
+                "post_quantum_crypto",
+                "legal_framework",
+                "containment_webhooks",
+            ],
         }
 
     @app.get("/ready", tags=["ops"])
