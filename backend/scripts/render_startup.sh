@@ -40,7 +40,22 @@ sys.exit(1)
 PYEOF
 
 # ---------------------------------------------------------------------------
-# 3. Apply any pending one-time schema patches
+# 3. Bootstrap schema from ORM metadata (idempotent)
+#    Keeps APP_ENV=production + DB_AUTO_CREATE=false compliant while ensuring
+#    first boot on a fresh Render Postgres still has required tables.
+# ---------------------------------------------------------------------------
+echo "[startup] Bootstrapping schema via SQLAlchemy metadata..."
+python - <<'PYEOF'
+from app.ledger.models import Base
+from app.ledger.db import engine
+import app.db.registry  # noqa: F401
+
+Base.metadata.create_all(bind=engine)
+print("[startup] Metadata bootstrap complete")
+PYEOF
+
+# ---------------------------------------------------------------------------
+# 4. Apply any pending one-time schema patches
 #    (same fixes that were applied manually in dev)
 # ---------------------------------------------------------------------------
 echo "[startup] Applying schema patches..."
@@ -84,14 +99,14 @@ with engine.begin() as conn:
         try:
             conn.execute(text(patch))
         except Exception as exc:
-            # Non-fatal: table may not exist yet (DB_AUTO_CREATE will handle it)
+            # Non-fatal: table/column may already be absent or partially migrated.
             print(f"[startup] patch skipped ({exc.__class__.__name__}): {patch[:60]}...")
 
 print("[startup] Schema patches applied")
 PYEOF
 
 # ---------------------------------------------------------------------------
-# 4. Start the web server
+# 5. Start the web server
 #    - 2 uvicorn workers for concurrency (free tier has 0.5 CPU)
 #    - 120s timeout for long GNN queries
 # ---------------------------------------------------------------------------

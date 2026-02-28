@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import logging
 from typing import Optional
 
@@ -26,6 +25,7 @@ from app.defense.schemas import (
     ThreatAlertRefreshRequest,
     VulnerabilityUpsertRequest,
 )
+from app.defense.executor import encrypt_webhook_secret
 from app.defense.models import ContainmentWebhook, WebhookDelivery
 from app.defense.service import DefenseService
 
@@ -311,9 +311,10 @@ def register_webhook(
     """
     Register or update a partner webhook for last-mile block_ip / isolate_host dispatch.
 
-    The hub signs every webhook call with HMAC-SHA256(body, secret) and sets
-    the header `X-Sentinel-Signature: sha256=<hex>`.  The partner must verify
-    this header before applying the containment action.
+    The hub signs every webhook call with HMAC-SHA256(body, raw_secret) and sets
+    the header `X-Sentinel-Signature: sha256=<hex>`.  The partner verifies this
+    header using their raw secret before applying the containment action.
+    The secret is stored Fernet-encrypted at rest (never in plain text).
     """
     existing = (
         db.query(ContainmentWebhook)
@@ -323,11 +324,11 @@ def register_webhook(
         )
         .first()
     )
-    secret_hash = hashlib.sha256(payload.secret.encode()).hexdigest()
+    secret_enc = encrypt_webhook_secret(payload.secret)
     if existing:
-        existing.webhook_url  = payload.webhook_url
-        existing.secret_hash  = secret_hash
-        existing.is_active    = True
+        existing.webhook_url = payload.webhook_url
+        existing.secret_enc  = secret_enc
+        existing.is_active   = True
         db.commit()
         return {"updated": True, "section_code": payload.section_code, "action_type": payload.action_type}
 
@@ -335,7 +336,7 @@ def register_webhook(
         section_code = payload.section_code,
         action_type  = payload.action_type,
         webhook_url  = payload.webhook_url,
-        secret_hash  = secret_hash,
+        secret_enc   = secret_enc,
     )
     db.add(hook)
     db.commit()
@@ -344,7 +345,7 @@ def register_webhook(
         "section_code": payload.section_code,
         "action_type":  payload.action_type,
         "webhook_url":  payload.webhook_url,
-        "note":         "Secret stored as SHA-256 hash. Hub signs payloads with X-Sentinel-Signature.",
+        "note":         "Secret stored encrypted. Hub signs payloads with X-Sentinel-Signature: sha256=HMAC(body, secret).",
     }
 
 

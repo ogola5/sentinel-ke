@@ -137,5 +137,13 @@ class Settings:
     # Allow bypass in local dev ONLY if explicitly enabled
     ingest_allow_unauthenticated = env_bool("INGEST_ALLOW_UNAUTH", False)
 
+    # ---------------------------------------------------------
+    # Webhook secret encryption
+    # Fernet key for encrypting webhook signing secrets at rest.
+    # Generate: python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+    # MUST be set in production. Dev fallback is derived deterministically in executor.py.
+    # ---------------------------------------------------------
+    webhook_secret_encryption_key = os.environ.get("WEBHOOK_SECRET_ENCRYPTION_KEY", "").strip()
+
 
 settings = Settings()
