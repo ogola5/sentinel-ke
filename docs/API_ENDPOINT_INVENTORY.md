@@ -52,6 +52,8 @@ python3 scripts/generate_api_inventory.py --write
 | `GET` | `/v1/campaigns/{campaign_id}/evidence` | `campaign-evidence` | `backend.app.api.campaign_evidence:campaign_evidence` |
 | `GET` | `/v1/campaigns/{campaign_id}/risk` | `campaigns` | `backend.app.api.campaigns:campaign_risk` |
 | `POST` | `/v1/cases/from-campaign/{campaign_id}` | `cases` | `backend.app.cases.api:create_case_packet` |
+| `GET` | `/v1/crypto/posture` | `crypto-posture` | `backend.app.api.crypto_posture:get_posture` |
+| `GET` | `/v1/crypto/posture/self-test` | `crypto-posture` | `backend.app.api.crypto_posture:run_self_test` |
 | `GET` | `/v1/ddos/alerts` | `ddos` | `backend.app.api.ddos:list_ddos_alerts` |
 | `GET` | `/v1/ddos/indicators` | `ddos` | `backend.app.api.ddos:ddos_indicators` |
 | `GET` | `/v1/ddos/overview` | `ddos` | `backend.app.api.ddos:ddos_overview` |
@@ -70,6 +72,10 @@ python3 scripts/generate_api_inventory.py --write
 | `GET` | `/v1/defense/vulnerabilities` | `defense` | `backend.app.api.defense:list_vulnerabilities` |
 | `POST` | `/v1/defense/vulnerabilities` | `defense` | `backend.app.api.defense:upsert_vulnerability` |
 | `POST` | `/v1/defense/vulnerabilities/score-sla` | `defense` | `backend.app.api.defense:score_patch_sla` |
+| `GET` | `/v1/defense/webhooks` | `defense` | `backend.app.api.defense:list_webhooks` |
+| `POST` | `/v1/defense/webhooks` | `defense` | `backend.app.api.defense:register_webhook` |
+| `GET` | `/v1/defense/webhooks/deliveries` | `defense` | `backend.app.api.defense:list_webhook_deliveries` |
+| `DELETE` | `/v1/defense/webhooks/{webhook_id}` | `defense` | `backend.app.api.defense:disable_webhook` |
 | `GET` | `/v1/economy/coverup/alerts` | `economy` | `backend.app.api.economy_coverup:list_coverup_alerts` |
 | `POST` | `/v1/economy/coverup/run` | `economy` | `backend.app.api.economy_coverup:run_coverup` |
 | `GET` | `/v1/economy/coverup/summary` | `economy` | `backend.app.api.economy_coverup:coverup_summary` |
@@ -87,6 +93,11 @@ python3 scripts/generate_api_inventory.py --write
 | `GET` | `/v1/events/search` | `events` | `backend.app.api.events:search_events` |
 | `GET` | `/v1/events/timeline` | `events` | `backend.app.api.events:timeline` |
 | `GET` | `/v1/events/{event_hash}` | `events` | `backend.app.api.events:get_event` |
+| `GET` | `/v1/federation/correlations` | `federation` | `backend.app.api.federation:cross_partner_correlations` |
+| `GET` | `/v1/federation/partners` | `federation` | `backend.app.api.federation:list_partners` |
+| `POST` | `/v1/federation/patterns` | `federation` | `backend.app.api.federation:submit_patterns` |
+| `POST` | `/v1/federation/register` | `federation` | `backend.app.api.federation:register_partner` |
+| `GET` | `/v1/federation/stream` | `federation` | `backend.app.api.federation:query_patterns` |
 | `GET` | `/v1/graph/entity/{entity_key}` | `graph` | `backend.app.api.graph:get_entity` |
 | `GET` | `/v1/graph/evidence/{event_hash}` | `graph` | `backend.app.api.graph:get_evidence` |
 | `POST` | `/v1/graph/infra/project-recent` | `graph-infra` | `backend.app.api.infra_graph:project_recent_clusters` |

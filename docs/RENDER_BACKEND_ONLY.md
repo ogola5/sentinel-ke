@@ -15,6 +15,10 @@ The backend Dockerfile now supports:
 - `INSTALL_ML=0` (default): skip `requirements-ml.txt`
 - `INSTALL_ML=1`: install ML runtime
 
+Dependency set for this mode:
+
+- `backend/requirements-render.txt` (runtime-only, excludes `torch`)
+
 For Render, set Docker build arg:
 
 - `INSTALL_ML=0`
@@ -46,6 +50,15 @@ Optional:
 - Keep `AI_API_ENABLED=true` if frontend still reads AI prediction records from DB.
 
 Keep any other service credentials only if those integrations are actually deployed.
+
+Ready-to-paste environment template:
+
+- `.env.render.backend-only` (repo root)
+
+Notes:
+
+- Keep `DB_AUTO_CREATE=false` in production.
+- `backend/scripts/render_startup.sh` bootstraps schema from ORM metadata before app start, so first boot on a fresh Render Postgres succeeds without enabling ML services.
 
 ## 3) Local ML Continues Separately
 

@@ -211,7 +211,7 @@ class ContainmentWebhook(Base):
     section_code = Column(String, nullable=False)
     action_type  = Column(String, nullable=False)   # block_ip | isolate_host
     webhook_url  = Column(String(512), nullable=False)
-    secret_hash  = Column(String(64),  nullable=False)
+    secret_enc   = Column(String,      nullable=True)   # Fernet-encrypted raw signing secret
     is_active    = Column(Boolean, nullable=False, default=True)
     created_at   = Column(DateTime(timezone=True), nullable=False, default=utcnow)
 

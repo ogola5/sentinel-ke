@@ -30,6 +30,7 @@ kafka-python
 
 # HTTP & cloud
 requests
+httpx
 boto3
 
 # STIX threat intelligence

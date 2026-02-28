@@ -39,6 +39,7 @@ isolate_host   → POST to partner EDR/NDR webhook
 """
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 import json
@@ -48,6 +49,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Tuple
 
 import httpx
+from cryptography.fernet import Fernet, InvalidToken
 from sqlalchemy.orm import Session
 
 from app.defense.models import ContainmentWebhook, WebhookDelivery
@@ -60,6 +62,31 @@ SUPPORTED_REMOTE_ACTIONS = {"block_ip", "isolate_host"}
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _fernet() -> Fernet:
+    """Return a Fernet instance keyed from WEBHOOK_SECRET_ENCRYPTION_KEY (or a dev fallback)."""
+    from app.core.config import settings  # noqa: PLC0415
+    raw = settings.webhook_secret_encryption_key
+    if not raw:
+        # Dev fallback: deterministic 32-byte key derived from a fixed string.
+        # Set WEBHOOK_SECRET_ENCRYPTION_KEY in production.
+        _raw = hashlib.sha256(b"sentinel-ke-dev-webhook-encryption").digest()
+        raw = base64.urlsafe_b64encode(_raw).decode()
+    return Fernet(raw.encode() if isinstance(raw, str) else raw)
+
+
+def encrypt_webhook_secret(raw_secret: str) -> str:
+    """Fernet-encrypt a raw webhook signing secret for storage."""
+    return _fernet().encrypt(raw_secret.encode()).decode()
+
+
+def _decrypt_secret(ciphertext: str) -> str:
+    """Decrypt a stored Fernet ciphertext back to the raw signing secret."""
+    try:
+        return _fernet().decrypt(ciphertext.encode()).decode()
+    except (InvalidToken, Exception) as exc:
+        raise RuntimeError(f"failed to decrypt webhook secret: {exc}") from exc
 
 
 def _sign_payload(body: bytes, secret: str) -> str:
@@ -126,15 +153,16 @@ def dispatch_containment_action(
     }
     body = json.dumps(payload_dict, separators=(",", ":")).encode()
 
-    # Retrieve the raw secret from the stored hash — we can't reverse SHA-256,
-    # so we stored the hash for verification; for signing we need the raw secret
-    # passed at webhook registration. The hub stores it as environment-resolved
-    # value in the request object, so we use a per-webhook signing approach:
-    # the webhook was registered with a secret whose SHA-256 hash is stored.
-    # At dispatch time we use the stored hash as a proxy (partner must verify
-    # using the same hash — see docs).  Production deployments should use a
-    # secrets manager to retrieve the raw secret.
-    sig = _sign_payload(body, hook.secret_hash)
+    if not hook.secret_enc:
+        logger.error(
+            "Webhook %s has no encrypted secret; re-register via POST /v1/defense/webhooks",
+            hook.id,
+        )
+        return "failed", {
+            "error": "webhook secret not configured; re-register the webhook",
+            "hint":  "POST /v1/defense/webhooks with section_code, action_type, webhook_url, secret",
+        }
+    sig = _sign_payload(body, _decrypt_secret(hook.secret_enc))
 
     delivery = WebhookDelivery(
         action_id        = action_id,

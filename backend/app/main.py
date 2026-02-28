@@ -19,6 +19,36 @@ import app.db.registry  # noqa: F401  # ensure all models are registered
 log = logging.getLogger("sentinel.main")
 
 
+def _ensure_webhook_schema() -> None:
+    """Migrate containment_webhook: rename secret_hash → secret_enc (Fernet ciphertext)."""
+    if engine.dialect.name != "postgresql":
+        return
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                DO $$
+                BEGIN
+                    IF EXISTS (
+                        SELECT 1 FROM information_schema.tables
+                        WHERE table_name = 'containment_webhook'
+                    ) THEN
+                        ALTER TABLE containment_webhook
+                            ADD COLUMN IF NOT EXISTS secret_enc TEXT;
+                        IF EXISTS (
+                            SELECT 1 FROM information_schema.columns
+                            WHERE table_name = 'containment_webhook'
+                              AND column_name = 'secret_hash'
+                        ) THEN
+                            ALTER TABLE containment_webhook DROP COLUMN secret_hash;
+                        END IF;
+                    END IF;
+                END $$;
+                """
+            )
+        )
+
+
 def _ensure_infra_cluster_schema() -> None:
     if engine.dialect.name != "postgresql":
         return
@@ -70,6 +100,7 @@ def _register_lifecycle(app: FastAPI) -> None:
             log.info("db_auto_create_disabled; skipping Base.metadata.create_all")
 
         _ensure_infra_cluster_schema()
+        _ensure_webhook_schema()
         try:
             db = SessionLocal()
             try:

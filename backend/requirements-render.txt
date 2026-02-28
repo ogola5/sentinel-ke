@@ -1,0 +1,3 @@
+# Sentinel-KE Render backend-only dependencies (no ML runtime).
+# Use this file when deploying API/worker services that must exclude torch.
+-r requirements-runtime.txt
