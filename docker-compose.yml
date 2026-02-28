@@ -114,7 +114,7 @@ services:
     volumes:
       - ./frontend:/usr/src/app
       - /usr/src/app/node_modules    # keep container node_modules isolated
-    command: npm run dev -- --host 0.0.0.0
+    command: sh ./scripts/dev-start.sh
     depends_on:
       backend:
         condition: service_healthy
