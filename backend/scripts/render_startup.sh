@@ -107,13 +107,17 @@ PYEOF
 
 # ---------------------------------------------------------------------------
 # 5. Start the web server
-#    - 2 uvicorn workers for concurrency (free tier has 0.5 CPU)
-#    - 120s timeout for long GNN queries
+#    Respect Render WEB_CONCURRENCY (defaults to 1 on small instances).
 # ---------------------------------------------------------------------------
-echo "[startup] Starting Sentinel-KE API on port ${PORT:-8000}..."
+WORKERS="${WEB_CONCURRENCY:-1}"
+if [ "$WORKERS" -lt 1 ] 2>/dev/null; then
+  WORKERS=1
+fi
+
+echo "[startup] Starting Sentinel-KE API on port ${PORT:-8000} with workers=${WORKERS}..."
 exec gunicorn app.main:app \
   --worker-class uvicorn.workers.UvicornWorker \
-  --workers 2 \
+  --workers "$WORKERS" \
   --bind "0.0.0.0:${PORT:-8000}" \
   --timeout 120 \
   --keep-alive 5 \
