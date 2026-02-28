@@ -69,6 +69,28 @@ export const endpoints = {
     withBase(`/v1/cases/from-campaign/${encodeURIComponent(campaignId)}`),
   stixCaseByCampaign: (campaignId: string) =>
     withBase(`/v1/stix/case/${encodeURIComponent(campaignId)}`),
+
+  // Defense & Containment
+  defenseIncidents: (limit = 20, offset = 0) => withQuery("/v1/defense/incidents/runs", { limit, offset }),
+  defenseWebhooks: (section_code?: string) =>
+    withQuery("/v1/defense/webhooks", section_code ? { section_code } : {}),
+  defenseWebhookDeliveries: (limit = 50, offset = 0) =>
+    withQuery("/v1/defense/webhooks/deliveries", { limit, offset }),
+  defenseVulnerabilities: (limit = 20, status?: string) =>
+    withQuery("/v1/defense/vulnerabilities", { limit, ...(status ? { status } : {}) }),
+
+  // Federation
+  federationPartners: (limit = 50) => withQuery("/v1/federation/partners", { limit }),
+  federationPatterns: (limit = 50, hours = 24, minRisk = 0.6) =>
+    withQuery("/v1/federation/stream", { limit, hours, min_risk: minRisk }),
+  federationCorrelations: (limit = 20) => withQuery("/v1/federation/correlations", { limit }),
+
+  // AI / GNN
+  aiTrainingRuns: (limit = 10, offset = 0) => withQuery("/v1/ai/gnn/runs", { limit, offset }),
+
+  // Crypto posture
+  cryptoPosture: () => withBase("/v1/crypto/posture"),
+  cryptoSelfTest: () => withBase("/v1/crypto/posture/self-test"),
 };
 
 export type Endpoints = typeof endpoints;
