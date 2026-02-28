@@ -105,3 +105,232 @@ li {
 .mono {
   font-family: "JetBrains Mono", "Courier New", monospace;
 }
+
+/* ── Risk level tokens ─────────────────────────────── */
+:root {
+  --risk-critical: #ff4d5a;
+  --risk-high:     #ff8c42;
+  --risk-medium:   #ffd147;
+  --risk-low:      #31ff90;
+  --risk-unknown:  #88b79b;
+  --info:          #4fc3f7;
+  --info-rgb:      79 195 247;
+}
+
+/* ── Navigation section groups ─────────────────────── */
+.nav-group { margin-top: 6px; }
+.nav-group-label {
+  font-size: 0.63rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  opacity: 0.4;
+  padding: 6px 12px 2px;
+}
+
+/* ── Risk badges ────────────────────────────────────── */
+.risk-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.risk-badge.critical { background: rgba(255,77,90,.18);   color: var(--risk-critical); border: 1px solid rgba(255,77,90,.35); }
+.risk-badge.high     { background: rgba(255,140,66,.18);  color: var(--risk-high);     border: 1px solid rgba(255,140,66,.35); }
+.risk-badge.medium   { background: rgba(255,209,71,.18);  color: var(--risk-medium);   border: 1px solid rgba(255,209,71,.35); }
+.risk-badge.low      { background: rgba(49,255,144,.12);  color: var(--risk-low);      border: 1px solid rgba(49,255,144,.3); }
+.risk-badge.unknown  { background: rgba(136,183,155,.1);  color: var(--risk-unknown);  border: 1px solid rgba(136,183,155,.25); }
+.risk-badge.info     { background: rgba(79,195,247,.14);  color: var(--info);          border: 1px solid rgba(79,195,247,.3); }
+
+/* ── Status dot ─────────────────────────────────────── */
+.status-dot {
+  display: inline-block;
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.status-dot.live      { background: var(--accent);  box-shadow: 0 0 6px var(--accent); }
+.status-dot.degraded  { background: var(--warning); }
+.status-dot.offline   { background: var(--danger); }
+.status-dot.delivered { background: var(--risk-low); }
+.status-dot.failed    { background: var(--risk-critical); }
+.status-dot.pending   { background: var(--risk-medium); }
+
+/* ── Screen header ──────────────────────────────────── */
+.screen-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+.screen-header h2 {
+  font-size: 1.2rem;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+}
+.screen-header .subtitle { font-size: 0.82rem; opacity: 0.5; font-weight: 400; text-transform: none; }
+
+/* ── Metric cards ───────────────────────────────────── */
+.metric-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(155px, 1fr));
+  gap: 12px;
+  margin-bottom: 20px;
+}
+.metric-card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.metric-card .metric-label { font-size: 0.67rem; letter-spacing: 0.1em; text-transform: uppercase; opacity: 0.45; }
+.metric-card .metric-value { font-size: 1.7rem; font-weight: 700; line-height: 1; font-family: "JetBrains Mono", monospace; }
+.metric-card .metric-sub   { font-size: 0.72rem; opacity: 0.45; }
+.metric-card.accent { border-color: rgba(var(--accent-rgb), 0.35); }
+.metric-card.accent .metric-value { color: var(--accent); }
+.metric-card.danger { border-color: rgba(var(--danger-rgb), 0.35); }
+.metric-card.danger .metric-value { color: var(--danger); }
+.metric-card.warn   { border-color: rgba(var(--warning-rgb), 0.35); }
+.metric-card.warn   .metric-value { color: var(--warning); }
+.metric-card.info   { border-color: rgba(var(--info-rgb), 0.35); }
+.metric-card.info   .metric-value { color: var(--info); }
+
+/* ── Two-pane layout ────────────────────────────────── */
+.pane-layout { display: grid; grid-template-columns: 270px 1fr; gap: 16px; min-height: 0; }
+.pane-left {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+.pane-right { display: flex; flex-direction: column; gap: 16px; overflow-y: auto; }
+.pane-item {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--line);
+  cursor: pointer;
+  transition: background 0.12s;
+}
+.pane-item:hover  { background: rgba(var(--accent-rgb), 0.07); }
+.pane-item.active { background: rgba(var(--accent-rgb), 0.14); border-left: 3px solid var(--accent); }
+.pane-item h4     { font-size: 0.88rem; margin: 0 0 4px; }
+.pane-item .pane-meta { font-size: 0.73rem; opacity: 0.55; display: flex; gap: 8px; align-items: center; }
+
+/* ── Partner cards ──────────────────────────────────── */
+.partner-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(195px, 1fr)); gap: 14px; margin-bottom: 20px; }
+.partner-card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  transition: border-color 0.15s;
+}
+.partner-card.active-partner { border-color: rgba(var(--accent-rgb), 0.42); }
+.partner-card .partner-name  { font-size: 0.95rem; font-weight: 700; }
+.partner-card .partner-id    { font-size: 0.7rem; opacity: 0.45; font-family: "JetBrains Mono", monospace; }
+.partner-card .partner-stats { display: flex; gap: 12px; margin-top: 4px; }
+.partner-card .partner-stat  { font-size: 0.75rem; opacity: 0.7; }
+.partner-card .partner-stat span { display: block; font-size: 1.1rem; font-weight: 700; color: var(--accent); font-family: "JetBrains Mono", monospace; }
+
+/* ── Data table ─────────────────────────────────────── */
+.data-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+.data-table th {
+  text-align: left;
+  padding: 8px 12px;
+  font-size: 0.67rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  opacity: 0.42;
+  border-bottom: 1px solid var(--line);
+  font-weight: 600;
+}
+.data-table td { padding: 10px 12px; border-bottom: 1px solid rgba(31,63,46,0.45); vertical-align: middle; }
+.data-table tr:last-child td { border-bottom: none; }
+.data-table tr:hover td { background: rgba(var(--accent-rgb), 0.04); }
+
+/* ── Algo/crypto inventory cards ────────────────────── */
+.algo-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(215px, 1fr)); gap: 14px; }
+.algo-card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px; }
+.algo-card .algo-label { font-size: 0.67rem; letter-spacing: 0.1em; text-transform: uppercase; opacity: 0.42; }
+.algo-card .algo-value { font-size: 1rem; font-weight: 700; margin-top: 6px; font-family: "JetBrains Mono", monospace; }
+.algo-card .algo-sub   { font-size: 0.72rem; opacity: 0.45; margin-top: 4px; }
+.algo-card.pqc-ready   { border-color: rgba(var(--accent-rgb), 0.38); }
+.algo-card.pqc-legacy  { border-color: rgba(var(--warning-rgb), 0.38); }
+.algo-card.pqc-broken  { border-color: rgba(var(--danger-rgb), 0.38); }
+
+/* ── Score bar ──────────────────────────────────────── */
+.score-bar-wrap { display: flex; align-items: center; gap: 8px; }
+.score-bar-track { flex: 1; height: 5px; background: var(--line); border-radius: 3px; overflow: hidden; }
+.score-bar-fill  { height: 100%; border-radius: 3px; transition: width 0.4s ease; }
+
+/* ── Modal ──────────────────────────────────────────── */
+.modal-backdrop {
+  position: fixed; inset: 0;
+  background: rgba(4,10,6,0.8);
+  -webkit-backdrop-filter: blur(4px);
+  backdrop-filter: blur(4px);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 100;
+}
+.modal-box {
+  background: var(--panel-strong);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 28px 32px;
+  max-width: 460px; width: 90%;
+  box-shadow: var(--shadow);
+}
+.modal-box h3 { font-size: 1.05rem; margin-bottom: 10px; }
+.modal-box .modal-body { font-size: 0.88rem; opacity: 0.7; margin-bottom: 22px; line-height: 1.6; }
+.modal-box .modal-actions { display: flex; gap: 10px; justify-content: flex-end; }
+
+/* ── Button variants ────────────────────────────────── */
+.btn-danger {
+  padding: 8px 16px; border-radius: 10px;
+  border: 1px solid rgba(var(--danger-rgb), 0.5);
+  background: rgba(var(--danger-rgb), 0.12);
+  color: var(--danger); font-family: inherit; font-weight: 600;
+  cursor: pointer; font-size: 0.83rem;
+}
+.btn-danger:hover { background: rgba(var(--danger-rgb), 0.22); }
+.btn-accent {
+  padding: 8px 16px; border-radius: 10px;
+  border: 1px solid rgba(var(--accent-rgb), 0.4);
+  background: rgba(var(--accent-rgb), 0.1);
+  color: var(--accent); font-family: inherit; font-weight: 600;
+  cursor: pointer; font-size: 0.83rem;
+}
+.btn-accent:hover { background: rgba(var(--accent-rgb), 0.2); }
+.btn-ghost {
+  padding: 8px 16px; border-radius: 10px;
+  border: 1px solid var(--line); background: transparent;
+  color: var(--ink-muted); font-family: inherit;
+  cursor: pointer; font-size: 0.83rem;
+}
+.btn-ghost:hover { border-color: rgba(var(--accent-rgb), 0.35); color: var(--ink); }
+
+/* ── Loading/empty states ───────────────────────────── */
+.state-box { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 48px; opacity: 0.45; text-align: center; }
+.state-box p { font-size: 0.85rem; }
+
+/* ── Recharts dark theme overrides ─────────────────── */
+.recharts-cartesian-grid-horizontal line,
+.recharts-cartesian-grid-vertical   line { stroke: #1f3f2e !important; }
+
+/* ── Scrollable panel ───────────────────────────────── */
+.scroll-panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); overflow-y: auto; max-height: 360px; }
+.scroll-panel .panel-header { position: sticky; top: 0; background: var(--panel); z-index: 1; }
