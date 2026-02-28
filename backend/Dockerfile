@@ -1,4 +1,3 @@
-# syntax=docker/dockerfile:1.7
 # =============================================================================
 # Sentinel-KE Backend Dockerfile
 #
@@ -37,8 +36,9 @@ ARG INSTALL_ALL_REQUIREMENTS=1
 ARG INSTALL_ML=0
 ARG INSTALL_DEV=0
 
-# Single RUN keeps layer count low; BuildKit pip cache avoids re-downloading
-RUN --mount=type=cache,target=/root/.cache/pip \
+# Single RUN keeps layer count low and avoids BuildKit-only features to keep
+# compatibility with constrained remote builders.
+RUN \
     if [ "$INSTALL_ALL_REQUIREMENTS" = "1" ]; then \
         echo "[sentinel] Installing full bundle (requirements.txt)"; \
         pip install --retries 25 --timeout 600 -r requirements.txt; \
