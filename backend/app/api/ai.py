@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import datetime
+from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_db, pagination_params
+from app.api.deps import get_db, pagination_params, require_central_access
 from app.analytics.ai_models import (
     AIExplanation,
     AIAttackPathScore,
@@ -26,6 +29,7 @@ from app.analytics.ai_models import (
 )
 from app.analytics.layer3.threat_intel_worker import export_stix_bundle, import_stix_bundle
 
+log = logging.getLogger("sentinel.api.ai")
 router = APIRouter(prefix="/v1/ai", tags=["ai"])
 
 
@@ -193,6 +197,79 @@ def list_gnn_runs(
             }
             for r in rows
         ],
+    }
+
+
+class GNNTrainRequest(BaseModel):
+    domain: Literal["cyber", "corruption"] = "cyber"
+    epochs: int = 60
+    model_version: str | None = None
+
+
+def _run_cyber_train(epochs: int, model_version: str) -> None:
+    from app.analytics.layer3.gnn_train_worker import run_once
+    from app.ledger.db import SessionLocal
+    db = SessionLocal()
+    try:
+        result = run_once(
+            db=db,
+            window_key="Wmid",
+            epochs=epochs,
+            model_version=model_version,
+        )
+        log.info("gnn_train_cyber_done: %s", result)
+    except Exception as exc:
+        log.error("gnn_train_cyber_failed: %s", exc)
+    finally:
+        db.close()
+
+
+def _run_corruption_train(epochs: int, model_version: str) -> None:
+    from app.analytics.corruption.train_worker import run_once
+    from app.ledger.db import SessionLocal
+    db = SessionLocal()
+    try:
+        result = run_once(
+            db=db,
+            window_key="Wcorruption",
+            epochs=epochs,
+            model_version=model_version,
+        )
+        log.info("gnn_train_corruption_done: %s", result)
+    except Exception as exc:
+        log.error("gnn_train_corruption_failed: %s", exc)
+    finally:
+        db.close()
+
+
+@router.post("/gnn/train", status_code=202)
+def trigger_gnn_train(
+    body: GNNTrainRequest,
+    background_tasks: BackgroundTasks,
+    _principal=Depends(require_central_access),
+):
+    """
+    Trigger a GNN retraining run in the background.
+
+    domain = "cyber"       → cyber threat GNN (window_key Wmid, feat_dim 44)
+    domain = "corruption"  → corruption risk GNN (window_key Wcorruption, feat_dim 42)
+
+    Returns immediately; poll GET /v1/ai/gnn/runs to see the new run when complete.
+    """
+    default_versions = {"cyber": "gnn-sage-v1", "corruption": "corruption-gnn-v1"}
+    mv = body.model_version or default_versions[body.domain]
+
+    if body.domain == "cyber":
+        background_tasks.add_task(_run_cyber_train, body.epochs, mv)
+    else:
+        background_tasks.add_task(_run_corruption_train, body.epochs, mv)
+
+    return {
+        "accepted": True,
+        "domain": body.domain,
+        "model_version": mv,
+        "epochs": body.epochs,
+        "message": "Training started in background. Poll GET /v1/ai/gnn/runs for results.",
     }
 
 

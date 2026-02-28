@@ -11,8 +11,8 @@ import {
   RadialBar,
   Legend,
 } from "recharts";
-import { Brain, RefreshCw, Loader, AlertTriangle, Zap } from "lucide-react";
-import { fetchAIPredictions, fetchGNNTrainingRuns } from "../../api/ai";
+import { Brain, RefreshCw, Loader, AlertTriangle, Zap, Play, Database } from "lucide-react";
+import { fetchAIPredictions, fetchGNNTrainingRuns, triggerGNNTrain, seedDemoData } from "../../api/ai";
 import type { AIPrediction, GNNTrainingRun } from "../../types/ai";
 
 function riskClass(score: number): string {
@@ -44,6 +44,9 @@ export default function GNNIntelligence({ healthGnnLoaded, healthModelVersion, h
   const [predictions, setPredictions] = useState<AIPrediction[]>([]);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
+  const [trainMsg, setTrainMsg] = useState<string | null>(null);
+  const [trainBusy, setTrainBusy] = useState(false);
+  const [seedBusy, setSeedBusy] = useState(false);
 
   const load = async () => {
     setSyncing(true);
@@ -57,6 +60,32 @@ export default function GNNIntelligence({ healthGnnLoaded, healthModelVersion, h
   useEffect(() => {
     void load();
   }, []);
+
+  const handleSeed = async (domain: "cyber" | "corruption") => {
+    setSeedBusy(true);
+    setTrainMsg(null);
+    try {
+      const r = await seedDemoData(domain);
+      setTrainMsg(`Seeding started: ${r.message}`);
+    } catch (e: unknown) {
+      setTrainMsg(`Seed failed: ${String(e)}`);
+    } finally {
+      setSeedBusy(false);
+    }
+  };
+
+  const handleTrain = async (domain: "cyber" | "corruption") => {
+    setTrainBusy(true);
+    setTrainMsg(null);
+    try {
+      const r = await triggerGNNTrain(domain);
+      setTrainMsg(`Training accepted (${r.model_version}): ${r.message}`);
+    } catch (e: unknown) {
+      setTrainMsg(`Train failed: ${String(e)}`);
+    } finally {
+      setTrainBusy(false);
+    }
+  };
 
   const latestRun = runs[0] ?? null;
 
@@ -95,19 +124,52 @@ export default function GNNIntelligence({ healthGnnLoaded, healthModelVersion, h
           GNN Intelligence Hub
           <span className="subtitle">— Graph Neural Network · MC-Dropout uncertainty</span>
         </h2>
-        <button className="btn-ghost" onClick={() => void load()} disabled={syncing}>
-          {syncing ? <Loader size={14} className="spin" /> : <RefreshCw size={14} />}
-          &nbsp;Refresh
-        </button>
+        <div className="screen-header-actions">
+          <button type="button" className="btn-ghost" onClick={() => void load()} disabled={syncing}>
+            {syncing ? <Loader size={14} className="spin" /> : <RefreshCw size={14} />}
+            &nbsp;Refresh
+          </button>
+        </div>
+      </div>
+
+      {/* Train / Seed action panel */}
+      <div className="panel gnn-train-panel">
+        <div className="panel-header">
+          <h3><Zap size={14} /> Training Controls</h3>
+          <span className="muted gnn-train-sub">Seed data then retrain — central admin only</span>
+        </div>
+        <div className={`gnn-train-actions${trainMsg ? " has-msg" : ""}`}>
+          <button type="button" className="btn-ghost" onClick={() => void handleSeed("cyber")} disabled={seedBusy || trainBusy}>
+            {seedBusy ? <Loader size={13} className="spin" /> : <Database size={13} />}
+            &nbsp;Seed Cyber Data
+          </button>
+          <button type="button" className="btn-ghost" onClick={() => void handleSeed("corruption")} disabled={seedBusy || trainBusy}>
+            {seedBusy ? <Loader size={13} className="spin" /> : <Database size={13} />}
+            &nbsp;Seed Corruption Data
+          </button>
+          <button type="button" className="btn-train-cyber" onClick={() => void handleTrain("cyber")} disabled={trainBusy || seedBusy}>
+            {trainBusy ? <Loader size={13} className="spin" /> : <Play size={13} />}
+            &nbsp;Train Cyber GNN
+          </button>
+          <button type="button" className="btn-train-corruption" onClick={() => void handleTrain("corruption")} disabled={trainBusy || seedBusy}>
+            {trainBusy ? <Loader size={13} className="spin" /> : <Play size={13} />}
+            &nbsp;Train Corruption GNN
+          </button>
+        </div>
+        {trainMsg && (
+          <div className={`gnn-train-msg${trainMsg.includes("failed") ? " error" : ""}`}>
+            {trainMsg}
+          </div>
+        )}
       </div>
 
       {/* Model status banner */}
       {!healthGnnLoaded && (
-        <div className="panel" style={{ marginBottom: 16, borderColor: "rgba(255,209,71,.35)" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10, color: "var(--warning)" }}>
+        <div className="panel gnn-no-artifact-banner">
+          <div className="gnn-no-artifact-inner">
             <AlertTriangle size={16} />
-            <span style={{ fontSize: "0.85rem" }}>
-              No trained GNN artifact found. Run the training worker to generate a model.
+            <span>
+              No trained GNN artifact found. Use &ldquo;Seed Cyber Data&rdquo; then &ldquo;Train Cyber GNN&rdquo; above to generate a model.
             </span>
           </div>
         </div>

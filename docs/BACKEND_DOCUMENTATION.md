@@ -174,6 +174,10 @@ Implemented connector families include:
 - KEV vulnerabilities (`kev_vuln_feed_v1`)
 - backup attestations (`backup_attestation_v1`)
 
+Real-world dataset mapping and synthetic fallback policy:
+
+- `docs/REAL_DATA_SOURCE_MAP.md`
+
 ## 7) Defense Domain
 
 Defense APIs are under `/v1/defense` and provide:

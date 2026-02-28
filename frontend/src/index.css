@@ -852,3 +852,35 @@ li {
   background: rgba(49,255,144,.1);
 }
 
+
+/* ── GNN Training Controls ─────────────────────────────────────────── */
+.screen-header-actions { display: flex; gap: 8px; align-items: center; }
+
+.gnn-train-panel { margin-bottom: 16px; }
+.gnn-train-sub { font-size: 0.75rem; }
+.gnn-train-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.gnn-train-actions.has-msg { margin-bottom: 10px; }
+
+.btn-train-cyber,
+.btn-train-corruption {
+  border: none;
+  border-radius: 4px;
+  padding: 5px 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+  font-size: 0.8rem;
+  font-family: inherit;
+  transition: opacity 0.15s;
+}
+.btn-train-cyber { background: var(--accent); color: #000; }
+.btn-train-corruption { background: var(--risk-medium); color: #000; }
+.btn-train-cyber:disabled,
+.btn-train-corruption:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.gnn-train-msg { font-size: 0.78rem; color: var(--accent); margin-top: 6px; }
+.gnn-train-msg.error { color: var(--risk-high); }
+
+.gnn-no-artifact-banner { margin-bottom: 16px; border-color: rgba(255,209,71,.35); }
+.gnn-no-artifact-inner { display: flex; align-items: center; gap: 10px; color: var(--warning); font-size: 0.85rem; }

@@ -7,6 +7,7 @@ from fastapi import Depends
 from fastapi.routing import APIRouter
 
 from app.api.ai import router as ai_router
+from app.api.demo import router as demo_router
 from app.api.anomalies import router as anomalies_router
 from app.api.auth import router as auth_router
 from app.api.crypto_posture import router as crypto_posture_router
@@ -133,6 +134,8 @@ def build_router_mounts(*, ai_enabled: bool) -> list[RouterMount]:
         #   GET  /partners, /stream, /correlations → section access (analysts)
         #   POST /register  → central access + integrations.write (admin)
         RouterMount(federation_router, ()),
+        # Demo/seed endpoints — central access only; gated by DEMO_ENDPOINTS_ENABLED
+        RouterMount(demo_router, ()),
     ]
 
     if ai_enabled:

@@ -4,9 +4,12 @@ Sentinel-KE Corruption Intelligence — Feature Engineering
 
 42-dimensional feature vector for corruption-domain entities.
 
-Uses FEATURE_DIM = 42 (same as the cyber pipeline) so the same
-SentinelGNN architecture is reused without modification.  The model
-is domain-agnostic; only the input features change.
+The cyber pipeline uses FEATURE_DIM = 44 (added AIRTIME_TRANSFER_EVENT
+and BILLING_FRAUD_EVENT in its Block 4).  The corruption pipeline
+deliberately stays at 42 dims — different domain-specific feature
+blocks, separate model artifact.  The same SentinelGNN architecture
+is reused with feat_dim passed as a parameter; the model is
+domain-agnostic.
 
 Entity types
 ------------

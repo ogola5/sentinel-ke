@@ -20,6 +20,24 @@ const asString = (value: unknown, fallback = ""): string =>
 
 const asBoolean = (value: unknown): boolean => value === true;
 
+export async function triggerGNNTrain(
+  domain: "cyber" | "corruption",
+  epochs = 60,
+): Promise<{ accepted: boolean; domain: string; model_version: string; message: string }> {
+  return apiFetchJson(endpoints.aiGNNTrain(), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ domain, epochs }),
+  });
+}
+
+export async function seedDemoData(
+  domain: "cyber" | "corruption",
+): Promise<{ accepted: boolean; domain: string; message: string }> {
+  const url = domain === "cyber" ? endpoints.demoIngestCyber() : endpoints.demoIngestCorruption();
+  return apiFetchJson(url, { method: "POST" });
+}
+
 export async function fetchGNNTrainingRuns(limit = 10): Promise<GNNTrainingRun[]> {
   try {
     const data = await apiFetchJson<ListResponse<GNNTrainingRun> | GNNTrainingRun[]>(
