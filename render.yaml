@@ -55,7 +55,7 @@ services:
           name: sentinel-pg
           property: connectionString
       - key: DB_AUTO_CREATE
-        value: "true"
+        value: "false"
 
       # ---- Feature flags ----
       - key: KAFKA_ENABLED
@@ -117,11 +117,13 @@ services:
 
       # ---- Secrets: set manually in Render dashboard ----
       - key: AUTH_TOKEN_SECRET
-        sync: false
+        generateValue: true
       - key: AUTH_MFA_SECRET_KEY
-        sync: false
+        generateValue: true
       - key: AUTH_PASSWORD_PEPPER
-        sync: false
+        generateValue: true
+      - key: WEBHOOK_SECRET_ENCRYPTION_KEY
+        generateValue: true
       - key: AUTH_BOOTSTRAP_ADMIN_PASSWORD
         sync: false
       - key: CORS_ALLOW_ORIGINS
