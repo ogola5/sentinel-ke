@@ -9,7 +9,10 @@ set -e
 #    Render injects:  postgresql://user:pass@host/db
 #    psycopg2 needs:  postgresql+psycopg2://user:pass@host/db
 # ---------------------------------------------------------------------------
-if echo "$DATABASE_URL" | grep -q "^postgresql://"; then
+if echo "$DATABASE_URL" | grep -q "^postgres://"; then
+  export DATABASE_URL="postgresql+psycopg2://${DATABASE_URL#postgres://}"
+  echo "[startup] Patched DATABASE_URL (postgres:// -> postgresql+psycopg2://)"
+elif echo "$DATABASE_URL" | grep -q "^postgresql://"; then
   export DATABASE_URL="postgresql+psycopg2://${DATABASE_URL#postgresql://}"
   echo "[startup] Patched DATABASE_URL driver prefix"
 fi
