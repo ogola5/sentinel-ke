@@ -1,14 +1,11 @@
 const resolveApiBase = (): string => {
+  // Explicit override (production builds set VITE_API_BASE_URL at build time)
   const fromEnv = String(import.meta.env.VITE_API_BASE_URL ?? "").trim();
-  if (fromEnv) {
-    return fromEnv.replace(/\/$/, "");
-  }
-  if (typeof window !== "undefined") {
-    const host = window.location.hostname;
-    if (host === "localhost" || host === "127.0.0.1") {
-      return "http://localhost:8000";
-    }
-  }
+  if (fromEnv) return fromEnv.replace(/\/$/, "");
+  // Default: relative URLs so all requests go through the Vite dev-server proxy.
+  // Docker:  VITE_API_PROXY_TARGET=http://backend:8000  (set in docker-compose)
+  // Local:   proxy falls back to http://localhost:8000
+  // This avoids CORS entirely — the proxy is same-origin from the browser's view.
   return "";
 };
 
@@ -91,6 +88,17 @@ export const endpoints = {
   // Crypto posture
   cryptoPosture: () => withBase("/v1/crypto/posture"),
   cryptoSelfTest: () => withBase("/v1/crypto/posture/self-test"),
+
+  // Auth
+  authLogin: () => withBase("/v1/auth/login"),
+  authRefresh: () => withBase("/v1/auth/refresh"),
+  authLogout: () => withBase("/v1/auth/logout"),
+  authMe: () => withBase("/v1/auth/me"),
+  authUsers: (q: Record<string, string | number> = {}) => withQuery("/v1/auth/users", q),
+  authUsersCreate: () => withBase("/v1/auth/users"),
+  authUserPasswordReset: (username: string) =>
+    withBase(`/v1/auth/users/${encodeURIComponent(username)}/password/reset`),
+  authPolicies: () => withBase("/v1/auth/policies"),
 };
 
 export type Endpoints = typeof endpoints;
