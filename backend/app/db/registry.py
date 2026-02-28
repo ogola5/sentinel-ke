@@ -64,6 +64,8 @@ from app.defense.models import (
     RestoreDrill,
     IncidentPlaybookRun,
     ContainmentAction,
+    ContainmentWebhook,
+    WebhookDelivery,
     CryptoPostureSnapshot,
 )
 from app.federation.models import FederationPartner, FederationPattern

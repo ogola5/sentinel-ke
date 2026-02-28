@@ -31,6 +31,18 @@ class Settings:
     kafka_enabled = env_bool("KAFKA_ENABLED", True)
 
     # ---------------------------------------------------------
+    # Federation — shared national correlation salt
+    # All registered edge agents receive this salt at registration.
+    # They use it when computing entity_key_hash so that the SAME entity
+    # hashed by two different partners produces the SAME hash on the hub,
+    # enabling cross-partner threat correlation.
+    # ---------------------------------------------------------
+    federation_correlation_salt = os.environ.get(
+        "FEDERATION_CORRELATION_SALT",
+        "sentinel-ke-national-salt-CHANGE-IN-PRODUCTION",
+    )
+
+    # ---------------------------------------------------------
     # GNN / AI backbone
     # ---------------------------------------------------------
     gnn_enabled = env_bool("GNN_ENABLED", True)

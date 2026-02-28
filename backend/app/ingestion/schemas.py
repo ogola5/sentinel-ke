@@ -22,6 +22,8 @@ EventType = Literal[
     "VULNERABILITY_EVENT",
     "BACKUP_ATTESTATION_EVENT",
     "INCIDENT_RESPONSE_EVENT",
+    "AIRTIME_TRANSFER_EVENT",   # Telco airtime siphoning (Safaricom/Airtel/Telkom)
+    "BILLING_FRAUD_EVENT",      # Roaming / cross-carrier billing manipulation
 ]
 
 Classification = Literal["PUBLIC", "RESTRICTED", "INTERNAL"]
@@ -193,6 +195,28 @@ class BackupAttestationPayload(BaseModel):
     storage_tier: Optional[str] = None
     status: Optional[str] = None
     rpo_hours: Optional[float] = None
+
+
+class AirtimeTransferPayload(BaseModel):
+    source: str = "telco_billing"
+    provider: str                          # safaricom | airtel | telkom
+    phone_h: Optional[str] = None         # hashed MSISDN of victim
+    amount_ksh: Optional[float] = None
+    recipient_account_h: Optional[str] = None
+    channel: Optional[str] = None         # ussd | api | stk
+    transfer_ref: Optional[str] = None
+    reason_codes: List[str] = Field(default_factory=list)
+
+
+class BillingFraudPayload(BaseModel):
+    source: str = "telco_billing"
+    provider: str                          # safaricom | airtel | telkom
+    fraud_type: str                        # roaming_inflate | cross_carrier | vas_abuse
+    affected_account_h: Optional[str] = None
+    amount_ksh: Optional[float] = None
+    roaming_country: Optional[str] = None
+    billing_cycle: Optional[str] = None
+    reason_codes: List[str] = Field(default_factory=list)
 
 
 class IncidentResponsePayload(BaseModel):

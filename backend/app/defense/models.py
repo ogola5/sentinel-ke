@@ -185,6 +185,75 @@ class ContainmentAction(Base):
     )
 
 
+class ContainmentWebhook(Base):
+    """
+    Partner-registered webhook endpoint for last-mile containment execution.
+
+    When an analyst executes a block_ip or isolate_host ContainmentAction,
+    the defense service looks up the matching webhook for the action's
+    section_code + action_type and POSTs a signed payload to the partner's
+    firewall / EDR system.
+
+    Columns
+    -------
+    section_code   Which organisation owns this webhook (e.g. "safaricom")
+    action_type    "block_ip" | "isolate_host"
+    webhook_url    Partner-side HTTPS endpoint
+    secret_hash    SHA-256 of the shared signing secret.
+                   Hub signs payloads with HMAC-SHA256 so the partner can
+                   verify X-Sentinel-Signature before applying the action.
+    is_active      Toggle to disable without deleting
+    created_at     Registration timestamp
+    """
+    __tablename__ = "containment_webhook"
+
+    id           = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    section_code = Column(String, nullable=False)
+    action_type  = Column(String, nullable=False)   # block_ip | isolate_host
+    webhook_url  = Column(String(512), nullable=False)
+    secret_hash  = Column(String(64),  nullable=False)
+    is_active    = Column(Boolean, nullable=False, default=True)
+    created_at   = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("section_code", "action_type", name="uq_webhook_section_action"),
+        Index("ix_webhook_section", "section_code"),
+    )
+
+
+class WebhookDelivery(Base):
+    """
+    Immutable delivery receipt for every last-mile containment webhook call.
+
+    One row per ContainmentAction dispatch attempt.  Retries create new rows
+    so the full attempt history is preserved for forensic audit.
+
+    status lifecycle: pending → delivered | failed
+    """
+    __tablename__ = "defense_webhook_delivery"
+
+    id              = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    action_id       = Column(UUID(as_uuid=True), nullable=True)  # ContainmentAction.id
+    section_code    = Column(String, nullable=True)
+    action_type     = Column(String, nullable=False)
+    target          = Column(String, nullable=False)
+    webhook_url     = Column(String(512), nullable=False)
+    status          = Column(String, nullable=False, default="pending")  # pending|delivered|failed
+    http_status_code = Column(Integer, nullable=True)
+    attempt_count   = Column(Integer, nullable=False, default=0)
+    last_attempted_at = Column(DateTime(timezone=True), nullable=True)
+    delivered_at    = Column(DateTime(timezone=True), nullable=True)
+    error_message   = Column(String, nullable=True)
+    response_body   = Column(JSONB, nullable=False, default=dict)
+    created_at      = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+    __table_args__ = (
+        Index("ix_wh_delivery_action",  "action_id"),
+        Index("ix_wh_delivery_section", "section_code"),
+        Index("ix_wh_delivery_status",  "status"),
+    )
+
+
 class CryptoPostureSnapshot(Base):
     __tablename__ = "crypto_posture_snapshot"
 

@@ -46,6 +46,7 @@ from sqlalchemy import func, text
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db, require_central_access, require_scope, require_section_access
+from app.core.config import settings as hub_settings
 from app.federation.models import FederationPartner, FederationPattern
 from app.db.base import utcnow
 
@@ -90,6 +91,10 @@ class PartnerRegistration(BaseModel):
                             description="Short stable ID e.g. equity-bank-ke")
     partner_name: str = Field(..., description="Display name e.g. Equity Bank Kenya")
     partner_type: str = Field(..., description="bank | telco | hospital | government | other")
+    # Optional last-mile webhook — partner's firewall/EDR endpoint that receives
+    # signed block_ip / isolate_host actions from the national hub.
+    webhook_url: Optional[str] = Field(None, description="Partner-side containment webhook URL")
+    webhook_secret: Optional[str] = Field(None, description="Shared secret for HMAC-SHA256 webhook signature")
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
@@ -381,25 +386,39 @@ def register_partner(
     raw_key  = secrets.token_hex(32)
     key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
 
+    # The national correlation salt is the SAME for every partner so that
+    # HMAC(entity_key, correlation_salt) matches across organisations.
+    correlation_salt = hub_settings.federation_correlation_salt
+
+    webhook_secret_hash = None
+    if reg.webhook_secret:
+        webhook_secret_hash = hashlib.sha256(reg.webhook_secret.encode()).hexdigest()
+
     partner = FederationPartner(
-        partner_id   = reg.partner_id,
-        partner_name = reg.partner_name,
-        partner_type = reg.partner_type,
-        api_key_hash = key_hash,
-        metadata_json = reg.metadata,
+        partner_id          = reg.partner_id,
+        partner_name        = reg.partner_name,
+        partner_type        = reg.partner_type,
+        api_key_hash        = key_hash,
+        correlation_salt    = correlation_salt,
+        webhook_url         = reg.webhook_url,
+        webhook_secret_hash = webhook_secret_hash,
+        metadata_json       = reg.metadata,
     )
     db.add(partner)
     db.commit()
 
     return {
-        "partner_id":  reg.partner_id,
-        "partner_name": reg.partner_name,
-        "partner_type": reg.partner_type,
-        "api_key": raw_key,   # returned ONCE — store securely, configure in edge agent .env
-        "warning": "Store this API key securely. It cannot be retrieved again.",
+        "partner_id":         reg.partner_id,
+        "partner_name":       reg.partner_name,
+        "partner_type":       reg.partner_type,
+        "api_key":            raw_key,   # returned ONCE — store securely
+        "correlation_salt":   correlation_salt,  # use as NATIONAL_SALT in edge agent .env
+        "warning":            "Store api_key and correlation_salt securely. Neither can be retrieved again.",
+        "webhook_registered": reg.webhook_url is not None,
         "edge_agent_env": {
-            "PARTNER_ID":   reg.partner_id,
-            "HUB_URL":      "https://sentinel-ke.onrender.com",
-            "HUB_API_KEY":  raw_key,
+            "PARTNER_ID":       reg.partner_id,
+            "HUB_URL":          "https://sentinel-ke.onrender.com",
+            "HUB_API_KEY":      raw_key,
+            "NATIONAL_SALT":    correlation_salt,
         },
     }

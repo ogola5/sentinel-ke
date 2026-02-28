@@ -50,11 +50,21 @@ class Settings(BaseSettings):
     csv_path: str = ""
 
     # -----------------------------------------------------------------------
-    # HMAC salt — partner-specific secret for entity key hashing.
-    # The hub never sees raw entity keys; only HMAC-SHA256(key, salt).
-    # Must be different for every partner (prevents cross-partner re-id).
+    # HMAC salts — two distinct roles:
+    #
+    # national_salt   Received from the hub at registration (same value for
+    #                 ALL partners).  Used to compute entity_key_hash that
+    #                 is sent in PatternBatch — enables cross-partner
+    #                 correlation on the hub (same entity → same hash).
+    #                 Set from the `correlation_salt` field in the register
+    #                 response: NATIONAL_SALT=<value from hub>.
+    #
+    # hmac_salt       Partner-specific secret for local privacy processing.
+    #                 NEVER sent to the hub.  Used for any internal hashing
+    #                 that must remain opaque between partners.
     # -----------------------------------------------------------------------
-    hmac_salt: str = "CHANGE_ME_PER_PARTNER"
+    national_salt: str = "REPLACE_WITH_CORRELATION_SALT_FROM_HUB_REGISTRATION"
+    hmac_salt: str     = "CHANGE_ME_PER_PARTNER"
 
 
 settings = Settings()

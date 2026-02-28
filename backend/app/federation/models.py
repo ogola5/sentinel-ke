@@ -49,28 +49,40 @@ class FederationPartner(Base):
 
     Columns
     -------
-    partner_id      Short stable identifier, e.g. "equity-bank-ke"
-    partner_name    Display name, e.g. "Equity Bank Kenya"
-    partner_type    One of: bank, telco, hospital, government, other
-    api_key_hash    SHA-256 of the partner's ingest API key
-    last_seen       UTC timestamp of last successful pattern submission
-    last_pattern_at UTC timestamp of last pattern batch received
-    total_patterns  Cumulative pattern rows received (informational)
-    is_active       Can be toggled to suspend a partner
-    metadata_json   Free-form partner metadata (contact, region, etc.)
+    partner_id          Short stable identifier, e.g. "equity-bank-ke"
+    partner_name        Display name, e.g. "Equity Bank Kenya"
+    partner_type        One of: bank, telco, hospital, government, other
+    api_key_hash        SHA-256 of the partner's ingest API key
+    correlation_salt    National hub salt shared with the edge agent at
+                        registration.  Edge agents hash entity_key with
+                        THIS salt (not their local salt) so the same entity
+                        produces the same hash across all partners, enabling
+                        cross-partner correlation queries.
+    webhook_url         Partner-side firewall/EDR HTTP endpoint.  The hub
+                        POSTs signed block_ip / isolate_host payloads here.
+    webhook_secret_hash SHA-256 of the webhook signing secret.  The partner
+                        verifies X-Sentinel-Signature before applying the action.
+    last_seen           UTC timestamp of last successful pattern submission
+    last_pattern_at     UTC timestamp of last pattern batch received
+    total_patterns      Cumulative pattern rows received (informational)
+    is_active           Can be toggled to suspend a partner
+    metadata_json       Free-form partner metadata (contact, region, etc.)
     """
     __tablename__ = "federation_partner"
 
-    partner_id    = Column(String(64),  primary_key=True)
-    partner_name  = Column(String(255), nullable=False)
-    partner_type  = Column(String(32),  nullable=False, default="other")
-    api_key_hash  = Column(String(64),  nullable=False)
-    registered_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
-    last_seen     = Column(DateTime(timezone=True), nullable=True)
-    last_pattern_at = Column(DateTime(timezone=True), nullable=True)
-    total_patterns  = Column(Integer, nullable=False, default=0)
-    is_active       = Column(Boolean, nullable=False, default=True)
-    metadata_json   = Column(JSONB, nullable=False, default=dict)
+    partner_id          = Column(String(64),  primary_key=True)
+    partner_name        = Column(String(255), nullable=False)
+    partner_type        = Column(String(32),  nullable=False, default="other")
+    api_key_hash        = Column(String(64),  nullable=False)
+    correlation_salt    = Column(String(64),  nullable=False, default="")
+    webhook_url         = Column(String(512), nullable=True)
+    webhook_secret_hash = Column(String(64),  nullable=True)
+    registered_at       = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    last_seen           = Column(DateTime(timezone=True), nullable=True)
+    last_pattern_at     = Column(DateTime(timezone=True), nullable=True)
+    total_patterns      = Column(Integer, nullable=False, default=0)
+    is_active           = Column(Boolean, nullable=False, default=True)
+    metadata_json       = Column(JSONB, nullable=False, default=dict)
 
 
 class FederationPattern(Base):

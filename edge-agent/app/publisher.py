@@ -29,9 +29,16 @@ logger = logging.getLogger(__name__)
 
 
 def _hash_entity_key(raw_key: str) -> str:
-    """HMAC-SHA256(entity_key, partner_salt) — irreversible, hub-safe."""
+    """
+    HMAC-SHA256(entity_key, national_salt) — uses the hub's shared national
+    correlation salt so the same entity produces the same hash at every
+    partner, enabling cross-partner threat correlation.
+
+    The per-partner hmac_salt is NOT used here; it is reserved for any
+    local processing that must remain opaque between partners.
+    """
     return hmac.new(
-        settings.hmac_salt.encode(),
+        settings.national_salt.encode(),
         raw_key.encode(),
         hashlib.sha256,
     ).hexdigest()

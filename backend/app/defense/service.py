@@ -12,14 +12,17 @@ from app.analytics.threat_alerts import ThreatAlert
 from app.auth.models import AuthUser
 from app.auth.service import AuthService
 from app.core.config import settings
+from app.defense.executor import dispatch_containment_action
 from app.defense.models import (
     BackupAttestation,
     ContainmentAction,
+    ContainmentWebhook,
     CryptoPostureSnapshot,
     IncidentPlaybookRun,
     PatchSlaDecision,
     RestoreDrill,
     VulnerabilityFinding,
+    WebhookDelivery,
 )
 from app.defense.schemas import (
     BackupAttestationRequest,
@@ -574,10 +577,18 @@ class DefenseService:
             return "executed", {"source_id": src.source_id, "is_active": False}
 
         if t in {"isolate_host", "block_ip"}:
-            return "executed", {
-                "note": "action recorded for downstream EDR/firewall executor",
-                "target": target,
-            }
+            status, wh_details = dispatch_containment_action(
+                db           = self.db,
+                action_type  = t,
+                target       = target,
+                section_code = section_code,
+            )
+            # Map webhook statuses to containment action statuses:
+            # "delivered" → "executed" (partner confirmed receipt)
+            # "no_webhook" → "executed" (recorded; partner must poll)
+            # "failed"    → "failed"
+            exec_status = "executed" if status in {"delivered", "no_webhook"} else "failed"
+            return exec_status, {"webhook_status": status, **wh_details}
 
         return "failed", {"error": "unsupported_action_type"}
 

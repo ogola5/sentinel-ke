@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import hashlib
 import logging
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.api.deps import (
@@ -23,6 +26,7 @@ from app.defense.schemas import (
     ThreatAlertRefreshRequest,
     VulnerabilityUpsertRequest,
 )
+from app.defense.models import ContainmentWebhook, WebhookDelivery
 from app.defense.service import DefenseService
 
 
@@ -280,3 +284,152 @@ def snapshot_crypto_posture(
     except Exception:
         log.exception("defense_snapshot_crypto_posture_failed")
         raise HTTPException(status_code=500, detail="internal_error")
+
+
+# ---------------------------------------------------------------------------
+# Webhook management — register / list / disable last-mile containment hooks
+# ---------------------------------------------------------------------------
+
+class WebhookRegisterRequest(BaseModel):
+    section_code: str = Field(..., description="Organisation this webhook belongs to")
+    action_type:  str = Field(..., description="block_ip | isolate_host")
+    webhook_url:  str = Field(..., description="Partner HTTPS endpoint")
+    secret:       str = Field(..., min_length=16,
+                              description="Shared signing secret (stored as SHA-256 hash)")
+
+
+@router.post(
+    "/webhooks",
+    summary="Register a containment webhook for a partner's firewall / EDR",
+    dependencies=[Depends(require_central_access), Depends(require_scope("defense.write"))],
+    status_code=201,
+)
+def register_webhook(
+    payload: WebhookRegisterRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    Register or update a partner webhook for last-mile block_ip / isolate_host dispatch.
+
+    The hub signs every webhook call with HMAC-SHA256(body, secret) and sets
+    the header `X-Sentinel-Signature: sha256=<hex>`.  The partner must verify
+    this header before applying the containment action.
+    """
+    existing = (
+        db.query(ContainmentWebhook)
+        .filter(
+            ContainmentWebhook.section_code == payload.section_code,
+            ContainmentWebhook.action_type  == payload.action_type,
+        )
+        .first()
+    )
+    secret_hash = hashlib.sha256(payload.secret.encode()).hexdigest()
+    if existing:
+        existing.webhook_url  = payload.webhook_url
+        existing.secret_hash  = secret_hash
+        existing.is_active    = True
+        db.commit()
+        return {"updated": True, "section_code": payload.section_code, "action_type": payload.action_type}
+
+    hook = ContainmentWebhook(
+        section_code = payload.section_code,
+        action_type  = payload.action_type,
+        webhook_url  = payload.webhook_url,
+        secret_hash  = secret_hash,
+    )
+    db.add(hook)
+    db.commit()
+    return {
+        "created":      True,
+        "section_code": payload.section_code,
+        "action_type":  payload.action_type,
+        "webhook_url":  payload.webhook_url,
+        "note":         "Secret stored as SHA-256 hash. Hub signs payloads with X-Sentinel-Signature.",
+    }
+
+
+@router.get(
+    "/webhooks",
+    summary="List registered containment webhooks",
+    dependencies=[Depends(require_central_access), Depends(require_scope("defense.read"))],
+)
+def list_webhooks(
+    section_code: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+):
+    q = db.query(ContainmentWebhook)
+    if section_code:
+        q = q.filter(ContainmentWebhook.section_code == section_code)
+    hooks = q.order_by(ContainmentWebhook.section_code).all()
+    return {
+        "total": len(hooks),
+        "items": [
+            {
+                "id":           str(h.id),
+                "section_code": h.section_code,
+                "action_type":  h.action_type,
+                "webhook_url":  h.webhook_url,
+                "is_active":    h.is_active,
+                "created_at":   h.created_at.isoformat(),
+            }
+            for h in hooks
+        ],
+    }
+
+
+@router.delete(
+    "/webhooks/{webhook_id}",
+    summary="Disable a containment webhook",
+    dependencies=[Depends(require_central_access), Depends(require_scope("defense.write"))],
+)
+def disable_webhook(webhook_id: str, db: Session = Depends(get_db)):
+    import uuid as _uuid
+    try:
+        uid = _uuid.UUID(webhook_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="webhook_not_found")
+    hook = db.query(ContainmentWebhook).filter(ContainmentWebhook.id == uid).first()
+    if not hook:
+        raise HTTPException(status_code=404, detail="webhook_not_found")
+    hook.is_active = False
+    db.commit()
+    return {"disabled": True, "id": webhook_id}
+
+
+@router.get(
+    "/webhooks/deliveries",
+    summary="List webhook delivery receipts (forensic audit log)",
+    dependencies=[Depends(require_central_access), Depends(require_scope("defense.read"))],
+)
+def list_webhook_deliveries(
+    section_code: Optional[str] = Query(None),
+    status: Optional[str] = Query(None, description="pending | delivered | failed"),
+    limit: int = Query(50, ge=1, le=200),
+    db: Session = Depends(get_db),
+):
+    q = db.query(WebhookDelivery)
+    if section_code:
+        q = q.filter(WebhookDelivery.section_code == section_code)
+    if status:
+        q = q.filter(WebhookDelivery.status == status)
+    rows = q.order_by(WebhookDelivery.created_at.desc()).limit(limit).all()
+    return {
+        "total": len(rows),
+        "items": [
+            {
+                "id":              str(r.id),
+                "action_id":       str(r.action_id) if r.action_id else None,
+                "section_code":    r.section_code,
+                "action_type":     r.action_type,
+                "target":          r.target,
+                "webhook_url":     r.webhook_url,
+                "status":          r.status,
+                "http_status_code": r.http_status_code,
+                "attempt_count":   r.attempt_count,
+                "delivered_at":    r.delivered_at.isoformat() if r.delivered_at else None,
+                "error_message":   r.error_message,
+                "created_at":      r.created_at.isoformat(),
+            }
+            for r in rows
+        ],
+    }
