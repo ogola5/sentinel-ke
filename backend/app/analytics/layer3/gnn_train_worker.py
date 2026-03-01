@@ -1059,6 +1059,12 @@ def run_once(
             labels=dataset.labels,
             probabilities=train_result.probabilities,
         )
+        if fairness.get("fairness_flag") == "FAIL":
+            log.warning(
+                "fairness_policy_violation model_version=%s max_positive_rate_disparity=%.3f",
+                model_version,
+                fairness.get("max_positive_rate_disparity", 0),
+            )
 
         run = GNNTrainingRun(
             model_version=model_version,

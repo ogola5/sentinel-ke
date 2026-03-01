@@ -146,6 +146,16 @@ class Settings:
     webhook_secret_encryption_key = os.environ.get("WEBHOOK_SECRET_ENCRYPTION_KEY", "").strip()
 
     # ---------------------------------------------------------
+    # Fairness policy
+    # GNN runs with max_positive_rate_disparity above this threshold are
+    # flagged fairness_blocked=True in the API response and logged as warnings.
+    # Set FAIRNESS_DISPARITY_THRESHOLD=0.0 to block on any disparity.
+    # ---------------------------------------------------------
+    fairness_disparity_threshold = float(
+        os.environ.get("FAIRNESS_DISPARITY_THRESHOLD", "0.4")
+    )
+
+    # ---------------------------------------------------------
     # Rate limiting  (slowapi)
     # RATE_LIMIT_ENABLED=false to disable globally (e.g. in tests).
     # Individual endpoint limits are set via @limiter.limit() decorators.

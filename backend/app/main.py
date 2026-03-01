@@ -16,6 +16,7 @@ from app.api.router_registry import build_router_mounts, build_tags_metadata
 from app.auth.service import AuthService
 from app.core.config import settings
 from app.core.http_hardening import install_http_hardening
+from app.core import metrics_store
 from app.core.rate_limit import limiter
 from app.core.runtime_hardening import enforce_runtime_hardening
 from app.search.opensearch import get_client as get_os_client
@@ -183,6 +184,7 @@ def _register_operational_routes(app: FastAPI) -> None:
 
         return {
             "status":               "ok",
+            "uptime_seconds":       metrics_store.snapshot()["uptime_seconds"],
             "gnn_loaded":           gnn_loaded,
             "gnn_model_version":    gnn_model_version,
             "gnn_metrics":          gnn_metrics,
@@ -230,9 +232,20 @@ def _register_operational_routes(app: FastAPI) -> None:
 
 async def _timing_middleware(request: Request, call_next):
     t0 = time.monotonic()
-    response = await call_next(request)
-    elapsed_ms = round((time.monotonic() - t0) * 1000, 1)
-    response.headers["X-Response-Time"] = f"{elapsed_ms}ms"
+    is_error = False
+    response = None
+    try:
+        response = await call_next(request)
+        if response.status_code >= 500:
+            is_error = True
+    except Exception:
+        is_error = True
+        raise
+    finally:
+        elapsed_ms = round((time.monotonic() - t0) * 1000, 1)
+        metrics_store.record(elapsed_ms, is_error=is_error)
+        if response is not None:
+            response.headers["X-Response-Time"] = f"{elapsed_ms}ms"
     return response
 
 

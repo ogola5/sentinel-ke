@@ -13,7 +13,40 @@ import {
 } from "recharts";
 import { Brain, RefreshCw, Loader, AlertTriangle, Zap, Play, Database } from "lucide-react";
 import { fetchAIPredictions, fetchGNNTrainingRuns, triggerGNNTrain, seedDemoData } from "../../api/ai";
-import type { AIPrediction, GNNTrainingRun } from "../../types/ai";
+import type { AIPrediction, FairnessMetrics, GNNTrainingRun } from "../../types/ai";
+
+const FAIRNESS_COLORS: Record<"PASS" | "WARN" | "FAIL", string> = {
+  PASS: "#30d158",
+  WARN: "#ff9f0a",
+  FAIL: "#ff2d55",
+};
+
+function FairnessBadge({
+  fairness,
+  blocked,
+}: {
+  fairness?: FairnessMetrics;
+  blocked?: boolean;
+}) {
+  if (!fairness) return null;
+  const flag = fairness.fairness_flag;
+  const color = FAIRNESS_COLORS[flag];
+  return (
+    <div className="metric-card" style={{ borderLeft: `4px solid ${color}` }}>
+      <div className="metric-label">Fairness</div>
+      <div className="metric-value" style={{ color }}>{flag}</div>
+      <div className="metric-sub">
+        Max disparity: {(fairness.max_positive_rate_disparity * 100).toFixed(1)}%
+        &nbsp;·&nbsp;{fairness.types_evaluated} groups
+      </div>
+      {blocked && (
+        <div style={{ marginTop: 4, fontSize: 11, color: "#ff2d55", fontWeight: 600 }}>
+          ⚠ Deployment blocked by fairness policy
+        </div>
+      )}
+    </div>
+  );
+}
 
 function riskClass(score: number): string {
   if (score >= 0.8) return "critical";
@@ -219,6 +252,7 @@ export default function GNNIntelligence({ healthGnnLoaded, healthModelVersion, h
           <div className="metric-value">{abstainedCount}</div>
           <div className="metric-sub">High uncertainty skipped</div>
         </div>
+        <FairnessBadge fairness={latestRun?.fairness} blocked={latestRun?.fairness_blocked} />
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>

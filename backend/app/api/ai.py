@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db, pagination_params, require_central_access
+from app.core.config import settings
 from app.core.rate_limit import limiter
 from app.analytics.ai_models import (
     AIExplanation,
@@ -195,6 +196,11 @@ def list_gnn_runs(
                 "params": r.params_json,
                 "metrics": r.metrics_json,
                 "fairness": (r.metrics_json or {}).get("fairness", {}),
+                "fairness_blocked": (
+                    (r.metrics_json or {}).get("fairness", {}).get(
+                        "max_positive_rate_disparity", 0
+                    ) > settings.fairness_disparity_threshold
+                ),
                 "created_at": r.created_at.isoformat(),
             }
             for r in rows
