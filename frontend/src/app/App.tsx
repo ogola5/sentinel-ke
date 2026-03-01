@@ -153,8 +153,6 @@ export default function App() {
 
   const handleLogin = (p: Principal) => {
     setPrincipal(p);
-    // Default screen: central users → command, section users → live
-    setActiveScreen(p.access_level === "central" ? "exec" : "live");
   };
 
   const handleLogout = async () => {
@@ -162,7 +160,6 @@ export default function App() {
     if (rt) await apiLogout(rt).catch(() => undefined);
     clearSession();
     setPrincipal(null);
-    setActiveScreen("live");
   };
 
   // If no principal, show login screen

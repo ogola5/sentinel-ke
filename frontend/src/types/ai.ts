@@ -44,6 +44,9 @@ export interface AIPrediction {
   kill_chain_stage: string | null;
   decision_source: string | null;
   reason_codes: string[];
+  explanation_method?: string | null;
+  top_feature?: string | null;
+  details?: Record<string, unknown>;
   created_at: string;
 }
 

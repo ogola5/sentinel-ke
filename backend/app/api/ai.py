@@ -46,6 +46,15 @@ def _severity_from_score(score: float) -> str:
     return "low"
 
 
+def _top_feature(details: dict) -> str | None:
+    attributions = details.get("feature_attributions", [])
+    if not isinstance(attributions, list) or not attributions:
+        return None
+    first = attributions[0] if isinstance(attributions[0], dict) else {}
+    name = str(first.get("feature") or "").strip()
+    return name or None
+
+
 @router.get("/predictions")
 def list_predictions(
     pagination: dict = Depends(pagination_params),
@@ -94,6 +103,8 @@ def list_predictions(
                 "decision_source": r.decision_source,
                 "reason_codes": r.reason_codes,
                 "details": r.details_json,
+                "explanation_method": (r.details_json or {}).get("explanation_method"),
+                "top_feature": _top_feature(dict(r.details_json or {})),
                 "created_at": r.created_at.isoformat(),
             }
             for r in rows
@@ -122,6 +133,8 @@ def get_prediction(prediction_id: str, db: Session = Depends(get_db)):
         "decision_source": r.decision_source,
         "reason_codes": r.reason_codes,
         "details": r.details_json,
+        "explanation_method": (r.details_json or {}).get("explanation_method"),
+        "top_feature": _top_feature(dict(r.details_json or {})),
         "created_at": r.created_at.isoformat(),
     }
 
@@ -135,6 +148,8 @@ def get_explanation(prediction_id: str, db: Session = Depends(get_db)):
     if not expl:
         raise HTTPException(status_code=404, detail="explanation_not_found")
     details = dict(expl.details_json or {})
+    method = str(details.get("explanation_method") or "unknown")
+    top_feature = _top_feature(details)
     return {
         "prediction_id": str(r.id),
         "entity_key": r.entity_key,
@@ -147,7 +162,9 @@ def get_explanation(prediction_id: str, db: Session = Depends(get_db)):
         "evidence_paths": expl.evidence_paths,
         "recommended_controls": expl.recommended_controls_json,
         "counterfactual": expl.counterfactual_json,
-        "explanation_method": details.get("explanation_method"),
+        "explanation_method": method,
+        "model_based": method == "gradient_x_input",
+        "top_feature": top_feature,
         "feature_attributions": details.get("feature_attributions", []),
         "attribution_group_scores": details.get("attribution_group_scores", []),
         "details": details,

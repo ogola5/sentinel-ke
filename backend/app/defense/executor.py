@@ -35,6 +35,7 @@ The partner verifies this header before applying the action.
 Supported action_types
 ----------------------
 block_ip       → POST to partner BGP/firewall webhook
+unblock_ip     → rollback for a prior block_ip action
 isolate_host   → POST to partner EDR/NDR webhook
 """
 from __future__ import annotations
@@ -57,7 +58,7 @@ from app.defense.models import ContainmentWebhook, WebhookDelivery
 logger = logging.getLogger("sentinel.defense.executor")
 
 WEBHOOK_TIMEOUT_S = 12
-SUPPORTED_REMOTE_ACTIONS = {"block_ip", "isolate_host"}
+SUPPORTED_REMOTE_ACTIONS = {"block_ip", "unblock_ip", "isolate_host"}
 
 
 def _utcnow() -> datetime:
@@ -120,7 +121,7 @@ def dispatch_containment_action(
     action_id: Optional[uuid.UUID] = None,
 ) -> Tuple[str, Dict[str, Any]]:
     """
-    Dispatch a block_ip or isolate_host action to the partner's webhook.
+    Dispatch a block_ip / unblock_ip / isolate_host action to the partner's webhook.
 
     Returns (status, details) where status is one of:
       "delivered"        — webhook accepted (2xx)

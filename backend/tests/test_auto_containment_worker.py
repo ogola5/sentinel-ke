@@ -1,4 +1,4 @@
-from app.analytics.layer3.auto_containment_worker import _entity_parts, _select_action
+from app.analytics.layer3.auto_containment_worker import _entity_parts, _is_global_ip, _select_action
 
 
 def test_entity_parts_splits_prefix_and_value():
@@ -32,3 +32,18 @@ def test_select_action_returns_none_when_not_allowed():
         allowed_actions=["isolate_host"],
     )
     assert out is None
+
+
+def test_select_action_rejects_private_ip_auto_block():
+    out = _select_action(
+        entity_key="ip:10.0.0.5",
+        entity_type="ip",
+        allowed_actions=["block_ip"],
+    )
+    assert out is None
+
+
+def test_is_global_ip_validates_routable_addresses():
+    assert _is_global_ip("41.90.0.1") is True
+    assert _is_global_ip("127.0.0.1") is False
+    assert _is_global_ip("192.168.1.1") is False

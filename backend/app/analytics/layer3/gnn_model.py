@@ -10,6 +10,7 @@ Design principles:
 """
 from __future__ import annotations
 
+import hashlib
 import math
 import random
 from dataclasses import dataclass
@@ -414,6 +415,133 @@ def _build_edge_tensors(
     )
 
 
+def _calibration_metrics(labels: Sequence[int], probabilities: Sequence[float], *, bins: int = 10) -> Dict[str, float]:
+    n = min(len(labels), len(probabilities))
+    if n <= 0:
+        return {"calibration_ece": 0.0, "calibration_mce": 0.0, "brier_score": 0.0}
+
+    brier = 0.0
+    for i in range(n):
+        y = 1.0 if int(labels[i]) > 0 else 0.0
+        p = max(0.0, min(1.0, float(probabilities[i])))
+        brier += (p - y) ** 2
+    brier /= float(n)
+
+    bin_count = max(2, int(bins))
+    bucket_total = [0] * bin_count
+    bucket_prob = [0.0] * bin_count
+    bucket_label = [0.0] * bin_count
+    for i in range(n):
+        y = 1.0 if int(labels[i]) > 0 else 0.0
+        p = max(0.0, min(1.0, float(probabilities[i])))
+        b = min(bin_count - 1, int(p * bin_count))
+        bucket_total[b] += 1
+        bucket_prob[b] += p
+        bucket_label[b] += y
+
+    ece = 0.0
+    mce = 0.0
+    for b in range(bin_count):
+        cnt = bucket_total[b]
+        if cnt <= 0:
+            continue
+        avg_prob = bucket_prob[b] / float(cnt)
+        avg_label = bucket_label[b] / float(cnt)
+        gap = abs(avg_prob - avg_label)
+        ece += (float(cnt) / float(n)) * gap
+        mce = max(mce, gap)
+
+    return {
+        "calibration_ece": round(float(ece), 6),
+        "calibration_mce": round(float(mce), 6),
+        "brier_score": round(float(brier), 6),
+    }
+
+
+def _select_train_val_indices(
+    dataset: GNNDataset,
+    *,
+    split_policy: str,
+    val_ratio: float,
+    seed: int,
+    torch,
+):
+    n_nodes = len(dataset.feature_matrix)
+    if n_nodes <= 1:
+        idx = torch.arange(n_nodes, dtype=torch.long)
+        return idx, idx[:0], {
+            "split_policy": split_policy,
+            "train_count": int(len(idx)),
+            "val_count": 0,
+            "val_ratio_target": float(val_ratio),
+            "val_ratio_actual": 0.0,
+        }
+
+    target_val = max(1, int(math.floor(n_nodes * max(0.05, min(0.45, float(val_ratio))))))
+    target_val = min(target_val, n_nodes - 1)
+    policy = str(split_policy or "entity_hash_holdout").strip().lower()
+
+    if policy == "random":
+        random.seed(seed)
+        perm = torch.randperm(n_nodes)
+        val_idx = perm[:target_val]
+        train_idx = perm[target_val:]
+    elif policy == "temporal_recency_holdout":
+        # Recency feature index follows current cyber feature backbone:
+        # index 15 = recency. If absent, fallback to 0.0.
+        scored = []
+        for i in range(n_nodes):
+            row = dataset.feature_matrix[i]
+            recency = float(row[15]) if len(row) > 15 else 0.0
+            scored.append((recency, i))
+        scored.sort(key=lambda x: x[0], reverse=True)
+        val_ids = {i for _, i in scored[:target_val]}
+        train_ids = [i for i in range(n_nodes) if i not in val_ids]
+        if not train_ids:
+            train_ids = [scored[-1][1]]
+            val_ids.discard(scored[-1][1])
+        train_idx = torch.tensor(train_ids, dtype=torch.long)
+        val_idx = torch.tensor(sorted(val_ids), dtype=torch.long)
+    else:
+        # Deterministic entity holdout: stable across runs and machines.
+        val_ids: List[int] = []
+        train_ids: List[int] = []
+        ratio = max(0.05, min(0.45, float(val_ratio)))
+        for i, key in enumerate(dataset.entity_keys):
+            digest = hashlib.sha256(str(key).encode("utf-8")).digest()
+            bucket = int.from_bytes(digest[:2], byteorder="big") / 65535.0
+            if bucket < ratio:
+                val_ids.append(i)
+            else:
+                train_ids.append(i)
+        if len(val_ids) < target_val:
+            # Backfill deterministically by key order for stable cardinality.
+            needed = target_val - len(val_ids)
+            for i in range(n_nodes):
+                if i in val_ids:
+                    continue
+                val_ids.append(i)
+                if i in train_ids:
+                    train_ids.remove(i)
+                needed -= 1
+                if needed <= 0:
+                    break
+        if not train_ids:
+            moved = val_ids.pop()  # keep at least one train sample
+            train_ids.append(moved)
+        train_idx = torch.tensor(sorted(train_ids), dtype=torch.long)
+        val_idx = torch.tensor(sorted(val_ids), dtype=torch.long)
+        policy = "entity_hash_holdout"
+
+    return train_idx, val_idx, {
+        "split_policy": policy,
+        "train_count": int(len(train_idx)),
+        "val_count": int(len(val_idx)),
+        "val_ratio_target": float(val_ratio),
+        "val_ratio_actual": round(float(len(val_idx) / max(1, n_nodes)), 6),
+    }
+
+
 def train_graphsage(
     dataset: GNNDataset,
     *,
@@ -428,6 +556,8 @@ def train_graphsage(
     temporal_decay: float = 0.0,
     pretrain_epochs: int = 0,
     mc_samples: int = 20,
+    split_policy: str = "entity_hash_holdout",
+    val_ratio: float = 0.2,
 ) -> GNNTrainResult:
     """
     Train SentinelGNN on a GNNDataset.
@@ -476,11 +606,13 @@ def train_graphsage(
 
     model = build_sentinel_gnn(feat_dim, hidden_dim, embed_dim, dropout)
 
-    # 80/20 train-val split
-    indices = torch.randperm(n_nodes)
-    split   = max(1, int(math.floor(n_nodes * 0.8))) if n_nodes >= 8 else n_nodes
-    train_idx = indices[:split]
-    val_idx   = indices[split:] if split < n_nodes else indices[:0]
+    train_idx, val_idx, split_manifest = _select_train_val_indices(
+        dataset,
+        split_policy=split_policy,
+        val_ratio=val_ratio,
+        seed=seed,
+        torch=torch,
+    )
 
     # Class-balanced loss
     n_pos = int(y.sum().item())
@@ -558,9 +690,18 @@ def train_graphsage(
         _, embeddings = model(x, edge_src, edge_dst, edge_weight)
 
     metrics = _binary_metrics(dataset.labels, mean_probs)
+    if len(val_idx) > 0:
+        eval_idx = [int(i) for i in val_idx.tolist()]
+    else:
+        eval_idx = list(range(n_nodes))
+    eval_labels = [int(dataset.labels[i]) for i in eval_idx]
+    eval_probs = [float(mean_probs[i]) for i in eval_idx]
+    metrics.update(_calibration_metrics(eval_labels, eval_probs, bins=10))
     metrics["train_loss"]    = round(last_train, 6)
     metrics["val_loss"]      = round(best_val if math.isfinite(best_val) else last_train, 6)
     metrics["pretrain_loss"] = round(last_pretrain, 6)
+    metrics["eval_samples"] = int(len(eval_idx))
+    metrics.update(split_manifest)
 
     return GNNTrainResult(
         embeddings      = [[float(v) for v in row] for row in embeddings.tolist()],

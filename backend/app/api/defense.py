@@ -295,7 +295,7 @@ def snapshot_crypto_posture(
 
 class WebhookRegisterRequest(BaseModel):
     section_code: str = Field(..., description="Organisation this webhook belongs to")
-    action_type:  str = Field(..., description="block_ip | isolate_host")
+    action_type:  str = Field(..., description="block_ip | unblock_ip | isolate_host")
     webhook_url:  str = Field(..., description="Partner HTTPS endpoint")
     secret:       str = Field(..., min_length=16,
                               description="Shared signing secret (stored as SHA-256 hash)")
@@ -312,7 +312,7 @@ def register_webhook(
     db: Session = Depends(get_db),
 ):
     """
-    Register or update a partner webhook for last-mile block_ip / isolate_host dispatch.
+    Register or update a partner webhook for last-mile block_ip / unblock_ip / isolate_host dispatch.
 
     The hub signs every webhook call with HMAC-SHA256(body, raw_secret) and sets
     the header `X-Sentinel-Signature: sha256=<hex>`.  The partner verifies this

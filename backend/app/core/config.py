@@ -2,6 +2,7 @@
 from __future__ import annotations
 import os
 
+from app.core.env_contract import normalize_database_url
 
 def env_bool(name: str, default: bool = False) -> bool:
     v = os.environ.get(name)
@@ -17,6 +18,7 @@ def env_csv(name: str, default: str = "") -> list[str]:
 
 class Settings:
     app_env = os.environ.get("APP_ENV", "development").lower()
+    database_url = normalize_database_url(os.environ.get("DATABASE_URL", ""))
 
     # ---------------------------------------------------------
     # Kafka / Redpanda
@@ -60,6 +62,8 @@ class Settings:
     gnn_dropout = float(os.environ.get("GNN_DROPOUT", "0.2"))
     gnn_learning_rate = float(os.environ.get("GNN_LEARNING_RATE", "0.001"))
     gnn_weight_decay = float(os.environ.get("GNN_WEIGHT_DECAY", "0.0001"))
+    gnn_split_policy = os.environ.get("GNN_SPLIT_POLICY", "entity_hash_holdout").strip().lower()
+    gnn_val_ratio = float(os.environ.get("GNN_VAL_RATIO", "0.2"))
     gnn_threshold_min_samples = int(os.environ.get("GNN_THRESHOLD_MIN_SAMPLES", "10"))
     gnn_component_discovery_enabled = env_bool("GNN_COMPONENT_DISCOVERY_ENABLED", True)
     gnn_component_min_size = int(os.environ.get("GNN_COMPONENT_MIN_SIZE", "3"))
@@ -94,6 +98,10 @@ class Settings:
         "block_ip,isolate_host",
     )
     ai_auto_containment_dry_run = env_bool("AI_AUTO_CONTAINMENT_DRY_RUN", False)
+    ai_auto_containment_require_section = env_bool("AI_AUTO_CONTAINMENT_REQUIRE_SECTION", True)
+    ai_auto_containment_cooldown_minutes = int(
+        os.environ.get("AI_AUTO_CONTAINMENT_COOLDOWN_MINUTES", "30")
+    )
 
     # ---------------------------------------------------------
     # Platform hardening
@@ -161,6 +169,9 @@ class Settings:
     # MUST be set in production. Dev fallback is derived deterministically in executor.py.
     # ---------------------------------------------------------
     webhook_secret_encryption_key = os.environ.get("WEBHOOK_SECRET_ENCRYPTION_KEY", "").strip()
+    defense_rollback_window_minutes = int(
+        os.environ.get("DEFENSE_ROLLBACK_WINDOW_MINUTES", "240")
+    )
 
     # ---------------------------------------------------------
     # Fairness policy

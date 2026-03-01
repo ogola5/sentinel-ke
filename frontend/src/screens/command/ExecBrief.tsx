@@ -98,6 +98,7 @@ const ALL_AGENCY_CODES = Object.keys(KENYA_AGENCIES);
 // ── Component ──────────────────────────────────────────────────────────────
 
 export default function ExecBrief({ principal }: Props) {
+  void principal;
   const [loading, setLoading]           = useState(true);
   const [threat, setThreat]             = useState<ThreatSummary | null>(null);
   const [partners, setPartners]         = useState<FederationPartner[]>([]);
@@ -113,16 +114,14 @@ export default function ExecBrief({ principal }: Props) {
     setError(null);
     try {
       const [partnersData, runsData, incidentsData] = await Promise.all([
-        fetchFederationPartners(50).catch(() => [] as FederationPartner[]),
+        fetchFederationPartners().catch(() => [] as FederationPartner[]),
         apiFetchJson<{ items: { positive_count: number; node_count: number; prediction_type: string }[] }>(
           endpoints.aiTrainingRuns(1, 0),
           { method: "GET" },
-          principal,
         ).catch(() => ({ items: [] })),
         apiFetchJson<{ items: { action_type: string; status: string; created_at: string; id: string }[] }>(
           endpoints.defenseIncidents(10, 0),
           { method: "GET" },
-          principal,
         ).catch(() => ({ items: [] })),
       ]);
 
@@ -169,7 +168,7 @@ export default function ExecBrief({ principal }: Props) {
     } finally {
       setLoading(false);
     }
-  }, [principal]);
+  }, []);
 
   useEffect(() => { load(); }, [load]);
 

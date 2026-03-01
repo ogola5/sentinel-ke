@@ -69,6 +69,15 @@ from sqlalchemy import create_engine, text
 engine = create_engine(os.environ["DATABASE_URL"])
 
 patches = [
+    # legacy core ledger columns
+    """ALTER TABLE source_registry ADD COLUMN IF NOT EXISTS section_code VARCHAR""",
+    """ALTER TABLE source_registry ADD COLUMN IF NOT EXISTS api_key_lookup VARCHAR(64)""",
+    """CREATE UNIQUE INDEX IF NOT EXISTS ux_source_registry_api_key_lookup
+         ON source_registry (api_key_lookup)""",
+    """ALTER TABLE event_log ADD COLUMN IF NOT EXISTS section_code VARCHAR""",
+    """ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS section_code VARCHAR""",
+    """ALTER TABLE entity_embedding ADD COLUMN IF NOT EXISTS embedding_type VARCHAR DEFAULT 'gnn'""",
+
     # ai_prediction missing columns
     """ALTER TABLE ai_prediction
          ADD COLUMN IF NOT EXISTS model_version    VARCHAR NOT NULL DEFAULT 'unknown',

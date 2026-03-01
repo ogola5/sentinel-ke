@@ -10,6 +10,12 @@ Backend architecture and security reference:
 Phase 2 quality hardening controls:
 `docs/QUALITY_HARDENING_PHASE2.md`
 
+Mission-loop demo script:
+`docs/MISSION_LOOP_DEMO.md`
+
+Performance/SLO evidence log:
+`docs/PERFORMANCE_SLO_EVIDENCE.md`
+
 API examples for frontend/integration consumers:
 `docs/API_CONSUMER_GUIDE.md`
 

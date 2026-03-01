@@ -350,6 +350,8 @@ export default function GNNIntelligence({ healthGnnLoaded, healthModelVersion, h
                   <th>Confidence</th>
                   <th>Uncertainty</th>
                   <th>Kill-Chain Stage</th>
+                  <th>Top Driver</th>
+                  <th>Explainability</th>
                   <th>Status</th>
                 </tr>
               </thead>
@@ -386,6 +388,22 @@ export default function GNNIntelligence({ healthGnnLoaded, healthModelVersion, h
                         <span className="risk-badge info">{p.kill_chain_stage}</span>
                       ) : (
                         <span className="muted">—</span>
+                      )}
+                    </td>
+                    <td>
+                      {p.top_feature ? (
+                        <span className="mono" style={{ fontSize: "0.72rem" }}>
+                          {p.top_feature}
+                        </span>
+                      ) : (
+                        <span className="muted">—</span>
+                      )}
+                    </td>
+                    <td style={{ fontSize: "0.74rem" }}>
+                      {p.explanation_method ? (
+                        p.explanation_method === "gradient_x_input" ? "Model attribution" : "Heuristic signals"
+                      ) : (
+                        "—"
                       )}
                     </td>
                     <td>

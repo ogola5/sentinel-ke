@@ -15,6 +15,7 @@ from app.api.error_contract import install_error_handlers
 from app.api.router_registry import build_router_mounts, build_tags_metadata
 from app.auth.service import AuthService
 from app.core.config import settings
+from app.core.schema_contract import apply_schema_contract, schema_contract_status
 from app.core.http_hardening import install_http_hardening
 from app.core import metrics_store
 from app.core.rate_limit import limiter
@@ -25,83 +26,6 @@ from app.ledger.db import SessionLocal, engine
 import app.db.registry  # noqa: F401  # ensure all models are registered
 
 log = logging.getLogger("sentinel.main")
-
-
-def _ensure_webhook_schema() -> None:
-    """Migrate containment_webhook: rename secret_hash → secret_enc (Fernet ciphertext)."""
-    if engine.dialect.name != "postgresql":
-        return
-    with engine.begin() as conn:
-        conn.execute(
-            text(
-                """
-                DO $$
-                BEGIN
-                    IF EXISTS (
-                        SELECT 1 FROM information_schema.tables
-                        WHERE table_name = 'containment_webhook'
-                    ) THEN
-                        ALTER TABLE containment_webhook
-                            ADD COLUMN IF NOT EXISTS secret_enc TEXT;
-                        IF EXISTS (
-                            SELECT 1 FROM information_schema.columns
-                            WHERE table_name = 'containment_webhook'
-                              AND column_name = 'secret_hash'
-                        ) THEN
-                            ALTER TABLE containment_webhook DROP COLUMN secret_hash;
-                        END IF;
-                    END IF;
-                END $$;
-                """
-            )
-        )
-
-
-def _ensure_api_key_lookup_column() -> None:
-    """Add api_key_lookup index column to source_registry for O(1) key resolution."""
-    if engine.dialect.name != "postgresql":
-        return
-    with engine.begin() as conn:
-        conn.execute(text(
-            "ALTER TABLE source_registry "
-            "ADD COLUMN IF NOT EXISTS api_key_lookup VARCHAR(64);"
-        ))
-        conn.execute(text(
-            "CREATE INDEX IF NOT EXISTS ix_source_registry_api_key_lookup "
-            "ON source_registry (api_key_lookup);"
-        ))
-
-
-def _ensure_infra_cluster_schema() -> None:
-    if engine.dialect.name != "postgresql":
-        return
-
-    with engine.begin() as conn:
-        conn.execute(
-            text(
-                """
-                ALTER TABLE infra_cluster
-                ADD COLUMN IF NOT EXISTS cluster_key TEXT
-                """
-            )
-        )
-        conn.execute(
-            text(
-                """
-                UPDATE infra_cluster
-                SET cluster_key = concat('legacy:', cluster_id::text)
-                WHERE COALESCE(cluster_key, '') = ''
-                """
-            )
-        )
-        conn.execute(
-            text(
-                """
-                CREATE UNIQUE INDEX IF NOT EXISTS ux_infra_cluster_cluster_key
-                ON infra_cluster (cluster_key)
-                """
-            )
-        )
 
 
 def _register_routers(app: FastAPI) -> None:
@@ -122,9 +46,8 @@ def _register_lifecycle(app: FastAPI) -> None:
         else:
             log.info("db_auto_create_disabled; skipping Base.metadata.create_all")
 
-        _ensure_api_key_lookup_column()
-        _ensure_infra_cluster_schema()
-        _ensure_webhook_schema()
+        patch_out = apply_schema_contract(engine)
+        log.info("schema_contract_applied=%s", patch_out)
         try:
             db = SessionLocal()
             try:
@@ -182,6 +105,8 @@ def _register_operational_routes(app: FastAPI) -> None:
         except Exception:  # noqa: BLE001
             pass  # table may not exist yet on first boot
 
+        schema_status = schema_contract_status(engine)
+
         return {
             "status":               "ok",
             "uptime_seconds":       metrics_store.snapshot()["uptime_seconds"],
@@ -189,6 +114,9 @@ def _register_operational_routes(app: FastAPI) -> None:
             "gnn_model_version":    gnn_model_version,
             "gnn_metrics":          gnn_metrics,
             "federation_partners":  federation_partners,
+            "schema_contract_ok":   bool(schema_status.get("ok")),
+            "schema_missing_count": int(schema_status.get("missing_count") or 0),
+            "schema_missing":       schema_status.get("missing", {}),
             "capabilities": [
                 "cyber_gnn",
                 "corruption_gnn",

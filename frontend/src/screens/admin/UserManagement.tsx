@@ -107,7 +107,6 @@ export default function UserManagement() {
 
   const activeCount  = users.filter((u) => u.is_active).length;
   const mfaCount     = users.filter((u) => u.mfa_enabled).length;
-  const centralCount = users.filter((u) => u.access_level === "central").length;
   const lockedCount  = users.filter((u) => u.locked_until).length;
 
   return (

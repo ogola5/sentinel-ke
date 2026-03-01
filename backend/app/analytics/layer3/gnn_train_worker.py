@@ -1083,6 +1083,8 @@ def run_once(
     learning_rate: float = 0.001,
     weight_decay: float = 0.0001,
     temporal_decay: float = 0.015,
+    split_policy: str = "entity_hash_holdout",
+    val_ratio: float = 0.2,
     pretrain_epochs: int = 5,
     seed: int = 7,
     uncertainty_abstain_threshold: float = 0.45,
@@ -1123,6 +1125,8 @@ def run_once(
             seed=seed,
             temporal_decay=temporal_decay,
             pretrain_epochs=pretrain_epochs,
+            split_policy=split_policy,
+            val_ratio=val_ratio,
         )
     except Exception as exc:
         db.rollback()
@@ -1193,6 +1197,8 @@ def run_once(
                 "learning_rate": learning_rate,
                 "weight_decay": weight_decay,
                 "temporal_decay": temporal_decay,
+                "split_policy": split_policy,
+                "val_ratio": val_ratio,
                 "pretrain_epochs": pretrain_epochs,
                 "seed": seed,
                 "uncertainty_abstain_threshold": uncertainty_abstain_threshold,
@@ -1204,6 +1210,16 @@ def run_once(
                 "negative_count": dataset.negative_count,
                 "benign_negative_count": dataset.benign_negative_count,
                 "fairness": fairness,
+                "evaluation_protocol": {
+                    "temporal_policy": "window_ordered",
+                    "holdout_policy": split_policy,
+                    "calibration": {
+                        "ece": float(train_result.metrics.get("calibration_ece") or 0.0),
+                        "mce": float(train_result.metrics.get("calibration_mce") or 0.0),
+                        "brier_score": float(train_result.metrics.get("brier_score") or 0.0),
+                        "eval_samples": int(train_result.metrics.get("eval_samples") or 0),
+                    },
+                },
                 "explainability": {
                     "method": "gradient_x_input",
                     "top_k": int(settings.ai_explainability_top_k),
@@ -1511,6 +1527,12 @@ def main() -> None:
     p.add_argument("--learning-rate", type=float, default=settings.gnn_learning_rate)
     p.add_argument("--weight-decay", type=float, default=settings.gnn_weight_decay)
     p.add_argument("--temporal-decay", type=float, default=settings.ai_temporal_edge_decay)
+    p.add_argument(
+        "--split-policy",
+        default=settings.gnn_split_policy,
+        choices=["entity_hash_holdout", "temporal_recency_holdout", "random"],
+    )
+    p.add_argument("--val-ratio", type=float, default=settings.gnn_val_ratio)
     p.add_argument("--pretrain-epochs", type=int, default=5)
     p.add_argument("--seed", type=int, default=settings.gnn_seed)
     p.add_argument("--uncertainty-abstain-threshold", type=float, default=settings.ai_uncertainty_abstain_threshold)
@@ -1549,6 +1571,8 @@ def main() -> None:
             learning_rate=args.learning_rate,
             weight_decay=args.weight_decay,
             temporal_decay=args.temporal_decay,
+            split_policy=args.split_policy,
+            val_ratio=args.val_ratio,
             pretrain_epochs=args.pretrain_epochs,
             seed=args.seed,
             uncertainty_abstain_threshold=args.uncertainty_abstain_threshold,

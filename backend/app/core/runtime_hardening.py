@@ -4,6 +4,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
+from app.core.env_contract import evaluate_database_url_contract
 
 _DEV_ENVS = {"development", "dev", "local", "test", "testing"}
 _TLS_ALLOWED = {"tls1.2", "tls1.3", "mtls-tls1.3"}
@@ -121,6 +122,13 @@ def evaluate_runtime_hardening(settings_obj: Any) -> RuntimeHardeningReport:
 
     if strict and not _as_bool(getattr(settings_obj, "auth_central_mfa_required", True)):
         warnings.append("AUTH_CENTRAL_MFA_REQUIRED_false")
+
+    db_report = evaluate_database_url_contract(
+        _as_str(getattr(settings_obj, "database_url", "")),
+        app_env=app_env,
+    )
+    errors.extend(list(db_report.errors))
+    warnings.extend(list(db_report.warnings))
 
     return RuntimeHardeningReport(
         errors=tuple(errors),

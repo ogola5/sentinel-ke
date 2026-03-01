@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import {
-  Zap, CheckCircle, XCircle, Loader, Copy, RefreshCw,
+  Zap, CheckCircle, Loader, Copy, RefreshCw,
   Link2, Radio, Shield, Users, Globe, Info, AlertTriangle,
   ChevronDown, ChevronUp, Terminal,
 } from "lucide-react";
@@ -237,7 +237,7 @@ export default function AgencyOnboarding() {
                     </div>
 
                     {/* Status / action */}
-                    <div style={{ display: "flex", align: "center", gap: 8 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                       {row.exists ? (
                         <span style={{ display: "flex", alignItems: "center", gap: 5, color: "var(--accent)", fontSize: "0.8rem" }}>
                           <CheckCircle size={14} /> Ready

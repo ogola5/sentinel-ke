@@ -1,11 +1,11 @@
 import { useEffect, useState } from "react";
 import {
   Globe, RefreshCw, Loader, Shield, AlertTriangle,
-  Activity, Users, Radio, Zap, Network, TrendingUp,
+  Activity, Users, Radio, Network, TrendingUp,
 } from "lucide-react";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
-  ResponsiveContainer, LineChart, Line,
+  ResponsiveContainer,
 } from "recharts";
 import { fetchFederationPartners, fetchFederationCorrelations } from "../../api/federation";
 import { apiListUsers } from "../../api/auth";

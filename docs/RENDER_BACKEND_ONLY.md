@@ -41,13 +41,19 @@ Set these in Render for backend-only mode:
 - `KAFKA_ENABLED=false` (unless you also deploy Kafka/consumers)
 - `API_AUTH_DISABLED=false`
 - `FRONTEND_API_KEY=<strong-secret>`
+- `INGEST_API_KEY=<strong-secret>`
+- `PSEUDONYM_SALT=<strong-secret>`
 - `CORS_ALLOW_ORIGINS=https://your-frontend-domain.com`
 - `DATABASE_URL=<managed-postgres-url>`
+- `WEBHOOK_SECRET_ENCRYPTION_KEY=<fernet-key>`
 
 Optional:
 
 - `AI_API_ENABLED=false` if you want to hide `/v1/ai` endpoints completely.
 - Keep `AI_API_ENABLED=true` if frontend still reads AI prediction records from DB.
+- `AI_AUTO_CONTAINMENT_ENABLED=false` for backend-only mode.
+- `DEFENSE_ROLLBACK_WINDOW_MINUTES=240` to cap rollback window.
+- `GNN_SPLIT_POLICY=entity_hash_holdout` and `GNN_VAL_RATIO=0.2` for deterministic train/eval contracts when ML is enabled later.
 
 Keep any other service credentials only if those integrations are actually deployed.
 
@@ -58,6 +64,8 @@ Ready-to-paste environment template:
 Notes:
 
 - Keep `DB_AUTO_CREATE=false` in production.
+- Never set `DATABASE_URL` to docker-local hosts like `postgres` or `localhost` on Render.
+- Use Render Postgres binding (`fromDatabase.connectionString`) as `DATABASE_URL`.
 - `backend/scripts/render_startup.sh` bootstraps schema from ORM metadata before app start, so first boot on a fresh Render Postgres succeeds without enabling ML services.
 
 ## 3) Local ML Continues Separately

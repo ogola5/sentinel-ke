@@ -78,6 +78,39 @@ Promote model only if all pass:
 5. Train + evaluate using both tracks.
 6. Persist metrics and gate decision.
 
+## Enforced in Code (current)
+
+- `train_graphsage()` now records:
+  - `split_policy` (`entity_hash_holdout` default)
+  - `train_count`, `val_count`, `val_ratio_actual`
+  - calibration metrics: `calibration_ece`, `calibration_mce`, `brier_score`
+- `gnn_train_worker.run_once()` persists an `evaluation_protocol` block in
+  `GNNTrainingRun.metrics_json` with:
+  - temporal policy marker
+  - holdout policy used
+  - calibration summary
+- `drift_worker.run_once()` already adds live fairness disparity and status into
+  `AIDriftReport.metrics_json["fairness_live"]`.
+
+## Runtime Knobs
+
+Set in environment for reproducible evaluation:
+
+```
+GNN_SPLIT_POLICY=entity_hash_holdout
+GNN_VAL_RATIO=0.2
+FAIRNESS_DISPARITY_THRESHOLD=0.4
+```
+
+CLI override (one-off):
+
+```
+python -m app.analytics.layer3.gnn_train_worker \
+  --window-key Wmid \
+  --split-policy entity_hash_holdout \
+  --val-ratio 0.2
+```
+
 ## Exit Criteria to Remove Synthetic Telco
 
 Once partner SIM-swap/billing feeds are live and stable for >= 30 days:
@@ -85,4 +118,3 @@ Once partner SIM-swap/billing feeds are live and stable for >= 30 days:
 - reduce synthetic telco sampling weight each retrain cycle,
 - switch `TRACK_B_TELCO_EXTENSION` from synthetic-heavy to real-heavy,
 - retire synthetic telco from gating once real coverage exceeds 90% of telco-positive windows.
-

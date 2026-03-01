@@ -524,6 +524,48 @@ class DefenseService:
             "actions": out,
         }
 
+    def _latest_executed_block_ip_action(
+        self,
+        *,
+        section_code: str | None,
+        target: str,
+    ) -> ContainmentAction | None:
+        q = (
+            self.db.query(ContainmentAction)
+            .filter(ContainmentAction.action_type == "block_ip")
+            .filter(ContainmentAction.target == target)
+            .filter(ContainmentAction.status == "executed")
+        )
+        if section_code is None:
+            q = q.filter(ContainmentAction.section_code.is_(None))
+        else:
+            q = q.filter(ContainmentAction.section_code == section_code)
+        return q.order_by(ContainmentAction.executed_at.desc()).first()
+
+    def _rollback_already_executed(
+        self,
+        *,
+        section_code: str | None,
+        target: str,
+        rollback_of_action_id: str,
+    ) -> bool:
+        q = (
+            self.db.query(ContainmentAction)
+            .filter(ContainmentAction.action_type == "rollback_block_ip")
+            .filter(ContainmentAction.target == target)
+            .filter(ContainmentAction.status == "executed")
+        )
+        if section_code is None:
+            q = q.filter(ContainmentAction.section_code.is_(None))
+        else:
+            q = q.filter(ContainmentAction.section_code == section_code)
+
+        for row in q.order_by(ContainmentAction.executed_at.desc()).limit(50).all():
+            did = str((row.details_json or {}).get("rollback_of_action_id") or "")
+            if did == rollback_of_action_id:
+                return True
+        return False
+
     def _execute_single_action(
         self,
         *,
@@ -589,6 +631,49 @@ class DefenseService:
             # "failed"    → "failed"
             exec_status = "executed" if status in {"delivered", "no_webhook"} else "failed"
             return exec_status, {"webhook_status": status, **wh_details}
+
+        if t == "rollback_block_ip":
+            original = self._latest_executed_block_ip_action(section_code=section_code, target=target)
+            if not original:
+                return "failed", {"error": "no_block_ip_action_found"}
+
+            default_window = max(5, int(settings.defense_rollback_window_minutes))
+            requested_window = int(details.get("rollback_window_minutes") or default_window)
+            rollback_window_minutes = max(5, min(default_window, requested_window))
+            age_minutes = (_now() - (original.executed_at or _now())).total_seconds() / 60.0
+            if age_minutes > rollback_window_minutes:
+                return "failed", {
+                    "error": "rollback_window_expired",
+                    "rollback_window_minutes": rollback_window_minutes,
+                    "age_minutes": round(age_minutes, 3),
+                }
+
+            rollback_of_action_id = str(original.id)
+            if self._rollback_already_executed(
+                section_code=section_code,
+                target=target,
+                rollback_of_action_id=rollback_of_action_id,
+            ):
+                return "failed", {
+                    "error": "already_rolled_back",
+                    "rollback_of_action_id": rollback_of_action_id,
+                }
+
+            status, wh_details = dispatch_containment_action(
+                db=self.db,
+                action_type="unblock_ip",
+                target=target,
+                section_code=section_code,
+            )
+            exec_status = "executed" if status in {"delivered", "no_webhook"} else "failed"
+            return exec_status, {
+                "webhook_status": status,
+                "requested_action": "rollback_block_ip",
+                "dispatched_action": "unblock_ip",
+                "rollback_of_action_id": rollback_of_action_id,
+                "rollback_window_minutes": rollback_window_minutes,
+                **wh_details,
+            }
 
         return "failed", {"error": "unsupported_action_type"}
 
