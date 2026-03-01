@@ -106,6 +106,7 @@ Current synthetic generators already available:
 - Store source provenance (dataset name, version, retrieval date) with each import job.
 - Respect per-source license terms before redistribution.
 - Separate training/evaluation by time-window to avoid leakage.
+- Follow hybrid split policy in `docs/GNN_HYBRID_SPLIT_PLAN.md`.
 
 ## Source Registry (Verified Links)
 
@@ -126,4 +127,3 @@ Current synthetic generators already available:
 - LANL multi-source cyber dataset: https://csr.lanl.gov/data/cyber1/
 - PaySim reference simulator: https://github.com/EdgarLopezPhD/PaySim
 - PaySim Kaggle mirror: https://www.kaggle.com/datasets/ealaxi/paysim1
-

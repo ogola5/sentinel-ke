@@ -1,0 +1,19 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+# Markers used in the test suite
+markers = [
+    "integration: requires live database or external services",
+    "slow: longer-running tests",
+]
+# Exclude tests that require a live DB / Kafka in unit-test CI runs
+addopts = "-m 'not integration and not slow' -q --tb=short"
+
+[tool.ruff]
+select = ["E", "F", "W", "I"]
+ignore = ["E501"]
+line-length = 120
+
+[tool.ruff.lint]
+# Allow print() only in CLI entry-point patterns
+per-file-ignores = { "app/analytics/layer3/*_worker.py" = ["T201"], "app/analytics/corruption/train_worker.py" = ["T201"], "app/demo/*.py" = ["T201"] }

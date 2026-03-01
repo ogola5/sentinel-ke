@@ -59,7 +59,13 @@ def test_signed_token_rejects_tampering():
         "exp": 4_102_444_800,
     }
     token = build_signed_token(payload, "secret-123")
-    bad = token[:-1] + ("A" if token[-1] != "A" else "B")
+    # Token is v1 (3 parts) or v2 (4 parts: version.body.hmac.pqc).
+    # Always corrupt the HMAC segment (index 2) so the classical check fires
+    # regardless of whether PQC hybrid mode adds a 4th segment.
+    parts = token.split(".")
+    bad_hmac = parts[2][:-1] + ("A" if parts[2][-1] != "A" else "B")
+    parts[2] = bad_hmac
+    bad = ".".join(parts)
     with pytest.raises(ValueError) as e:
         parse_signed_token(bad, "secret-123")
     assert str(e.value) == "token_signature_invalid"

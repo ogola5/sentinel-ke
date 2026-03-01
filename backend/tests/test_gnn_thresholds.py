@@ -29,7 +29,7 @@ def test_calibrate_thresholds_per_entity_type():
     )
 
     assert "ip" in out
-    assert out["ip"]["method"] == "f1_weak_label"
+    assert out["ip"]["method"] == "cost_weighted_f1_weak_label"
     assert 30.0 <= float(out["ip"]["threshold_score"]) <= 95.0
 
     # account_h has only 2 samples -> default threshold method

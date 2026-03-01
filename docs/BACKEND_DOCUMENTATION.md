@@ -177,6 +177,7 @@ Implemented connector families include:
 Real-world dataset mapping and synthetic fallback policy:
 
 - `docs/REAL_DATA_SOURCE_MAP.md`
+- `docs/GNN_HYBRID_SPLIT_PLAN.md`
 
 ## 7) Defense Domain
 
