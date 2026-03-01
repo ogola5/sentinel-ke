@@ -77,6 +77,23 @@ class Settings:
     ai_rollout_mode_default = os.environ.get("AI_ROLLOUT_MODE_DEFAULT", "single").strip().lower()
     ai_canary_ratio_default = float(os.environ.get("AI_CANARY_RATIO_DEFAULT", "0.1"))
     ai_feedback_enabled = env_bool("AI_FEEDBACK_ENABLED", True)
+    ai_explainability_enabled = env_bool("AI_EXPLAINABILITY_ENABLED", True)
+    ai_explainability_top_k = int(os.environ.get("AI_EXPLAINABILITY_TOP_K", "6"))
+    ai_explainability_max_nodes = int(os.environ.get("AI_EXPLAINABILITY_MAX_NODES", "64"))
+    ai_auto_containment_enabled = env_bool("AI_AUTO_CONTAINMENT_ENABLED", False)
+    ai_auto_containment_min_score = float(os.environ.get("AI_AUTO_CONTAINMENT_MIN_SCORE", "90.0"))
+    ai_auto_containment_max_actions_per_run = int(
+        os.environ.get("AI_AUTO_CONTAINMENT_MAX_ACTIONS_PER_RUN", "10")
+    )
+    ai_auto_containment_require_impact_stage = env_bool(
+        "AI_AUTO_CONTAINMENT_REQUIRE_IMPACT_STAGE",
+        True,
+    )
+    ai_auto_containment_allowed_actions = env_csv(
+        "AI_AUTO_CONTAINMENT_ALLOWED_ACTIONS",
+        "block_ip,isolate_host",
+    )
+    ai_auto_containment_dry_run = env_bool("AI_AUTO_CONTAINMENT_DRY_RUN", False)
 
     # ---------------------------------------------------------
     # Platform hardening

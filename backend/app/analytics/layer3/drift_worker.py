@@ -93,6 +93,76 @@ def _status_for_score(score: float) -> str:
     return "ok"
 
 
+def _status_rank(status: str) -> int:
+    s = str(status or "ok").lower()
+    if s == "critical":
+        return 3
+    if s == "warning":
+        return 2
+    return 1
+
+
+def _status_for_fairness(disparity: Optional[float]) -> str:
+    if disparity is None:
+        return "ok"
+    warn_threshold = max(0.0, float(settings.fairness_disparity_threshold) * 0.75)
+    crit_threshold = max(0.0, float(settings.fairness_disparity_threshold))
+    if float(disparity) > crit_threshold:
+        return "critical"
+    if float(disparity) > warn_threshold:
+        return "warning"
+    return "ok"
+
+
+def _live_fairness_metrics(
+    db: Session,
+    *,
+    prediction_type: str,
+    window_key: str,
+    model_version: str,
+    window_end: datetime,
+    positive_threshold: float = 75.0,
+    min_group_size: int = 3,
+) -> Dict[str, object]:
+    rows = (
+        db.query(AIPrediction.entity_type, AIPrediction.score)
+        .filter(AIPrediction.prediction_type == prediction_type)
+        .filter(AIPrediction.window_key == window_key)
+        .filter(AIPrediction.model_version == model_version)
+        .filter(AIPrediction.window_end == window_end)
+        .all()
+    )
+    grouped: Dict[str, List[float]] = {}
+    for entity_type, score in rows:
+        grouped.setdefault(str(entity_type or "unknown"), []).append(float(score or 0.0))
+
+    per_type: Dict[str, Dict[str, object]] = {}
+    rates: List[float] = []
+    for entity_type, scores in grouped.items():
+        n = len(scores)
+        if n < min_group_size:
+            per_type[entity_type] = {"count": n, "skipped": True, "reason": "too_few_samples"}
+            continue
+        pos = sum(1 for s in scores if float(s) >= positive_threshold)
+        rate = pos / max(1, n)
+        per_type[entity_type] = {
+            "count": n,
+            "positive_rate": round(rate, 6),
+            "positive_count": int(pos),
+        }
+        rates.append(rate)
+
+    disparity = round(max(rates) - min(rates), 6) if len(rates) >= 2 else None
+    status = _status_for_fairness(disparity)
+    return {
+        "per_type": per_type,
+        "types_evaluated": len(rates),
+        "max_positive_rate_disparity": disparity,
+        "threshold_score": positive_threshold,
+        "status": status,
+    }
+
+
 def _auto_rollback_if_needed(
     db: Session,
     *,
@@ -161,7 +231,16 @@ def run_once(
     )
 
     drift_score, metrics = _drift_score(baseline_scores, current_scores)
-    status = _status_for_score(drift_score)
+    drift_status = _status_for_score(drift_score)
+    fairness_live = _live_fairness_metrics(
+        db,
+        prediction_type=prediction_type,
+        window_key=window_key,
+        model_version=model_version,
+        window_end=current_window,
+    )
+    fairness_status = str(fairness_live.get("status") or "ok")
+    status = drift_status if _status_rank(drift_status) >= _status_rank(fairness_status) else fairness_status
 
     row = {
         "model_version": model_version,
@@ -176,6 +255,8 @@ def run_once(
             "current_window_end": current_window.isoformat(),
             "baseline_count": len(baseline_scores),
             "current_count": len(current_scores),
+            "drift_status": drift_status,
+            "fairness_live": fairness_live,
         },
     }
 
@@ -201,9 +282,12 @@ def run_once(
     db.commit()
     return {
         "status": status,
+        "drift_status": drift_status,
+        "fairness_status": fairness_status,
         "drift_score": drift_score,
         "upserted": int(res.rowcount or 0),
         "rolled_back": bool(rolled_back),
+        "fairness_live": fairness_live,
     }
 
 

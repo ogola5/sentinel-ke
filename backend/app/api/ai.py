@@ -134,6 +134,7 @@ def get_explanation(prediction_id: str, db: Session = Depends(get_db)):
     expl = db.query(AIExplanation).filter(AIExplanation.prediction_id == r.id).first()
     if not expl:
         raise HTTPException(status_code=404, detail="explanation_not_found")
+    details = dict(expl.details_json or {})
     return {
         "prediction_id": str(r.id),
         "entity_key": r.entity_key,
@@ -146,7 +147,10 @@ def get_explanation(prediction_id: str, db: Session = Depends(get_db)):
         "evidence_paths": expl.evidence_paths,
         "recommended_controls": expl.recommended_controls_json,
         "counterfactual": expl.counterfactual_json,
-        "details": expl.details_json,
+        "explanation_method": details.get("explanation_method"),
+        "feature_attributions": details.get("feature_attributions", []),
+        "attribution_group_scores": details.get("attribution_group_scores", []),
+        "details": details,
         "created_at": expl.created_at.isoformat(),
     }
 

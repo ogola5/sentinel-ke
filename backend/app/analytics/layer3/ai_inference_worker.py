@@ -42,6 +42,12 @@ from app.analytics.layer3.ai_intel import (
     event_types_to_kill_chain_stage,
     reason_codes_to_d3fend_controls,
 )
+from app.analytics.explainability import (
+    heuristic_signal_attributions,
+    summarize_feature_attributions,
+    summarize_group_scores,
+    top_feature_hint,
+)
 from app.analytics.layer3.gnn_backbone import (
     FEATURE_DIM,
     _edges_from_postgres,
@@ -130,6 +136,8 @@ def _write_prediction(
     db: Session,
     *,
     snap: GraphFeatureSnapshot,
+    feature_vector: Optional[List[float]],
+    feature_contributions: Optional[List[float]],
     score: float,
     prob: float,
     uncertainty: float,
@@ -150,10 +158,30 @@ def _write_prediction(
     kill_chain_stage = event_types_to_kill_chain_stage(event_types)
     attack_techniques = event_types_to_attack_techniques(event_types)
     controls         = reason_codes_to_d3fend_controls(reasons)
+
+    if feature_vector and feature_contributions:
+        method = "gradient_x_input"
+        feature_attributions = summarize_feature_attributions(
+            feature_values=feature_vector,
+            feature_contributions=feature_contributions,
+            top_k=max(1, int(settings.ai_explainability_top_k)),
+        )
+    else:
+        method = "heuristic_signals"
+        feature_attributions = heuristic_signal_attributions(
+            event_count=int(snap.event_count or 0),
+            source_count=int((snap.features or {}).get("source_count") or 0),
+            event_types=event_types,
+            risk_flags=list(snap.risk_flags or []),
+            top_k=max(1, int(settings.ai_explainability_top_k)),
+        )
+    group_scores = summarize_group_scores(feature_attributions)
+    feature_hint = top_feature_hint(feature_attributions, fallback="log_event_count")
+
     counterfactual   = build_counterfactual(
         probability=prob,
         threshold_score=75.0,
-        top_feature_hint="event_count",
+        top_feature_hint=feature_hint,
     )
 
     details_json = {
@@ -168,6 +196,9 @@ def _write_prediction(
         "attack_techniques": attack_techniques,
         "rollout":           rollout,
         "decision_source":   decision_source,
+        "explanation_method": method,
+        "feature_attributions": feature_attributions,
+        "attribution_group_scores": group_scores,
     }
 
     pred = (
@@ -223,6 +254,9 @@ def _write_prediction(
         "counterfactual":      counterfactual,
         "kill_chain_stage":    kill_chain_stage,
         "decision_source":     decision_source,
+        "explanation_method":  method,
+        "feature_attributions": feature_attributions,
+        "attribution_group_scores": group_scores,
     }
     expl = (
         db.query(AIExplanation)
@@ -360,7 +394,11 @@ def _run_gnn_path(
         log.warning("gnn_inference_torch_missing — falling back to heuristic")
         return -1   # caller interprets -1 as "retry with heuristic"
 
-    from app.analytics.layer3.gnn_model import build_sentinel_gnn, predict_mc  # noqa: PLC0415
+    from app.analytics.layer3.gnn_model import (  # noqa: PLC0415
+        build_sentinel_gnn,
+        gradient_x_input_attributions,
+        predict_mc,
+    )
 
     meta       = artifact_payload.get("metadata", {})
     feat_dim   = int(meta.get("feature_dim") or meta.get("feat_dim") or FEATURE_DIM)
@@ -441,6 +479,27 @@ def _run_gnn_path(
         model, x, edge_src_t, edge_dst_t, edge_weight_t, n_samples=20
     )
 
+    feature_contrib_by_idx: Dict[int, List[float]] = {}
+    if bool(settings.ai_explainability_enabled):
+        ranked_idx = sorted(
+            range(len(mean_probs)),
+            key=lambda idx: float(mean_probs[idx]),
+            reverse=True,
+        )
+        try:
+            feature_contrib_by_idx = gradient_x_input_attributions(
+                model,
+                x,
+                edge_src_t,
+                edge_dst_t,
+                edge_weight_t,
+                node_indices=ranked_idx,
+                max_nodes=int(settings.ai_explainability_max_nodes),
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("gnn_attribution_failed model_version=%s err=%s", model_version, exc)
+            feature_contrib_by_idx = {}
+
     # --- write predictions ----------------------------------------------
     created = 0
     for i, snap in enumerate(snapshots):
@@ -452,6 +511,8 @@ def _run_gnn_path(
         _write_prediction(
             db,
             snap            = snap,
+            feature_vector  = feature_rows[i],
+            feature_contributions = feature_contrib_by_idx.get(i),
             score           = score,
             prob            = prob,
             uncertainty     = uncertainty,
@@ -552,6 +613,8 @@ def _run_heuristic_path(
         _write_prediction(
             db,
             snap            = snap,
+            feature_vector  = None,
+            feature_contributions = None,
             score           = score,
             prob            = prob,
             uncertainty     = uncertainty,
@@ -607,10 +670,11 @@ def run_once(
         return 0
 
     # Attempt GNN path
+    written = 0
     artifact_info = _load_gnn_artifact(db, prediction_type, window_key)
     if artifact_info is not None:
         payload, _, model_version = artifact_info
-        result = _run_gnn_path(
+        written = _run_gnn_path(
             db,
             snapshots       = snapshots,
             artifact_payload = payload,
@@ -619,20 +683,60 @@ def run_once(
             rollout         = rollout,
             evidence_limit  = evidence_limit,
         )
-        if result >= 0:
-            return result
-        # result == -1 means torch missing mid-run → fall through
+        if written < 0:
+            written = 0
+        else:
+            if bool(settings.ai_auto_containment_enabled):
+                try:
+                    from app.analytics.layer3.auto_containment_worker import run_once as run_auto_containment  # noqa: PLC0415
+                    auto = run_auto_containment(
+                        db=db,
+                        prediction_type=prediction_type,
+                        window_key=window_key,
+                        window_end=window_end,
+                    )
+                    log.info(
+                        "auto_containment_done prediction_type=%s window_key=%s executed=%s failed=%s skipped=%s",
+                        prediction_type,
+                        window_key,
+                        auto.get("executed"),
+                        auto.get("failed"),
+                        auto.get("skipped"),
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    log.error("auto_containment_failed: %s", exc)
+            return written
 
     # Heuristic fallback
     log.info("inference_using_heuristic window_key=%s entities=%d",
              window_key, len(snapshots))
-    return _run_heuristic_path(
+    written = _run_heuristic_path(
         db,
         snapshots       = snapshots,
         prediction_type = prediction_type,
         rollout         = rollout,
         evidence_limit  = evidence_limit,
     )
+    if bool(settings.ai_auto_containment_enabled):
+        try:
+            from app.analytics.layer3.auto_containment_worker import run_once as run_auto_containment  # noqa: PLC0415
+            auto = run_auto_containment(
+                db=db,
+                prediction_type=prediction_type,
+                window_key=window_key,
+                window_end=window_end,
+            )
+            log.info(
+                "auto_containment_done prediction_type=%s window_key=%s executed=%s failed=%s skipped=%s",
+                prediction_type,
+                window_key,
+                auto.get("executed"),
+                auto.get("failed"),
+                auto.get("skipped"),
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.error("auto_containment_failed: %s", exc)
+    return written
 
 
 def main() -> None:

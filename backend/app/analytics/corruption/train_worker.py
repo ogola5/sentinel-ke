@@ -52,6 +52,12 @@ from app.analytics.ai_models import (
     GraphFeatureSnapshot,
 )
 from app.analytics.layer3.gnn_train_worker import _compute_fairness_metrics
+from app.analytics.explainability import (
+    heuristic_signal_attributions,
+    summarize_feature_attributions,
+    summarize_group_scores,
+    top_feature_hint,
+)
 from app.analytics.corruption.feature_builder import (
     CORRUPTION_PREDICTION_TYPE,
     CORRUPTION_WINDOW_KEY,
@@ -63,7 +69,12 @@ from app.analytics.layer3.gnn_backbone import (
     _edges_from_postgres,
     collapse_edges,
 )
-from app.analytics.layer3.gnn_model import build_sentinel_gnn, predict_mc, train_graphsage
+from app.analytics.layer3.gnn_model import (
+    build_sentinel_gnn,
+    gradient_x_input_attributions,
+    predict_mc,
+    train_graphsage,
+)
 from app.core.config import settings
 from app.ledger.db import SessionLocal, engine
 
@@ -250,11 +261,31 @@ def _write_prediction(
     uncertainty: float,
     reasons: List[str],
     meta: Dict,
+    feature_vector: Optional[List[float]],
+    feature_contributions: Optional[List[float]],
 ) -> None:
     confidence = max(0.0, min(1.0, 1.0 - uncertainty))
     abstained  = uncertainty >= float(getattr(settings, "ai_uncertainty_abstain_threshold", 0.45))
     if abstained:
         reasons = sorted(set(reasons + ["UNCERTAIN_REQUIRES_ANALYST_REVIEW"]))
+
+    if feature_vector and feature_contributions:
+        explanation_method = "gradient_x_input"
+        feature_attributions = summarize_feature_attributions(
+            feature_values=feature_vector,
+            feature_contributions=feature_contributions,
+            top_k=max(1, int(settings.ai_explainability_top_k)),
+        )
+    else:
+        explanation_method = "heuristic_signals"
+        feature_attributions = heuristic_signal_attributions(
+            event_count=int(meta.get("event_count") or 0),
+            source_count=int((meta.get("features") or {}).get("source_count") or 0),
+            event_types=dict(meta.get("corruption_events") or {}),
+            risk_flags=list(meta.get("risk_flags") or []),
+            top_k=max(1, int(settings.ai_explainability_top_k)),
+        )
+    group_scores = summarize_group_scores(feature_attributions)
 
     details = {
         "risk_flags":    meta.get("risk_flags", []),
@@ -264,6 +295,9 @@ def _write_prediction(
         "abstained":     bool(abstained),
         "decision_source": "gnn",
         "domain":        "corruption",
+        "explanation_method": explanation_method,
+        "feature_attributions": feature_attributions,
+        "attribution_group_scores": group_scores,
         "legal_notice":  LEGAL_RISK_NOTICE,
     }
 
@@ -311,6 +345,10 @@ def _write_prediction(
         "domain":       "corruption",
         "decision_source": "gnn",
         "window_end":   window_end.isoformat(),
+        "explanation_method": explanation_method,
+        "feature_attributions": feature_attributions,
+        "attribution_group_scores": group_scores,
+        "top_feature_hint": top_feature_hint(feature_attributions, fallback="log_event_count"),
         "legal_notice": LEGAL_RISK_NOTICE,
     }
     if expl:
@@ -458,6 +496,10 @@ def run_once(
                 "node_count":     len(dataset.entity_keys),
                 "edge_count":     len(dataset.edges),
                 "fairness":       fairness,
+                "explainability": {
+                    "method": "gradient_x_input",
+                    "top_k": int(settings.ai_explainability_top_k),
+                },
             },
         )
         db.add(run)
@@ -487,6 +529,27 @@ def run_once(
             model, x, edge_src_t, edge_dst_t, edge_weight_t, n_samples=20
         )
 
+        feature_contrib_by_idx: Dict[int, List[float]] = {}
+        if bool(settings.ai_explainability_enabled):
+            ranked_idx = sorted(
+                range(n),
+                key=lambda idx: float(mean_probs[idx]),
+                reverse=True,
+            )
+            try:
+                feature_contrib_by_idx = gradient_x_input_attributions(
+                    model,
+                    x,
+                    edge_src_t,
+                    edge_dst_t,
+                    edge_weight_t,
+                    node_indices=ranked_idx,
+                    max_nodes=int(settings.ai_explainability_max_nodes),
+                )
+            except Exception as exc:  # noqa: BLE001
+                log.warning("corruption_attribution_failed model_version=%s err=%s", model_version, exc)
+                feature_contrib_by_idx = {}
+
         created = updated = 0
         for i in range(n):
             prob        = float(mean_probs[i])
@@ -507,6 +570,8 @@ def run_once(
                 uncertainty   = uncertainty,
                 reasons       = reasons,
                 meta          = dataset.node_meta[i],
+                feature_vector= dataset.feature_matrix[i],
+                feature_contributions= feature_contrib_by_idx.get(i),
             )
             created += 1
 
@@ -530,6 +595,7 @@ def run_once(
         "positive_count":  dataset.positive_count,
         "negative_count":  dataset.negative_count,
         "predictions":     created,
+        "model_based_explanations": len(feature_contrib_by_idx) if 'feature_contrib_by_idx' in locals() else 0,
         "artifact_path":   artifact_path,
         "metrics":         train_result.metrics,
         "legal_notice":    LEGAL_RISK_NOTICE,

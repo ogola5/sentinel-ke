@@ -4,6 +4,7 @@ import hashlib
 import json
 from datetime import datetime, timezone
 import logging
+import math
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Set, Tuple
 
@@ -28,8 +29,18 @@ from app.analytics.layer3.ai_intel import (
     event_types_to_kill_chain_stage,
     reason_codes_to_d3fend_controls,
 )
+from app.analytics.explainability import (
+    heuristic_signal_attributions,
+    summarize_feature_attributions,
+    summarize_group_scores,
+    top_feature_hint,
+)
 from app.analytics.layer3.gnn_backbone import GNNDataset, load_dataset
-from app.analytics.layer3.gnn_model import train_graphsage
+from app.analytics.layer3.gnn_model import (
+    build_sentinel_gnn,
+    gradient_x_input_attributions,
+    train_graphsage,
+)
 from app.campaign.models import Campaign, CampaignEntity
 from app.core.config import settings
 from app.core.security import compute_event_hash, sha256_hex, stable_json_dumps
@@ -979,6 +990,78 @@ def _upsert_campaign_indicators(
     return {"created": created, "updated": updated}
 
 
+def _compute_feature_attribution_map(
+    *,
+    dataset: GNNDataset,
+    model_state: Dict[str, object],
+    hidden_dim: int,
+    embed_dim: int,
+    dropout: float,
+    temporal_decay: float,
+    max_nodes: int,
+) -> Dict[int, List[float]]:
+    if not bool(settings.ai_explainability_enabled):
+        return {}
+    if not dataset.feature_matrix or not model_state:
+        return {}
+
+    try:
+        import torch  # noqa: PLC0415
+    except Exception:  # noqa: BLE001
+        return {}
+
+    feat_dim = len(dataset.feature_matrix[0])
+    model = build_sentinel_gnn(feat_dim, hidden_dim, embed_dim, dropout)
+    try:
+        model.load_state_dict(model_state)
+    except Exception:  # noqa: BLE001
+        return {}
+    model.eval()
+
+    # Build graph tensors matching training-time construction.
+    src_idx: List[int] = []
+    dst_idx: List[int] = []
+    edge_w: List[float] = []
+    for i, j, w in dataset.edges:
+        ew = math.log1p(max(0.0, float(w)))
+        if temporal_decay > 0:
+            ew *= math.exp(-temporal_decay * min(10.0, ew))
+        src_idx += [int(i), int(j)]
+        dst_idx += [int(j), int(i)]
+        edge_w += [ew, ew]
+    for i in range(len(dataset.feature_matrix)):
+        src_idx.append(i)
+        dst_idx.append(i)
+        edge_w.append(1.0)
+
+    x = torch.tensor(
+        [
+            [0.0 if not math.isfinite(float(v)) else float(v) for v in row]
+            for row in dataset.feature_matrix
+        ],
+        dtype=torch.float32,
+    )
+    edge_src_t = torch.tensor(src_idx, dtype=torch.long)
+    edge_dst_t = torch.tensor(dst_idx, dtype=torch.long)
+    edge_weight_t = torch.tensor(edge_w, dtype=torch.float32)
+
+    # Prioritize high-risk entities so attributions are available for critical rows.
+    ranked_idx = sorted(
+        range(len(dataset.feature_matrix)),
+        key=lambda idx: float((dataset.node_meta[idx] or {}).get("event_count") or 0),
+        reverse=True,
+    )
+    return gradient_x_input_attributions(
+        model,
+        x,
+        edge_src_t,
+        edge_dst_t,
+        edge_weight_t,
+        node_indices=ranked_idx,
+        max_nodes=max(1, int(max_nodes)),
+    )
+
+
 def run_once(
     *,
     db: Session,
@@ -1044,6 +1127,16 @@ def run_once(
     except Exception as exc:
         db.rollback()
         return {"status": "error", "stage": "train_graphsage", "detail": str(exc)}
+
+    attribution_map = _compute_feature_attribution_map(
+        dataset=dataset,
+        model_state=dict(train_result.model_state or {}),
+        hidden_dim=hidden_dim,
+        embed_dim=embed_dim,
+        dropout=dropout,
+        temporal_decay=temporal_decay,
+        max_nodes=int(settings.ai_explainability_max_nodes),
+    )
 
     try:
         thresholds = _calibrate_thresholds(
@@ -1111,6 +1204,11 @@ def run_once(
                 "negative_count": dataset.negative_count,
                 "benign_negative_count": dataset.benign_negative_count,
                 "fairness": fairness,
+                "explainability": {
+                    "method": "gradient_x_input",
+                    "top_k": int(settings.ai_explainability_top_k),
+                    "model_based_rows": int(len(attribution_map)),
+                },
             },
         )
         db.add(run)
@@ -1188,13 +1286,31 @@ def run_once(
             kill_chain_stage = event_types_to_kill_chain_stage(event_types)
             technique_hits = event_types_to_attack_techniques(event_types)
             controls = reason_codes_to_d3fend_controls(reasons)
-            top_feature_hint = "event_count"
-            if bool((meta or {}).get("risk_flags")):
-                top_feature_hint = "risk_flags"
+
+            feature_contribs = attribution_map.get(i)
+            if feature_contribs:
+                explanation_method = "gradient_x_input"
+                feature_attributions = summarize_feature_attributions(
+                    feature_values=list(dataset.feature_matrix[i]),
+                    feature_contributions=feature_contribs,
+                    top_k=max(1, int(settings.ai_explainability_top_k)),
+                )
+            else:
+                explanation_method = "heuristic_signals"
+                feature_attributions = heuristic_signal_attributions(
+                    event_count=int((meta or {}).get("event_count") or 0),
+                    source_count=int((meta or {}).get("source_count") or 0),
+                    event_types=event_types,
+                    risk_flags=list((meta or {}).get("risk_flags") or []),
+                    top_k=max(1, int(settings.ai_explainability_top_k)),
+                )
+            group_scores = summarize_group_scores(feature_attributions)
+            top_feature = top_feature_hint(feature_attributions, fallback="log_event_count")
+
             counterfactual = build_counterfactual(
                 probability=prob,
                 threshold_score=threshold_score,
-                top_feature_hint=top_feature_hint,
+                top_feature_hint=top_feature,
             )
             if abstained:
                 reasons = sorted(set(reasons + ["UNCERTAIN_REQUIRES_ANALYST_REVIEW"]))
@@ -1215,6 +1331,9 @@ def run_once(
                 "lineage_id": lineage_id,
                 "source_backend": dataset.source_backend_used,
                 "feature_dim": len(dataset.feature_matrix[i]),
+                "explanation_method": explanation_method,
+                "feature_attributions": feature_attributions,
+                "attribution_group_scores": group_scores,
                 "legal_notice": LEGAL_RISK_NOTICE,
             }
 
@@ -1289,6 +1408,9 @@ def run_once(
                 "kill_chain_stage": kill_chain_stage,
                 "recommended_controls": controls,
                 "counterfactual": counterfactual,
+                "explanation_method": explanation_method,
+                "feature_attributions": feature_attributions,
+                "attribution_group_scores": group_scores,
                 "legal_notice": LEGAL_RISK_NOTICE,
             }
             if expl:
@@ -1360,6 +1482,7 @@ def run_once(
         "components_considered": component_stats["components_considered"],
         "campaign_indicators_created": campaign_indicator_stats["created"],
         "campaign_indicators_updated": campaign_indicator_stats["updated"],
+        "model_based_explanations": int(len(attribution_map)),
         "metrics": train_result.metrics,
         "artifact_path": artifact_path,
         "legal_notice": LEGAL_RISK_NOTICE,

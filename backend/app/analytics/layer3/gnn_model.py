@@ -216,6 +216,56 @@ def predict_mc(
     return mean_prob.tolist(), uncertainty.tolist()
 
 
+def gradient_x_input_attributions(
+    model,
+    x,
+    edge_src,
+    edge_dst,
+    edge_weight,
+    *,
+    node_indices: Sequence[int],
+    max_nodes: int = 64,
+) -> Dict[int, List[float]]:
+    """
+    Compute per-node Gradient x Input attribution vectors.
+
+    Notes:
+    - Runs in eval mode (dropout disabled) for deterministic attributions.
+    - Computes node-local attribution: grad(prob[node]) * x[node].
+    - This is a practical, dependency-free alternative to SHAP/LIME.
+    """
+    import torch  # noqa: PLC0415
+
+    picked: List[int] = []
+    seen = set()
+    for idx in node_indices:
+        i = int(idx)
+        if i in seen:
+            continue
+        seen.add(i)
+        picked.append(i)
+        if len(picked) >= max(1, int(max_nodes)):
+            break
+
+    out: Dict[int, List[float]] = {}
+    if not picked:
+        return out
+
+    model.eval()
+    for node_idx in picked:
+        x_var = x.detach().clone().requires_grad_(True)
+        model.zero_grad(set_to_none=True)
+        logits, _ = model(x_var, edge_src, edge_dst, edge_weight)
+        prob = torch.sigmoid(logits[node_idx, 0])
+        prob.backward()
+
+        grad = x_var.grad[node_idx].detach()
+        contrib = (grad * x_var[node_idx].detach()).cpu().tolist()
+        out[int(node_idx)] = [float(v) for v in contrib]
+
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Artifact I/O
 # ---------------------------------------------------------------------------
