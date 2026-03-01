@@ -24,6 +24,7 @@ from app.auth.schemas import (
     AuthUserCreateRequest,
 )
 from app.auth.service import AuthService
+from app.core.rate_limit import limiter
 
 
 router = APIRouter(prefix="/v1/auth", tags=["auth"])
@@ -84,6 +85,7 @@ def _extract_bearer(authorization: str | None) -> str | None:
 
 
 @router.post("/login")
+@limiter.limit("10/minute")
 def login(
     payload: AuthLoginRequest,
     request: Request,
@@ -103,6 +105,7 @@ def login(
 
 
 @router.post("/refresh")
+@limiter.limit("20/minute")
 def refresh(
     payload: AuthRefreshRequest,
     request: Request,
@@ -252,7 +255,9 @@ def mfa_enroll_start(
 
 
 @router.post("/mfa/enroll/verify")
+@limiter.limit("10/minute")
 def mfa_enroll_verify(
+    request: Request,
     payload: AuthMfaEnrollVerifyRequest,
     principal: AuthPrincipal = Depends(require_section_access),
     db: Session = Depends(get_db),

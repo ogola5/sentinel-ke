@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile app/core/rate_limit.py app/core/config.py app/core/http_hardening.py app/core/runtime_hardening.py app/main.py app/ledger/models.py app/ledger/repository.py app/ledger/seed_sources.py app/api/auth.py app/ingestion/router.py app/api/ai.py app/api/defense.py)"
+    ]
+  }
+}

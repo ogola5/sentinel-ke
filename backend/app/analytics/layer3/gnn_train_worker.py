@@ -417,6 +417,98 @@ def _upsert_link_predictions(
     return int(res.rowcount or 0)
 
 
+def _compute_fairness_metrics(
+    *,
+    entity_types: Sequence[str],
+    labels: Sequence[int],
+    probabilities: Sequence[float],
+    threshold: float = 0.5,
+    min_group_size: int = 3,
+) -> Dict[str, object]:
+    """
+    Compute per-entity-type fairness metrics (demographic parity + equalized odds).
+
+    Returns a dict suitable for storing in metrics_json["fairness"].
+    No new dependencies — pure Python arithmetic only.
+
+    Metrics per entity_type subgroup:
+      positive_rate          P(ŷ=1 | type)  — demographic parity check
+      actual_positive_rate   P(y=1 | type)  — calibration check
+      precision              TP/(TP+FP)     — equalized odds (positive predictive value)
+      recall                 TP/(TP+FN)     — equalized odds (true positive rate)
+      count / positive_count — sample sizes for context
+
+    Summary scalars:
+      max_positive_rate_disparity   max - min positive_rate across evaluated types
+      max_recall_disparity          max - min recall across evaluated types
+      types_evaluated               groups with >= min_group_size samples
+      fairness_flag                 PASS (<0.25 disparity) / WARN (<0.40) / FAIL
+    """
+    groups: Dict[str, Dict[str, List]] = {}
+    for etype, y, prob in zip(entity_types, labels, probabilities):
+        g = groups.setdefault(str(etype), {"y": [], "prob": []})
+        g["y"].append(int(y))
+        g["prob"].append(float(prob))
+
+    per_type: Dict[str, Dict[str, object]] = {}
+    positive_rates: List[float] = []
+    recalls: List[float] = []
+
+    for etype, g in groups.items():
+        n = len(g["y"])
+        if n < min_group_size:
+            per_type[etype] = {"count": n, "skipped": True, "reason": "too_few_samples"}
+            continue
+
+        y_true = g["y"]
+        y_pred = [1 if p >= threshold else 0 for p in g["prob"]]
+
+        tp = sum(1 for a, b in zip(y_true, y_pred) if a == 1 and b == 1)
+        fp = sum(1 for a, b in zip(y_true, y_pred) if a == 0 and b == 1)
+        fn = sum(1 for a, b in zip(y_true, y_pred) if a == 1 and b == 0)
+
+        pos_rate        = sum(y_pred) / n
+        actual_pos_rate = sum(y_true) / n
+        precision       = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+        recall          = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+
+        per_type[etype] = {
+            "count":               n,
+            "positive_count":      sum(y_true),
+            "positive_rate":       round(pos_rate, 4),
+            "actual_positive_rate": round(actual_pos_rate, 4),
+            "precision":           round(precision, 4),
+            "recall":              round(recall, 4),
+        }
+        positive_rates.append(pos_rate)
+        recalls.append(recall)
+
+    if len(positive_rates) >= 2:
+        max_pr_disp = round(max(positive_rates) - min(positive_rates), 4)
+        max_rc_disp = round(max(recalls) - min(recalls), 4) if len(recalls) >= 2 else None
+    else:
+        max_pr_disp = None
+        max_rc_disp = None
+
+    if max_pr_disp is None:
+        flag = "INSUFFICIENT_DATA"
+    elif max_pr_disp < 0.25:
+        flag = "PASS"
+    elif max_pr_disp < 0.40:
+        flag = "WARN"
+    else:
+        flag = "FAIL"
+
+    return {
+        "per_type":                    per_type,
+        "max_positive_rate_disparity": max_pr_disp,
+        "max_recall_disparity":        max_rc_disp,
+        "types_evaluated":             len(positive_rates),
+        "fairness_flag":               flag,
+        "threshold_used":              threshold,
+    }
+
+
 def _f1_for_threshold(labels: Sequence[int], scores: Sequence[float], thr: float) -> float:
     y_true = [int(v) for v in labels]
     y_pred = [1 if float(s) >= thr else 0 for s in scores]
@@ -962,6 +1054,12 @@ def run_once(
             prediction_type=prediction_type,
         )
 
+        fairness = _compute_fairness_metrics(
+            entity_types=dataset.entity_types,
+            labels=dataset.labels,
+            probabilities=train_result.probabilities,
+        )
+
         run = GNNTrainingRun(
             model_version=model_version,
             prediction_type=prediction_type,
@@ -1006,6 +1104,7 @@ def run_once(
                 "positive_count": dataset.positive_count,
                 "negative_count": dataset.negative_count,
                 "benign_negative_count": dataset.benign_negative_count,
+                "fairness": fairness,
             },
         )
         db.add(run)

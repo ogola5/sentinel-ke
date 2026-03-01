@@ -5,6 +5,7 @@ import os
 
 from app.ledger.models import Base, SourceRegistry
 from app.core.security import hash_api_key
+from app.ledger.repository import _key_lookup_hash
 
 log = logging.getLogger("sentinel.seed_sources")
 
@@ -80,6 +81,7 @@ def seed():
             section_code=src["section_code"],
             classification_level=src["classification_level"],
             api_key_hash=hash_api_key(src["api_key"]),
+            api_key_lookup=_key_lookup_hash(src["api_key"]),
             is_active=True,
         )
 

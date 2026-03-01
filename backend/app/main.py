@@ -1,15 +1,22 @@
 import logging
-from fastapi import FastAPI
+import time
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
 from sqlalchemy import text
 
 from app.ledger.models import Base
+
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 
 from app.api.error_contract import install_error_handlers
 from app.api.router_registry import build_router_mounts, build_tags_metadata
 from app.auth.service import AuthService
 from app.core.config import settings
 from app.core.http_hardening import install_http_hardening
+from app.core.rate_limit import limiter
 from app.core.runtime_hardening import enforce_runtime_hardening
 from app.search.opensearch import get_client as get_os_client
 from app.graph.neo4j_driver import get_driver
@@ -47,6 +54,21 @@ def _ensure_webhook_schema() -> None:
                 """
             )
         )
+
+
+def _ensure_api_key_lookup_column() -> None:
+    """Add api_key_lookup index column to source_registry for O(1) key resolution."""
+    if engine.dialect.name != "postgresql":
+        return
+    with engine.begin() as conn:
+        conn.execute(text(
+            "ALTER TABLE source_registry "
+            "ADD COLUMN IF NOT EXISTS api_key_lookup VARCHAR(64);"
+        ))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_source_registry_api_key_lookup "
+            "ON source_registry (api_key_lookup);"
+        ))
 
 
 def _ensure_infra_cluster_schema() -> None:
@@ -99,6 +121,7 @@ def _register_lifecycle(app: FastAPI) -> None:
         else:
             log.info("db_auto_create_disabled; skipping Base.metadata.create_all")
 
+        _ensure_api_key_lookup_column()
         _ensure_infra_cluster_schema()
         _ensure_webhook_schema()
         try:
@@ -205,10 +228,22 @@ def _register_operational_routes(app: FastAPI) -> None:
         return {"status": "ok" if overall else "degraded", "components": status}
 
 
+async def _timing_middleware(request: Request, call_next):
+    t0 = time.monotonic()
+    response = await call_next(request)
+    elapsed_ms = round((time.monotonic() - t0) * 1000, 1)
+    response.headers["X-Response-Time"] = f"{elapsed_ms}ms"
+    return response
+
+
 def create_application() -> FastAPI:
     tags_metadata = build_tags_metadata(ai_enabled=settings.ai_api_enabled)
     app = FastAPI(title="Sentinel-KE", openapi_tags=tags_metadata)
 
+    app.add_middleware(BaseHTTPMiddleware, dispatch=_timing_middleware)
+    app.add_middleware(SlowAPIMiddleware)
+    app.state.limiter = limiter
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
     install_http_hardening(app)
     install_error_handlers(app)
 

@@ -77,6 +77,10 @@ def evaluate_runtime_hardening(settings_obj: Any) -> RuntimeHardeningReport:
 
     if _as_bool(getattr(settings_obj, "api_auth_disabled", False)):
         add_issue("API_AUTH_DISABLED_true")
+    if _as_bool(getattr(settings_obj, "api_auth_optional_dev", False)):
+        add_issue("API_AUTH_OPTIONAL_DEV_true")
+    if not _as_bool(getattr(settings_obj, "rate_limit_enabled", True)):
+        add_issue("RATE_LIMIT_ENABLED_false", strict_error=False)
     if _as_bool(getattr(settings_obj, "ingest_allow_unauthenticated", False)):
         add_issue("INGEST_ALLOW_UNAUTH_true")
     if _as_bool(getattr(settings_obj, "db_auto_create", False)):

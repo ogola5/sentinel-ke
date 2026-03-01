@@ -24,6 +24,7 @@ import FederationDashboard from "../screens/govern/FederationDashboard";
 import CorruptionIntel from "../screens/govern/CorruptionIntel";
 import AuditLog from "../screens/govern/AuditLog";
 import CentralCommand from "../screens/command/CentralCommand";
+import ExecBrief from "../screens/command/ExecBrief";
 import UserManagement from "../screens/admin/UserManagement";
 import AgencyOnboarding from "../screens/admin/AgencyOnboarding";
 
@@ -55,7 +56,7 @@ import {
   Radio, Activity, Network, Flag, Server,
   FileText, BarChart2, Brain, Lock, Shield,
   Globe, Building2, BookOpen, RefreshCw, Settings,
-  LogOut, Users, Cpu, Zap,
+  LogOut, Users, Cpu, Zap, AlertTriangle,
 } from "lucide-react";
 
 // ── Nav definition ────────────────────────────────────────────────────────────
@@ -88,9 +89,10 @@ const NAV_GOVERN = [
 ] as const;
 
 const NAV_COMMAND = [
-  { id: "command",   label: "National Command",    Icon: Cpu,      tag: "C1" },
-  { id: "onboard",   label: "Agency Onboarding",   Icon: Zap,      tag: "C2" },
-  { id: "users",     label: "User Management",     Icon: Users,    tag: "C3" },
+  { id: "exec",      label: "Crisis Brief",        Icon: AlertTriangle, tag: "C0" },
+  { id: "command",   label: "National Command",    Icon: Cpu,           tag: "C1" },
+  { id: "onboard",   label: "Agency Onboarding",   Icon: Zap,           tag: "C2" },
+  { id: "users",     label: "User Management",     Icon: Users,         tag: "C3" },
 ] as const;
 
 type ScreenId =
@@ -152,7 +154,7 @@ export default function App() {
   const handleLogin = (p: Principal) => {
     setPrincipal(p);
     // Default screen: central users → command, section users → live
-    setActiveScreen(p.access_level === "central" ? "command" : "live");
+    setActiveScreen(p.access_level === "central" ? "exec" : "live");
   };
 
   const handleLogout = async () => {
@@ -542,6 +544,7 @@ function AuthenticatedApp({
         <div className="content">
           <main className="primary">
             {/* COMMAND (central only) */}
+            {activeScreen === "exec"    && central && <ExecBrief principal={principal} />}
             {activeScreen === "command" && central && (
               <CentralCommand
                 operationsData={operationsData}

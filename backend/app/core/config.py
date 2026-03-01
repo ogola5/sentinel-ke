@@ -145,5 +145,15 @@ class Settings:
     # ---------------------------------------------------------
     webhook_secret_encryption_key = os.environ.get("WEBHOOK_SECRET_ENCRYPTION_KEY", "").strip()
 
+    # ---------------------------------------------------------
+    # Rate limiting  (slowapi)
+    # RATE_LIMIT_ENABLED=false to disable globally (e.g. in tests).
+    # Individual endpoint limits are set via @limiter.limit() decorators.
+    # ---------------------------------------------------------
+    rate_limit_enabled       = env_bool("RATE_LIMIT_ENABLED", True)
+    rate_limit_global_per_min = int(os.environ.get("RATE_LIMIT_GLOBAL_PER_MIN", "200"))
+    rate_limit_auth_per_min  = int(os.environ.get("RATE_LIMIT_AUTH_PER_MIN", "10"))
+    rate_limit_ingest_per_min = int(os.environ.get("RATE_LIMIT_INGEST_PER_MIN", "300"))
+
 
 settings = Settings()
