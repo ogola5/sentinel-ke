@@ -96,11 +96,19 @@ Notebook files are in:
 ```
 notebooks/
 ```
+Notebook quick guide:
+`notebooks/README.md`
 
 Suggested order:
-1. `notebooks/01_feature_build.ipynb`
-2. `notebooks/02_gnn_train.ipynb`
-3. `notebooks/03_eval_and_explain.ipynb`
+1. `notebooks/00_pipeline_setup.ipynb`
+2. `notebooks/04_real_data_ingest_and_hybrid_pipeline.ipynb` (optional; real data path)
+3. `notebooks/01_feature_build.ipynb`
+4. `notebooks/02_gnn_train.ipynb`
+5. `notebooks/03_eval_and_explain.ipynb`
+
+Important for local VS Code kernels:
+- If `.env` has `DATABASE_URL=...@postgres:5432/...`, notebook setup rewrites this to `localhost:5433` outside Docker.
+- You still need the project backend dependencies in the selected kernel. If unsure, use the notebook container kernel.
 
 ## 1.3) Database migrations (Alembic)
 
