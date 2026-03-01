@@ -41,10 +41,19 @@ x-backend-volumes: &backend-volumes
 services:
 
   # ── API server ─────────────────────────────────────────────────────────────
+  # ── Production scaling ──────────────────────────────────────────────────────
+  # Dev (default):  WEB_CONCURRENCY=2  →  2 uvicorn workers, single container
+  # Single-host:    WEB_CONCURRENCY=8 docker compose up -d
+  # Docker Swarm:   docker stack deploy -c docker-compose.yml sentinel
+  # Kubernetes:     kubectl apply -f infra/k8s/backend.yaml
+  #                 kubectl scale deployment sentinel-backend --replicas=4
+  # ─────────────────────────────────────────────────────────────────────────────
   backend:
     build: *backend-build-full
-    container_name: sentinel-backend
     <<: *backend-env
+    environment:
+      PYTHONPATH: /app
+      WEB_CONCURRENCY: ${WEB_CONCURRENCY:-2}
     ports:
       - "8000:8000"
     depends_on:
@@ -61,6 +70,7 @@ services:
       uvicorn app.main:app
         --host 0.0.0.0
         --port 8000
+        --workers ${WEB_CONCURRENCY:-2}
         --reload
         --reload-dir /app/app
     restart: unless-stopped
