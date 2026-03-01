@@ -5,11 +5,12 @@ import uuid
 from datetime import datetime
 from typing import Literal
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db, pagination_params, require_central_access
+from app.core.rate_limit import limiter
 from app.analytics.ai_models import (
     AIExplanation,
     AIAttackPathScore,
@@ -193,6 +194,7 @@ def list_gnn_runs(
                 "artifact_path": r.artifact_path,
                 "params": r.params_json,
                 "metrics": r.metrics_json,
+                "fairness": (r.metrics_json or {}).get("fairness", {}),
                 "created_at": r.created_at.isoformat(),
             }
             for r in rows
@@ -243,7 +245,9 @@ def _run_corruption_train(epochs: int, model_version: str) -> None:
 
 
 @router.post("/gnn/train", status_code=202)
+@limiter.limit("5/minute")
 def trigger_gnn_train(
+    request: Request,
     body: GNNTrainRequest,
     background_tasks: BackgroundTasks,
     _principal=Depends(require_central_access),

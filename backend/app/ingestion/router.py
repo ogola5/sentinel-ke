@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from sqlalchemy.orm import Session
 from typing import List, Optional
 
 from app.api.deps import get_db
 from app.core.config import settings
+from app.core.rate_limit import limiter
 from app.ingestion.schemas import CanonicalEvent
 from app.ingestion.service import IngestionService
 
@@ -22,7 +23,9 @@ def _require_api_key(x_api_key: Optional[str]) -> str:
 
 
 @router.post("/event")
+@limiter.limit("300/minute")
 def ingest_event(
+    request: Request,
     event: CanonicalEvent,
     db: Session = Depends(get_db),
     x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
@@ -49,7 +52,9 @@ def ingest_event(
 
 
 @router.post("/batch")
+@limiter.limit("60/minute")
 def ingest_batch(
+    request: Request,
     events: List[CanonicalEvent],
     db: Session = Depends(get_db),
     x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),

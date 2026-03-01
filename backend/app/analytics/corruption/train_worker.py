@@ -51,6 +51,7 @@ from app.analytics.ai_models import (
     GNNTrainingRun,
     GraphFeatureSnapshot,
 )
+from app.analytics.layer3.gnn_train_worker import _compute_fairness_metrics
 from app.analytics.corruption.feature_builder import (
     CORRUPTION_PREDICTION_TYPE,
     CORRUPTION_WINDOW_KEY,
@@ -415,6 +416,12 @@ def run_once(
 
     # ── Persist training run ──────────────────────────────────────────
     try:
+        fairness = _compute_fairness_metrics(
+            entity_types=dataset.entity_types,
+            labels=dataset.labels,
+            probabilities=train_result.probabilities,
+        )
+
         run = GNNTrainingRun(
             model_version    = model_version,
             prediction_type  = CORRUPTION_PREDICTION_TYPE,
@@ -444,6 +451,7 @@ def run_once(
                 "negative_count": dataset.negative_count,
                 "node_count":     len(dataset.entity_keys),
                 "edge_count":     len(dataset.edges),
+                "fairness":       fairness,
             },
         )
         db.add(run)

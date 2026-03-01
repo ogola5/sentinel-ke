@@ -233,6 +233,10 @@ services:
     container_name: sentinel-opensearch
     environment:
       discovery.type: single-node
+      # DEV ONLY — security plugin disabled to avoid cert setup in single-node dev mode.
+      # PRODUCTION: set plugins.security.disabled to "false", configure
+      #   OPENSEARCH_INITIAL_ADMIN_PASSWORD, TLS keystore/truststore, and
+      #   the opensearch-security plugin with admin cert in securityconfig/.
       plugins.security.disabled: "true"
       OPENSEARCH_JAVA_OPTS: "-Xms512m -Xmx512m"
     ports:

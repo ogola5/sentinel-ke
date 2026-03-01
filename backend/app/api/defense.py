@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -28,6 +28,7 @@ from app.defense.schemas import (
 from app.defense.executor import encrypt_webhook_secret
 from app.defense.models import ContainmentWebhook, WebhookDelivery
 from app.defense.service import DefenseService
+from app.core.rate_limit import limiter
 
 
 router = APIRouter(prefix="/v1/defense", tags=["defense"])
@@ -204,7 +205,9 @@ def list_incident_runs(
 
 
 @router.post("/incidents/runs/{run_id}/actions", dependencies=[Depends(require_scope("defense.write"))])
+@limiter.limit("30/minute")
 def execute_incident_actions(
+    request: Request,
     run_id: str,
     payload: IncidentRunActionBatchRequest,
     principal: AuthPrincipal = Depends(require_request_principal),
