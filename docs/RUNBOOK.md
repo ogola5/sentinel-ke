@@ -391,6 +391,31 @@ PYTHONPATH=backend python -m app.integrations.local_network_probe \
   --interval-seconds 10
 ```
 
+Real-data ingestion jobs (connector flow, no bypass path):
+```
+# 1) KEV + EPSS -> VULNERABILITY_EVENT (kev_vuln_feed_v1)
+PYTHONPATH=backend python -m app.integrations.real_data_pipeline \
+  --source-api-key "<SOURCE_API_KEY>" \
+  kev-epss \
+  --asset-id "county-finance-db-01"
+
+# 2) CIC rows -> DDOS_SIGNAL_EVENT / WEB_ATTACK_EVENT
+PYTHONPATH=backend python -m app.integrations.real_data_pipeline \
+  --source-api-key "<SOURCE_API_KEY>" \
+  traffic \
+  --dataset cic \
+  --input-file /path/to/cic_rows.csv \
+  --service-id-prefix "safaricom"
+
+# 3) CAIDA aggregate rows -> DDOS_SIGNAL_EVENT
+PYTHONPATH=backend python -m app.integrations.real_data_pipeline \
+  --source-api-key "<SOURCE_API_KEY>" \
+  traffic \
+  --dataset caida \
+  --input-file /path/to/caida_rows.csv \
+  --service-id-prefix "national-infra"
+```
+
 Events:
 ```
 GET /v1/events/search
