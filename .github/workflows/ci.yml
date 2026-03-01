@@ -152,8 +152,8 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install minimal deps
-        run: pip install --quiet pydantic pydantic-settings
+      - name: Install deps
+        run: pip install --quiet pydantic pydantic-settings pytest sqlalchemy
 
       - name: Config and feature-builder check
         run: |
@@ -171,6 +171,14 @@ jobs:
           print(f'OK: feature vector = {len(vec)} dims')
           "
         env:
+          NATIONAL_SALT: test-salt
+          HUB_API_KEY: test-key
+          HMAC_SALT: test-hmac
+
+      - name: DbConnector unit tests
+        run: pytest tests/ -q --tb=short
+        env:
+          PYTHONPATH: .
           NATIONAL_SALT: test-salt
           HUB_API_KEY: test-key
           HMAC_SALT: test-hmac
