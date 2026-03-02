@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 import logging
 import math
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Set, Tuple
+from typing import Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
 from sqlalchemy import text
 from sqlalchemy.dialects.postgresql import insert
@@ -39,6 +39,7 @@ from app.analytics.layer3.gnn_backbone import GNNDataset, load_dataset
 from app.analytics.layer3.gnn_model import (
     build_sentinel_gnn,
     gradient_x_input_attributions,
+    integrated_gradients_attributions,
     train_graphsage,
 )
 from app.campaign.models import Campaign, CampaignEntity
@@ -517,6 +518,56 @@ def _compute_fairness_metrics(
         "types_evaluated":             len(positive_rates),
         "fairness_flag":               flag,
         "threshold_used":              threshold,
+    }
+
+
+def _normalize_provenance_tag(value: object) -> str:
+    tag = str(value or "").strip().lower()
+    if tag in {"real", "synthetic", "mixed", "unknown"}:
+        return tag
+    return "unknown"
+
+
+def _compute_provenance_metrics(
+    *,
+    node_meta: Sequence[Mapping[str, object]],
+    probabilities: Sequence[float],
+    threshold_score: float = 70.0,
+) -> Dict[str, object]:
+    counts = {"real": 0, "synthetic": 0, "mixed": 0, "unknown": 0}
+    high_risk_counts = {"real": 0, "synthetic": 0, "mixed": 0, "unknown": 0}
+    real_ratio_sum = 0.0
+    real_ratio_count = 0
+
+    thr = max(0.0, min(100.0, float(threshold_score))) / 100.0
+    for i, meta in enumerate(node_meta):
+        m = dict(meta or {})
+        tag = _normalize_provenance_tag(m.get("provenance_tag"))
+        counts[tag] = int(counts.get(tag, 0)) + 1
+
+        try:
+            rr = float(m.get("real_signal_ratio") or 0.0)
+        except Exception:  # noqa: BLE001
+            rr = 0.0
+        rr = max(0.0, min(1.0, rr))
+        real_ratio_sum += rr
+        real_ratio_count += 1
+
+        prob = float(probabilities[i]) if i < len(probabilities) else 0.0
+        if prob >= thr:
+            high_risk_counts[tag] = int(high_risk_counts.get(tag, 0)) + 1
+
+    total = max(1, sum(int(v) for v in counts.values()))
+    real_effective = float(counts["real"] + counts["mixed"])
+    real_ratio = round(real_effective / float(total), 6)
+    avg_real_signal_ratio = round(real_ratio_sum / max(1, real_ratio_count), 6)
+
+    return {
+        "counts": counts,
+        "high_risk_counts": high_risk_counts,
+        "real_ratio": real_ratio,
+        "avg_real_signal_ratio": avg_real_signal_ratio,
+        "threshold_score": round(float(threshold_score), 4),
     }
 
 
@@ -999,23 +1050,23 @@ def _compute_feature_attribution_map(
     dropout: float,
     temporal_decay: float,
     max_nodes: int,
-) -> Dict[int, List[float]]:
+) -> Tuple[str, Dict[int, List[float]]]:
     if not bool(settings.ai_explainability_enabled):
-        return {}
+        return "disabled", {}
     if not dataset.feature_matrix or not model_state:
-        return {}
+        return "disabled", {}
 
     try:
         import torch  # noqa: PLC0415
     except Exception:  # noqa: BLE001
-        return {}
+        return "disabled", {}
 
     feat_dim = len(dataset.feature_matrix[0])
     model = build_sentinel_gnn(feat_dim, hidden_dim, embed_dim, dropout)
     try:
         model.load_state_dict(model_state)
     except Exception:  # noqa: BLE001
-        return {}
+        return "disabled", {}
     model.eval()
 
     # Build graph tensors matching training-time construction.
@@ -1051,7 +1102,25 @@ def _compute_feature_attribution_map(
         key=lambda idx: float((dataset.node_meta[idx] or {}).get("event_count") or 0),
         reverse=True,
     )
-    return gradient_x_input_attributions(
+    method = str(settings.ai_explainability_method or "integrated_gradients").strip().lower()
+    if method in {"integrated_gradients", "ig"}:
+        try:
+            attr = integrated_gradients_attributions(
+                model,
+                x,
+                edge_src_t,
+                edge_dst_t,
+                edge_weight_t,
+                node_indices=ranked_idx,
+                max_nodes=max(1, int(max_nodes)),
+                steps=max(8, int(settings.ai_explainability_ig_steps)),
+            )
+            if attr:
+                return "integrated_gradients", attr
+        except Exception as exc:  # noqa: BLE001
+            log.warning("integrated_gradients_failed fallback=gradient_x_input err=%s", exc)
+
+    attr = gradient_x_input_attributions(
         model,
         x,
         edge_src_t,
@@ -1060,6 +1129,9 @@ def _compute_feature_attribution_map(
         node_indices=ranked_idx,
         max_nodes=max(1, int(max_nodes)),
     )
+    if attr:
+        return "gradient_x_input", attr
+    return "heuristic_signals", {}
 
 
 def run_once(
@@ -1132,7 +1204,7 @@ def run_once(
         db.rollback()
         return {"status": "error", "stage": "train_graphsage", "detail": str(exc)}
 
-    attribution_map = _compute_feature_attribution_map(
+    attribution_method, attribution_map = _compute_feature_attribution_map(
         dataset=dataset,
         model_state=dict(train_result.model_state or {}),
         hidden_dim=hidden_dim,
@@ -1161,6 +1233,21 @@ def run_once(
                 "fairness_policy_violation model_version=%s max_positive_rate_disparity=%.3f",
                 model_version,
                 fairness.get("max_positive_rate_disparity", 0),
+            )
+
+        provenance = _compute_provenance_metrics(
+            node_meta=dataset.node_meta,
+            probabilities=train_result.probabilities,
+            threshold_score=70.0,
+        )
+        min_real_ratio = max(0.0, min(1.0, float(settings.gnn_min_real_ratio)))
+        real_data_gate_passed = float(provenance.get("real_ratio") or 0.0) >= min_real_ratio
+        if not real_data_gate_passed:
+            log.warning(
+                "real_data_gate_failed model_version=%s real_ratio=%.3f min_required=%.3f",
+                model_version,
+                float(provenance.get("real_ratio") or 0.0),
+                min_real_ratio,
             )
 
         run = GNNTrainingRun(
@@ -1202,6 +1289,7 @@ def run_once(
                 "pretrain_epochs": pretrain_epochs,
                 "seed": seed,
                 "uncertainty_abstain_threshold": uncertainty_abstain_threshold,
+                "min_real_ratio": min_real_ratio,
             },
             metrics_json={
                 **train_result.metrics,
@@ -1210,6 +1298,11 @@ def run_once(
                 "negative_count": dataset.negative_count,
                 "benign_negative_count": dataset.benign_negative_count,
                 "fairness": fairness,
+                "provenance": provenance,
+                "real_data_gate": {
+                    "min_real_ratio": min_real_ratio,
+                    "passed": bool(real_data_gate_passed),
+                },
                 "evaluation_protocol": {
                     "temporal_policy": "window_ordered",
                     "holdout_policy": split_policy,
@@ -1221,8 +1314,9 @@ def run_once(
                     },
                 },
                 "explainability": {
-                    "method": "gradient_x_input",
+                    "method": attribution_method,
                     "top_k": int(settings.ai_explainability_top_k),
+                    "ig_steps": int(settings.ai_explainability_ig_steps),
                     "model_based_rows": int(len(attribution_map)),
                 },
             },
@@ -1305,7 +1399,7 @@ def run_once(
 
             feature_contribs = attribution_map.get(i)
             if feature_contribs:
-                explanation_method = "gradient_x_input"
+                explanation_method = attribution_method
                 feature_attributions = summarize_feature_attributions(
                     feature_values=list(dataset.feature_matrix[i]),
                     feature_contributions=feature_contribs,

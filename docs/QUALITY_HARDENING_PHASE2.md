@@ -101,6 +101,8 @@ This reduces drift between declared routes and authorization requirements.
   - `feature_attributions`
   - `attribution_group_scores`
 - Frontend GNN intelligence table now surfaces top driver + explainability type.
+- Model attribution now supports `integrated_gradients` (configurable), with
+  fallback to `gradient_x_input` and then `heuristic_signals`.
 
 ### 11) Bounded auto-response + rollback safety
 
@@ -113,6 +115,17 @@ This reduces drift between declared routes and authorization requirements.
   - `rollback_block_ip` action resolves to signed `unblock_ip` dispatch
   - strict rollback window (`DEFENSE_ROLLBACK_WINDOW_MINUTES`)
   - duplicate rollback prevention
+
+### 12) Production proof artifacts
+
+- Prometheus scrape endpoint at `/metrics` with request counters + latency histogram.
+- Kubernetes HA template includes:
+  - rolling update strategy
+  - anti-affinity + topology spread
+  - startup/readiness/liveness probes
+  - HPA + PodDisruptionBudget
+- Incident replay-under-load tool:
+  - `python -m app.demo.replay` for deterministic replay and p50/p95/p99 evidence.
 
 ## Canonical/UCIC-style Alignment
 

@@ -3,7 +3,11 @@ from datetime import datetime, timezone
 import pytest
 
 from app.analytics.layer3.gnn_backbone import GNNDataset
-from app.analytics.layer3.gnn_model import train_graphsage
+from app.analytics.layer3.gnn_model import (
+    build_sentinel_gnn,
+    integrated_gradients_attributions,
+    train_graphsage,
+)
 
 
 def test_train_graphsage_on_synthetic_graph():
@@ -72,3 +76,35 @@ def test_train_graphsage_entity_holdout_is_deterministic():
     b = train_graphsage(dataset, epochs=5, hidden_dim=8, embed_dim=4, seed=13, split_policy="entity_hash_holdout")
     assert a.metrics["val_count"] == b.metrics["val_count"]
     assert a.metrics["split_policy"] == "entity_hash_holdout"
+
+
+def test_integrated_gradients_returns_feature_vectors():
+    torch = pytest.importorskip("torch")
+
+    model = build_sentinel_gnn(feat_dim=4, hidden_dim=8, embed_dim=4, dropout=0.1)
+    x = torch.tensor(
+        [
+            [0.9, 0.1, 0.0, 0.2],
+            [0.1, 0.8, 0.3, 0.1],
+        ],
+        dtype=torch.float32,
+    )
+    edge_src = torch.tensor([0, 1, 0, 1], dtype=torch.long)
+    edge_dst = torch.tensor([0, 1, 1, 0], dtype=torch.long)
+    edge_weight = torch.tensor([1.0, 1.0, 1.0, 1.0], dtype=torch.float32)
+
+    attrs = integrated_gradients_attributions(
+        model,
+        x,
+        edge_src,
+        edge_dst,
+        edge_weight,
+        node_indices=[0, 1],
+        steps=10,
+        max_nodes=2,
+    )
+
+    assert set(attrs.keys()) == {0, 1}
+    assert len(attrs[0]) == 4
+    assert len(attrs[1]) == 4
+    assert all(isinstance(v, float) for v in attrs[0])

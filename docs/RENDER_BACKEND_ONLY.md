@@ -54,6 +54,8 @@ Optional:
 - `AI_AUTO_CONTAINMENT_ENABLED=false` for backend-only mode.
 - `DEFENSE_ROLLBACK_WINDOW_MINUTES=240` to cap rollback window.
 - `GNN_SPLIT_POLICY=entity_hash_holdout` and `GNN_VAL_RATIO=0.2` for deterministic train/eval contracts when ML is enabled later.
+- `GNN_MIN_REAL_RATIO=0.3` to enforce minimum real-signal coverage in run metrics.
+- `AI_EXPLAINABILITY_METHOD=integrated_gradients` and `AI_EXPLAINABILITY_IG_STEPS=24` for stronger attribution depth.
 
 Keep any other service credentials only if those integrations are actually deployed.
 
@@ -67,6 +69,7 @@ Notes:
 - Never set `DATABASE_URL` to docker-local hosts like `postgres` or `localhost` on Render.
 - Use Render Postgres binding (`fromDatabase.connectionString`) as `DATABASE_URL`.
 - `backend/scripts/render_startup.sh` bootstraps schema from ORM metadata before app start, so first boot on a fresh Render Postgres succeeds without enabling ML services.
+- Prometheus-compatible endpoint is exposed at `/metrics` for scrape-based observability.
 
 ## 3) Local ML Continues Separately
 

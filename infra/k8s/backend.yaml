@@ -22,6 +22,11 @@ metadata:
     component: api
 spec:
   replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
   selector:
     matchLabels:
       app: sentinel-backend
@@ -31,6 +36,23 @@ spec:
         app: sentinel-backend
         component: api
     spec:
+      terminationGracePeriodSeconds: 30
+      topologySpreadConstraints:
+      - maxSkew: 1
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: ScheduleAnyway
+        labelSelector:
+          matchLabels:
+            app: sentinel-backend
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchLabels:
+                  app: sentinel-backend
+              topologyKey: kubernetes.io/hostname
       containers:
       - name: sentinel-backend
         image: sentinel-ke/backend:latest
@@ -69,6 +91,12 @@ spec:
           initialDelaySeconds: 15
           periodSeconds: 10
           failureThreshold: 3
+        startupProbe:
+          httpGet:
+            path: /ready
+            port: 8000
+          failureThreshold: 30
+          periodSeconds: 5
         livenessProbe:
           httpGet:
             path: /health
@@ -92,6 +120,10 @@ metadata:
   name: sentinel-backend
   labels:
     app: sentinel-backend
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/path: /metrics
+    prometheus.io/port: "8000"
 spec:
   selector:
     app: sentinel-backend
@@ -127,3 +159,15 @@ spec:
       target:
         type: Utilization
         averageUtilization: 75
+
+---
+
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: sentinel-backend-pdb
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: sentinel-backend

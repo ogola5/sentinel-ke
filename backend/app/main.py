@@ -3,6 +3,7 @@ import time
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import Response
 from sqlalchemy import text
 
 from app.ledger.models import Base
@@ -18,6 +19,7 @@ from app.core.config import settings
 from app.core.schema_contract import apply_schema_contract, schema_contract_status
 from app.core.http_hardening import install_http_hardening
 from app.core import metrics_store
+from app.core.prometheus_metrics import prometheus_payload, record_http_request
 from app.core.rate_limit import limiter
 from app.core.runtime_hardening import enforce_runtime_hardening
 from app.search.opensearch import get_client as get_os_client
@@ -60,6 +62,11 @@ def _register_lifecycle(app: FastAPI) -> None:
 
 
 def _register_operational_routes(app: FastAPI) -> None:
+    @app.get("/metrics", tags=["ops"], include_in_schema=False)
+    def prometheus_metrics() -> Response:
+        payload, content_type = prometheus_payload()
+        return Response(content=payload, media_type=content_type)
+
     @app.get("/health", tags=["ops"])
     def health() -> dict:
         with engine.connect() as conn:
@@ -85,6 +92,9 @@ def _register_operational_routes(app: FastAPI) -> None:
                 )
                 if run and run.artifact_path:
                     gnn_loaded = True
+                    metrics_json = dict(run.metrics_json or {})
+                    real_data_gate = dict(metrics_json.get("real_data_gate") or {})
+                    provenance = dict(metrics_json.get("provenance") or {})
                     gnn_model_version = str(run.model_version)
                     gnn_metrics = {
                         "auc":            round(float(run.auc), 4)       if run.auc       is not None else None,
@@ -94,6 +104,8 @@ def _register_operational_routes(app: FastAPI) -> None:
                         "positive_count": run.positive_count,
                         "feature_dim":    run.feature_dim,
                         "prediction_type": run.prediction_type,
+                        "real_data_gate_passed": bool(real_data_gate.get("passed", False)),
+                        "real_ratio": float(provenance.get("real_ratio") or 0.0),
                     }
                 federation_partners = (
                     db.query(FederationPartner)
@@ -172,6 +184,13 @@ async def _timing_middleware(request: Request, call_next):
     finally:
         elapsed_ms = round((time.monotonic() - t0) * 1000, 1)
         metrics_store.record(elapsed_ms, is_error=is_error)
+        status_code = int(response.status_code) if response is not None else 500
+        record_http_request(
+            method=request.method,
+            path=request.url.path,
+            status_code=status_code,
+            duration_ms=elapsed_ms,
+        )
         if response is not None:
             response.headers["X-Response-Time"] = f"{elapsed_ms}ms"
     return response
