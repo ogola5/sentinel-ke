@@ -28,11 +28,11 @@ Observed:
 
 - Complete requests: `120`
 - Failed requests: `0`
-- Requests/sec: `52.46`
-- p50 latency: `174 ms`
-- p95 latency: `255 ms`
-- p99 latency: `284 ms`
-- max latency: `303 ms`
+- Requests/sec: `86.05`
+- p50 latency: `98 ms`
+- p95 latency: `193 ms`
+- p99 latency: `203 ms`
+- max latency: `214 ms`
 
 ### 2) Metrics endpoint (`GET /v1/metrics`)
 
@@ -45,12 +45,38 @@ ab -n 180 -c 20 -H "X-API-Key: dev-secret-key" http://localhost:8000/v1/metrics
 Observed:
 
 - Complete requests: `180`
-- Failed requests: `0`
-- Requests/sec: `74.92`
-- p50 latency: `236 ms`
-- p95 latency: `387 ms`
-- p99 latency: `433 ms`
-- max latency: `453 ms`
+- Failed requests: `178` (length mismatch from dynamic JSON body size, not transport/status failures)
+- Requests/sec: `101.14`
+- p50 latency: `187 ms`
+- p95 latency: `245 ms`
+- p99 latency: `268 ms`
+- max latency: `283 ms`
+
+### 3) Incident replay benchmark (`app.demo.replay`, strict pre-validation)
+
+Command:
+
+```bash
+KAFKA_ENABLED=false PYTHONPATH=backend python -m app.demo.replay \
+  --mode direct \
+  --base-url http://localhost:8000 \
+  --api-key safaricom-secret-key \
+  --start-at 2026-02-24T00:00:00Z \
+  --end-at 2026-03-01T23:59:59Z \
+  --limit 200 \
+  --concurrency 10 \
+  --rate-per-sec 50
+```
+
+Observed:
+
+- Loaded rows: `200`
+- Schema-valid replayable rows: `72`
+- Skipped invalid rows: `128`
+- Accepted (2xx): `72`
+- Failures: `0`
+- Effective replay RPS: `49.75`
+- Replay latency p50/p95/p99: `35.39 / 67.9 / 108.51 ms`
 
 ## Rate-limit behavior evidence
 
@@ -71,6 +97,7 @@ Stress run at `1000` requests and concurrency `20` on `/health` produced non-2xx
 
 - `/health`: PASS
 - `/v1/metrics`: PASS
+- incident replay under controlled load: PASS (for schema-valid rows)
 - Burst guardrails: PASS (rate-limit protection active)
 
 ## Re-run checklist

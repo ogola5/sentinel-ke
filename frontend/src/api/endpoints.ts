@@ -94,6 +94,11 @@ export const endpoints = {
   cryptoPosture: () => withBase("/v1/crypto/posture"),
   cryptoSelfTest: () => withBase("/v1/crypto/posture/self-test"),
 
+  // Real-time SSE stream
+  // Pass ?token=<FRONTEND_API_KEY> — EventSource cannot set custom headers
+  eventStream: (apiKey?: string) =>
+    withBase(apiKey ? `/v1/stream/events?token=${encodeURIComponent(apiKey)}` : "/v1/stream/events"),
+
   // Auth
   authLogin: () => withBase("/v1/auth/login"),
   authRefresh: () => withBase("/v1/auth/refresh"),

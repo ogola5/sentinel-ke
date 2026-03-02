@@ -28,9 +28,21 @@ def test_to_canonical_event_maps_row_fields():
 
 def test_replay_events_aggregates_stats(monkeypatch):
     rows = [
-        {"event_type": "DDOS_SIGNAL_EVENT", "anchors_json": {}, "payload_json": {}},
-        {"event_type": "WEB_ATTACK_EVENT", "anchors_json": {}, "payload_json": {}},
-        {"event_type": "SIM_SWAP_EVENT", "anchors_json": {}, "payload_json": {}},
+        {
+            "event_type": "DDOS_SIGNAL_EVENT",
+            "anchors_json": {"service_id": "svc-a"},
+            "payload_json": {"service_id": "svc-a"},
+        },
+        {
+            "event_type": "WEB_ATTACK_EVENT",
+            "anchors_json": {"service_id": "svc-a"},
+            "payload_json": {"service_id": "svc-a", "attack_type": "sql_injection"},
+        },
+        {
+            "event_type": "SIM_SWAP_EVENT",
+            "anchors_json": {"phone_h": "p1"},
+            "payload_json": {"phone": "+254700000001"},
+        },
     ]
 
     outcomes = iter(
@@ -50,14 +62,49 @@ def test_replay_events_aggregates_stats(monkeypatch):
         rows=rows,
         base_url="http://localhost:8000",
         api_key="k",
+        mode="http",
         concurrency=2,
         rate_per_sec=0.0,
         timeout_sec=5,
     )
 
     assert stats.total_events == 3
+    assert stats.rows_loaded == 3
+    assert stats.skipped_invalid == 0
     assert stats.sent == 3
     assert stats.accepted_2xx == 1
     assert stats.rejected_non_2xx == 1
     assert stats.failures == 1
     assert stats.latency_p95_ms is not None
+
+
+def test_replay_events_skips_invalid_rows(monkeypatch):
+    rows = [
+        {"event_type": "PAYMENT_DISBURSEMENT", "anchors_json": {}, "payload_json": {}},
+        {"event_type": "DDOS_SIGNAL_EVENT", "anchors_json": {}, "payload_json": {}},
+    ]
+
+    called = {"n": 0}
+
+    def _fake_post_event(**kwargs):  # noqa: ANN003
+        called["n"] += 1
+        del kwargs
+        return True, 200, 10.0, None
+
+    monkeypatch.setattr(replay, "_post_event", _fake_post_event)
+    stats = replay.replay_events(
+        rows=rows,
+        base_url="http://localhost:8000",
+        api_key="k",
+        mode="http",
+        concurrency=1,
+        rate_per_sec=0.0,
+        timeout_sec=5,
+    )
+
+    assert called["n"] == 0
+    assert stats.rows_loaded == 2
+    assert stats.skipped_invalid == 2
+    assert stats.total_events == 0
+    assert stats.sent == 0
+    assert stats.failures == 0
