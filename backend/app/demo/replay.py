@@ -4,7 +4,7 @@ import argparse
 import json
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
@@ -12,11 +12,18 @@ import requests
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
+from app.ingestion.normalizers import normalize_event
+from app.ingestion.schemas import CanonicalEvent
+from app.ingestion.service import IngestionService
+from app.ingestion.validators import validate_event
 from app.ledger.db import SessionLocal
 
 
 @dataclass(frozen=True)
 class ReplayStats:
+    rows_loaded: int
+    skipped_invalid: int
     total_events: int
     sent: int
     accepted_2xx: int
@@ -27,6 +34,8 @@ class ReplayStats:
     latency_p50_ms: Optional[float]
     latency_p95_ms: Optional[float]
     latency_p99_ms: Optional[float]
+    status_counts: Dict[str, int] = field(default_factory=dict)
+    error_samples: List[str] = field(default_factory=list)
 
 
 def _iso_now() -> str:
@@ -144,23 +153,76 @@ def _post_event(
         return False, 0, float(elapsed), str(exc)
 
 
+def _post_event_direct(
+    *,
+    source_api_key: str,
+    event: Mapping[str, Any],
+) -> Tuple[bool, int, float, Optional[str]]:
+    t0 = time.perf_counter()
+    db = SessionLocal()
+    try:
+        canonical = CanonicalEvent.model_validate(dict(event))
+        svc = IngestionService(db, pseudonym_salt=settings.pseudonym_salt or None)
+        res = svc.ingest_event(event=canonical, source_api_key=source_api_key)
+        elapsed = (time.perf_counter() - t0) * 1000.0
+        # accepted/duplicate are both successful replay outcomes.
+        return True, 200 if res.status == "accepted" else 208, float(elapsed), None
+    except Exception as exc:  # noqa: BLE001
+        elapsed = (time.perf_counter() - t0) * 1000.0
+        return False, 0, float(elapsed), str(exc)
+    finally:
+        db.close()
+
+
 def replay_events(
     *,
     rows: Sequence[Mapping[str, Any]],
     base_url: str,
     api_key: str,
+    mode: str = "direct",
     concurrency: int = 10,
     timeout_sec: int = 15,
     rate_per_sec: float = 0.0,
     shift_to_now: bool = True,
 ) -> ReplayStats:
-    events = [_to_canonical_event(r, shift_to_now=shift_to_now) for r in rows]
+    rows_loaded = len(rows)
+    skipped_invalid = 0
+    skip_samples: List[str] = []
+    events: List[Dict[str, Any]] = []
+    for row in rows:
+        ev = _to_canonical_event(row, shift_to_now=shift_to_now)
+        try:
+            parsed = CanonicalEvent.model_validate(ev)
+            normalized = normalize_event(parsed)
+            validate_event(normalized)
+            events.append(normalized.model_dump(mode="json"))
+        except Exception as exc:  # noqa: BLE001
+            skipped_invalid += 1
+            if len(skip_samples) < 5:
+                skip_samples.append(str(exc))
     total = len(events)
     if total <= 0:
-        return ReplayStats(0, 0, 0, 0, 0, 0.0, 0.0, None, None, None)
+        return ReplayStats(
+            rows_loaded=rows_loaded,
+            skipped_invalid=skipped_invalid,
+            total_events=0,
+            sent=0,
+            accepted_2xx=0,
+            rejected_non_2xx=0,
+            failures=0,
+            duration_seconds=0.0,
+            rps_effective=0.0,
+            latency_p50_ms=None,
+            latency_p95_ms=None,
+            latency_p99_ms=None,
+            status_counts={},
+            error_samples=skip_samples,
+        )
 
     sent = accepted = rejected = failures = 0
     latencies: List[float] = []
+    status_counts: Dict[str, int] = {}
+    error_samples: List[str] = []
     started = time.perf_counter()
 
     with requests.Session() as session:
@@ -173,23 +235,36 @@ def replay_events(
                     if now < next_slot:
                         time.sleep(next_slot - now)
                     next_slot = max(next_slot, now) + (1.0 / float(rate_per_sec))
-                futures.append(
-                    pool.submit(
-                        _post_event,
-                        session=session,
-                        base_url=base_url,
-                        api_key=api_key,
-                        event=ev,
-                        timeout_sec=timeout_sec,
+                if str(mode).lower() == "http":
+                    futures.append(
+                        pool.submit(
+                            _post_event,
+                            session=session,
+                            base_url=base_url,
+                            api_key=api_key,
+                            event=ev,
+                            timeout_sec=timeout_sec,
+                        )
                     )
-                )
+                else:
+                    futures.append(
+                        pool.submit(
+                            _post_event_direct,
+                            source_api_key=api_key,
+                            event=ev,
+                        )
+                    )
 
             for fut in as_completed(futures):
                 ok, status, elapsed_ms, err = fut.result()
                 sent += 1
                 latencies.append(float(elapsed_ms))
+                bucket = str(int(status or 0))
+                status_counts[bucket] = status_counts.get(bucket, 0) + 1
                 if err:
                     failures += 1
+                    if len(error_samples) < 5:
+                        error_samples.append(str(err))
                     continue
                 if ok:
                     accepted += 1
@@ -198,6 +273,8 @@ def replay_events(
 
     duration = max(0.0001, time.perf_counter() - started)
     return ReplayStats(
+        rows_loaded=rows_loaded,
+        skipped_invalid=skipped_invalid,
         total_events=total,
         sent=sent,
         accepted_2xx=accepted,
@@ -208,13 +285,20 @@ def replay_events(
         latency_p50_ms=_percentile(latencies, 50),
         latency_p95_ms=_percentile(latencies, 95),
         latency_p99_ms=_percentile(latencies, 99),
+        status_counts=status_counts,
+        error_samples=(skip_samples + error_samples)[:5],
     )
 
 
 def build_cli() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Replay historical incident events into /v1/ingest/event under controlled load.")
+    p.add_argument("--mode", choices=("direct", "http"), default="direct", help="Replay mode.")
     p.add_argument("--base-url", default="http://localhost:8000", help="Backend base URL.")
-    p.add_argument("--api-key", required=True, help="Valid SourceRegistry raw API key for ingest auth.")
+    p.add_argument(
+        "--api-key",
+        required=True,
+        help="For direct mode: SourceRegistry raw API key. For http mode: API key expected by /v1/ingest/event guard.",
+    )
     p.add_argument("--start-at", required=True, help="Replay window start (ISO8601).")
     p.add_argument("--end-at", required=True, help="Replay window end (ISO8601).")
     p.add_argument("--section-code", default=None, help="Optional section filter.")
@@ -249,6 +333,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         rows=rows,
         base_url=args.base_url,
         api_key=args.api_key,
+        mode=args.mode,
         concurrency=max(1, int(args.concurrency)),
         timeout_sec=max(1, int(args.timeout_sec)),
         rate_per_sec=max(0.0, float(args.rate_per_sec)),

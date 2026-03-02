@@ -522,6 +522,7 @@ GET /metrics
 Incident replay under load:
 ```bash
 PYTHONPATH=backend python -m app.demo.replay \
+  --mode direct \
   --base-url http://localhost:8000 \
   --api-key <VALID_SOURCE_RAW_API_KEY> \
   --start-at 2026-03-01T00:00:00Z \
@@ -531,6 +532,20 @@ PYTHONPATH=backend python -m app.demo.replay \
   --rate-per-sec 120 \
   --limit 2000
 ```
+
+Wrapper script (recommended):
+```bash
+MODE=direct HUB_API_KEY=<VALID_SOURCE_RAW_API_KEY> \
+START_AT=2026-03-01T00:00:00Z END_AT=2026-03-01T23:59:59Z \
+KAFKA_ENABLED=false \
+bash backend/scripts/replay_incident.sh
+```
+
+Replay summary now includes:
+- `rows_loaded`
+- `skipped_invalid`
+- `status_counts`
+- `error_samples`
 
 Economy (procurement + guardrails + tamper integrity):
 ```
