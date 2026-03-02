@@ -64,6 +64,7 @@ class Settings:
     gnn_weight_decay = float(os.environ.get("GNN_WEIGHT_DECAY", "0.0001"))
     gnn_split_policy = os.environ.get("GNN_SPLIT_POLICY", "entity_hash_holdout").strip().lower()
     gnn_val_ratio = float(os.environ.get("GNN_VAL_RATIO", "0.2"))
+    gnn_min_real_ratio = float(os.environ.get("GNN_MIN_REAL_RATIO", "0.3"))
     gnn_threshold_min_samples = int(os.environ.get("GNN_THRESHOLD_MIN_SAMPLES", "10"))
     gnn_component_discovery_enabled = env_bool("GNN_COMPONENT_DISCOVERY_ENABLED", True)
     gnn_component_min_size = int(os.environ.get("GNN_COMPONENT_MIN_SIZE", "3"))
@@ -82,8 +83,10 @@ class Settings:
     ai_canary_ratio_default = float(os.environ.get("AI_CANARY_RATIO_DEFAULT", "0.1"))
     ai_feedback_enabled = env_bool("AI_FEEDBACK_ENABLED", True)
     ai_explainability_enabled = env_bool("AI_EXPLAINABILITY_ENABLED", True)
+    ai_explainability_method = os.environ.get("AI_EXPLAINABILITY_METHOD", "integrated_gradients").strip().lower()
     ai_explainability_top_k = int(os.environ.get("AI_EXPLAINABILITY_TOP_K", "6"))
     ai_explainability_max_nodes = int(os.environ.get("AI_EXPLAINABILITY_MAX_NODES", "64"))
+    ai_explainability_ig_steps = int(os.environ.get("AI_EXPLAINABILITY_IG_STEPS", "24"))
     ai_auto_containment_enabled = env_bool("AI_AUTO_CONTAINMENT_ENABLED", False)
     ai_auto_containment_min_score = float(os.environ.get("AI_AUTO_CONTAINMENT_MIN_SCORE", "90.0"))
     ai_auto_containment_max_actions_per_run = int(

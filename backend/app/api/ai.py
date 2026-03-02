@@ -222,6 +222,11 @@ def list_gnn_runs(
                         "max_positive_rate_disparity", 0
                     ) > settings.fairness_disparity_threshold
                 ),
+                "provenance": (r.metrics_json or {}).get("provenance", {}),
+                "real_data_gate": (r.metrics_json or {}).get("real_data_gate", {}),
+                "real_data_gate_passed": bool(
+                    ((r.metrics_json or {}).get("real_data_gate") or {}).get("passed", False)
+                ),
                 "created_at": r.created_at.isoformat(),
             }
             for r in rows
@@ -330,6 +335,11 @@ def get_gnn_run(run_id: str, db: Session = Depends(get_db)):
         "artifact_path": r.artifact_path,
         "params": r.params_json,
         "metrics": r.metrics_json,
+        "provenance": (r.metrics_json or {}).get("provenance", {}),
+        "real_data_gate": (r.metrics_json or {}).get("real_data_gate", {}),
+        "real_data_gate_passed": bool(
+            ((r.metrics_json or {}).get("real_data_gate") or {}).get("passed", False)
+        ),
         "created_at": r.created_at.isoformat(),
     }
 

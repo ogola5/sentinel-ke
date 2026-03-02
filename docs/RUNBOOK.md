@@ -16,6 +16,9 @@ Mission-loop demo script:
 Performance/SLO evidence log:
 `docs/PERFORMANCE_SLO_EVIDENCE.md`
 
+Production deployment proof package:
+`docs/PRODUCTION_DEPLOYMENT_PROOF.md`
+
 API examples for frontend/integration consumers:
 `docs/API_CONSUMER_GUIDE.md`
 
@@ -513,6 +516,20 @@ GET  /v1/stix/mitigations?kind=DDOS
 Metrics:
 ```
 GET /v1/metrics
+GET /metrics
+```
+
+Incident replay under load:
+```bash
+PYTHONPATH=backend python -m app.demo.replay \
+  --base-url http://localhost:8000 \
+  --api-key <VALID_SOURCE_RAW_API_KEY> \
+  --start-at 2026-03-01T00:00:00Z \
+  --end-at 2026-03-01T23:59:59Z \
+  --section-code telecom \
+  --concurrency 20 \
+  --rate-per-sec 120 \
+  --limit 2000
 ```
 
 Economy (procurement + guardrails + tamper integrity):

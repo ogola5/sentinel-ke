@@ -89,6 +89,13 @@ Promote model only if all pass:
   - temporal policy marker
   - holdout policy used
   - calibration summary
+- `graph_feature_worker.run_once()` persists source provenance features:
+  - `source_type_counts`
+  - `provenance_tag` (`real|synthetic|mixed|unknown`)
+  - `real_signal_ratio`
+- `gnn_train_worker.run_once()` now stores:
+  - `metrics_json.provenance` (dataset real/synthetic mix + high-risk breakdown)
+  - `metrics_json.real_data_gate` with pass/fail against `GNN_MIN_REAL_RATIO`
 - `drift_worker.run_once()` already adds live fairness disparity and status into
   `AIDriftReport.metrics_json["fairness_live"]`.
 
@@ -99,6 +106,7 @@ Set in environment for reproducible evaluation:
 ```
 GNN_SPLIT_POLICY=entity_hash_holdout
 GNN_VAL_RATIO=0.2
+GNN_MIN_REAL_RATIO=0.3
 FAIRNESS_DISPARITY_THRESHOLD=0.4
 ```
 

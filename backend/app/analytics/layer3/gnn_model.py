@@ -267,6 +267,65 @@ def gradient_x_input_attributions(
     return out
 
 
+def integrated_gradients_attributions(
+    model,
+    x,
+    edge_src,
+    edge_dst,
+    edge_weight,
+    *,
+    node_indices: Sequence[int],
+    max_nodes: int = 64,
+    steps: int = 24,
+) -> Dict[int, List[float]]:
+    """
+    Integrated Gradients attributions (Sundararajan et al., 2017).
+
+    We use a zero baseline and approximate the path integral with `steps`
+    interpolation points. Output is per-node attribution vectors aligned to
+    input features.
+    """
+    import torch  # noqa: PLC0415
+
+    picked: List[int] = []
+    seen = set()
+    for idx in node_indices:
+        i = int(idx)
+        if i in seen:
+            continue
+        seen.add(i)
+        picked.append(i)
+        if len(picked) >= max(1, int(max_nodes)):
+            break
+
+    out: Dict[int, List[float]] = {}
+    if not picked:
+        return out
+
+    k_steps = max(8, int(steps))
+    baseline = torch.zeros_like(x)
+    delta = (x - baseline).detach()
+
+    model.eval()
+    for node_idx in picked:
+        total_grad = torch.zeros_like(x[node_idx])
+        for s in range(1, k_steps + 1):
+            alpha = float(s) / float(k_steps)
+            x_step = (baseline + alpha * delta).detach().clone().requires_grad_(True)
+            model.zero_grad(set_to_none=True)
+            logits, _ = model(x_step, edge_src, edge_dst, edge_weight)
+            prob = torch.sigmoid(logits[node_idx, 0])
+            prob.backward()
+            grad = x_step.grad[node_idx].detach()
+            total_grad = total_grad + grad
+
+        avg_grad = total_grad / float(k_steps)
+        attr = (delta[node_idx] * avg_grad).cpu().tolist()
+        out[int(node_idx)] = [float(v) for v in attr]
+
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Artifact I/O
 # ---------------------------------------------------------------------------

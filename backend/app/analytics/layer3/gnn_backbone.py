@@ -530,6 +530,16 @@ def load_dataset(
         risk_flags   = list(s.risk_flags or [])
         features_raw = dict(s.features or {})
         event_types  = features_raw.get("event_types") if isinstance(features_raw.get("event_types"), dict) else {}
+        source_type_counts = (
+            features_raw.get("source_type_counts")
+            if isinstance(features_raw.get("source_type_counts"), dict)
+            else {}
+        )
+        provenance_tag = str(features_raw.get("provenance_tag") or "unknown").strip().lower() or "unknown"
+        try:
+            real_signal_ratio = float(features_raw.get("real_signal_ratio") or 0.0)
+        except Exception:  # noqa: BLE001
+            real_signal_ratio = 0.0
         source_count = int(features_raw.get("source_count") or 0)
         event_count  = int(s.event_count or 0)
         label        = weak_label(
@@ -544,6 +554,9 @@ def load_dataset(
             "risk_flags":    risk_flags,
             "features":      features_raw,
             "event_types":   dict(event_types),
+            "source_type_counts": dict(source_type_counts),
+            "provenance_tag": provenance_tag,
+            "real_signal_ratio": max(0.0, min(1.0, real_signal_ratio)),
             "source_count":  source_count,
             "event_count":   event_count,
             "degree":        int(s.degree or 0),
@@ -624,6 +637,9 @@ def load_dataset(
             "source_count":      e["source_count"],
             "risk_flags":        e["risk_flags"],
             "event_types":       e["event_types"],
+            "source_type_counts": e["source_type_counts"],
+            "provenance_tag":    e["provenance_tag"],
+            "real_signal_ratio": e["real_signal_ratio"],
             "is_benign_negative": bool(e["label"] == 0 and e["is_benign"]),
         })
 
