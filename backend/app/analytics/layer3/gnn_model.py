@@ -709,6 +709,8 @@ def train_graphsage(
     patience   = 10
     stale      = 0
     last_train = 0.0
+    epoch_train_losses: List[float] = []
+    epoch_val_losses: List[float] = []
 
     for _ in range(max(1, epochs)):
         model.train()
@@ -720,12 +722,14 @@ def train_graphsage(
             nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
         optim.step()
         last_train = float(loss.item())
+        epoch_train_losses.append(round(last_train, 5))
 
         if len(val_idx) > 0:
             model.eval()
             with torch.no_grad():
                 v_logits, _ = model(x, edge_src, edge_dst, edge_weight)
                 v_loss      = float(criterion(v_logits[val_idx], y[val_idx]).item())
+            epoch_val_losses.append(round(v_loss, 5))
             if v_loss < best_val:
                 best_val   = v_loss
                 best_state = {k: v.clone() for k, v in model.state_dict().items()}
@@ -756,10 +760,12 @@ def train_graphsage(
     eval_labels = [int(dataset.labels[i]) for i in eval_idx]
     eval_probs = [float(mean_probs[i]) for i in eval_idx]
     metrics.update(_calibration_metrics(eval_labels, eval_probs, bins=10))
-    metrics["train_loss"]    = round(last_train, 6)
-    metrics["val_loss"]      = round(best_val if math.isfinite(best_val) else last_train, 6)
-    metrics["pretrain_loss"] = round(last_pretrain, 6)
-    metrics["eval_samples"] = int(len(eval_idx))
+    metrics["train_loss"]        = round(last_train, 6)
+    metrics["val_loss"]          = round(best_val if math.isfinite(best_val) else last_train, 6)
+    metrics["pretrain_loss"]     = round(last_pretrain, 6)
+    metrics["eval_samples"]      = int(len(eval_idx))
+    metrics["epoch_train_losses"] = epoch_train_losses
+    metrics["epoch_val_losses"]   = epoch_val_losses
     metrics.update(split_manifest)
 
     return GNNTrainResult(

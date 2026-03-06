@@ -131,6 +131,15 @@ export default function GNNIntelligence({ healthGnnLoaded, healthModelVersion, h
   const modelVersion = latestRun?.model_version ?? healthModelVersion ?? "—";
   const predictionType = latestRun?.prediction_type ?? (healthGnnMetrics.prediction_type as string | null) ?? "—";
 
+  // Epoch loss curve data from metrics_json
+  const epochTrainLosses = latestRun?.metrics?.epoch_train_losses ?? [];
+  const epochValLosses   = latestRun?.metrics?.epoch_val_losses   ?? [];
+  const epochChartData   = epochTrainLosses.map((tl, i) => ({
+    epoch: i + 1,
+    train: Math.round(tl * 10000) / 10000,
+    val:   epochValLosses[i] != null ? Math.round(epochValLosses[i] * 10000) / 10000 : undefined,
+  }));
+
   const radialData = [
     { name: "AUC", value: Math.round((auc ?? 0) * 100), fill: "var(--accent)" },
     { name: "Precision", value: Math.round((precision ?? 0) * 100), fill: "var(--info)" },
@@ -321,6 +330,64 @@ export default function GNNIntelligence({ healthGnnLoaded, healthModelVersion, h
             </div>
           )}
         </div>
+      </div>
+
+      {/* Epoch loss curves */}
+      <div className="panel gnn-loss-panel">
+        <div className="panel-header">
+          <h3>Training Loss Curves</h3>
+          <span className="muted">
+            {epochChartData.length > 0
+              ? `${epochChartData.length} epochs · ${latestRun?.model_version ?? "latest"}`
+              : "train → retrain to generate curves"}
+          </span>
+        </div>
+        {epochChartData.length > 0 ? (
+          <ResponsiveContainer width="100%" height={220}>
+            <LineChart data={epochChartData} margin={{ top: 8, right: 16, left: -16, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="var(--line)" />
+              <XAxis
+                dataKey="epoch"
+                tick={{ fontSize: 10, fill: "var(--ink-muted)" }}
+                label={{ value: "Epoch", position: "insideBottomRight", offset: -4, fontSize: 10, fill: "var(--ink-muted)" }}
+              />
+              <YAxis
+                tick={{ fontSize: 10, fill: "var(--ink-muted)" }}
+                domain={["auto", "auto"]}
+                label={{ value: "Loss", angle: -90, position: "insideLeft", offset: 12, fontSize: 10, fill: "var(--ink-muted)" }}
+              />
+              <Tooltip
+                contentStyle={{ background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 8, fontSize: 12 }}
+                formatter={(v: number | string | undefined, name: string) => [
+                  typeof v === "number" ? v.toFixed(5) : v,
+                  name === "train" ? "Train loss" : "Val loss",
+                ]}
+              />
+              <Line
+                type="monotone" dataKey="train" name="train"
+                stroke="var(--accent)" strokeWidth={2} dot={false}
+                activeDot={{ r: 4 }}
+              />
+              {epochValLosses.length > 0 && (
+                <Line
+                  type="monotone" dataKey="val" name="val"
+                  stroke="var(--info)" strokeWidth={2} dot={false}
+                  strokeDasharray="5 3" activeDot={{ r: 4 }}
+                />
+              )}
+              <Legend
+                iconType="line" layout="horizontal" verticalAlign="top" align="right"
+                formatter={(v: string) => v === "train" ? "Train loss" : "Val loss"}
+                wrapperStyle={{ fontSize: "0.75rem", opacity: 0.7 }}
+              />
+            </LineChart>
+          </ResponsiveContainer>
+        ) : (
+          <div className="state-box">
+            <Zap size={24} />
+            <p>Retrain the GNN to generate epoch-by-epoch loss curves here.</p>
+          </div>
+        )}
       </div>
 
       {/* Predictions table */}

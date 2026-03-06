@@ -48,10 +48,11 @@ kyber-py
 dilithium-py
 pycryptodome
 
-# ── ML — PyTorch CPU build ────────────────────────────────────────────────────
-# Switch index URL to cu121 for GPU support
---extra-index-url https://download.pytorch.org/whl/cpu
-torch
+# ── ML — PyTorch CUDA 12.1 build ─────────────────────────────────────────────
+# +cu121 suffix forces the CUDA wheel; compatible with host CUDA ≥ 12.1
+# For CPU-only dev: change to  torch  (no suffix, drop extra-index-url)
+--extra-index-url https://download.pytorch.org/whl/cu121
+torch==2.4.0+cu121
 
 # ── Dev / test / notebooks ────────────────────────────────────────────────────
 pytest
