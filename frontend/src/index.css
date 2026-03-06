@@ -1,22 +1,24 @@
 @import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Rajdhani:wght@400;500;600;700&display=swap");
 
 :root {
-  --bg: #040a06;
-  --panel: #0b1710;
-  --panel-strong: #102017;
-  --ink: #ddffe9;
-  --ink-muted: #88b79b;
-  --line: #1f3f2e;
-  --accent: #31ff90;
-  --accent-2: #7effb4;
-  --warning: #ffd147;
-  --danger: #ff4d5a;
-  --success: #21dd77;
-  --accent-rgb: 49 255 144;
-  --danger-rgb: 255 77 90;
-  --warning-rgb: 255 209 71;
-  --surface-rgb: 16 32 23;
-  --shadow: 0 18px 42px rgba(0, 0, 0, 0.48);
+  --bg: #0b1410;
+  --panel: #14211b;
+  --panel-strong: #1a2a22;
+  --ink: #eefbf2;
+  --ink-muted: #abc7b6;
+  --line: #315442;
+  --accent: #2fd67d;
+  --accent-2: #bbf7d2;
+  --warning: #f0bf4c;
+  --danger: #e85a67;
+  --success: #24c66f;
+  --command: #76c2ff;
+  --accent-rgb: 47 214 125;
+  --danger-rgb: 232 90 103;
+  --warning-rgb: 240 191 76;
+  --info-rgb: 118 194 255;
+  --surface-rgb: 26 42 34;
+  --shadow: 0 18px 42px rgba(3, 10, 7, 0.32);
   --radius: 14px;
 }
 
@@ -29,9 +31,9 @@ body {
   font-family: "Rajdhani", "Segoe UI", sans-serif;
   color: var(--ink);
   background:
-    radial-gradient(circle at 12% 12%, rgba(49, 255, 144, 0.14), transparent 38%),
-    radial-gradient(circle at 84% 6%, rgba(255, 77, 90, 0.12), transparent 34%),
-    linear-gradient(165deg, #040a06 0%, #06110b 45%, #040a06 100%);
+    radial-gradient(circle at 12% 12%, rgba(47, 214, 125, 0.16), transparent 40%),
+    radial-gradient(circle at 84% 6%, rgba(118, 194, 255, 0.12), transparent 32%),
+    linear-gradient(165deg, #0b1410 0%, #122019 45%, #0f1713 100%);
   background-attachment: fixed;
   min-height: 100vh;
 }
@@ -41,11 +43,11 @@ body::before {
   position: fixed;
   inset: 0;
   background-image:
-    linear-gradient(rgba(49, 255, 144, 0.08) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(49, 255, 144, 0.08) 1px, transparent 1px);
+    linear-gradient(rgba(47, 214, 125, 0.06) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(47, 214, 125, 0.06) 1px, transparent 1px);
   background-size: 34px 34px;
   pointer-events: none;
-  opacity: 0.16;
+  opacity: 0.14;
   z-index: -1;
 }
 
@@ -89,6 +91,13 @@ select {
   color: var(--ink);
 }
 
+button:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  outline: 2px solid rgba(var(--accent-rgb), 0.55);
+  outline-offset: 2px;
+}
+
 select {
   padding-right: 28px;
 }
@@ -123,7 +132,7 @@ li {
   font-size: 0.63rem;
   letter-spacing: 0.14em;
   text-transform: uppercase;
-  opacity: 0.4;
+  opacity: 0.62;
   padding: 6px 12px 2px;
 }
 
@@ -175,7 +184,7 @@ li {
   gap: 10px;
   margin: 0;
 }
-.screen-header .subtitle { font-size: 0.82rem; opacity: 0.5; font-weight: 400; text-transform: none; }
+.screen-header .subtitle { font-size: 0.82rem; opacity: 0.72; font-weight: 400; text-transform: none; }
 
 /* ── Metric cards ───────────────────────────────────── */
 .metric-grid {
@@ -193,9 +202,9 @@ li {
   flex-direction: column;
   gap: 4px;
 }
-.metric-card .metric-label { font-size: 0.67rem; letter-spacing: 0.1em; text-transform: uppercase; opacity: 0.45; }
+.metric-card .metric-label { font-size: 0.67rem; letter-spacing: 0.1em; text-transform: uppercase; opacity: 0.62; }
 .metric-card .metric-value { font-size: 1.7rem; font-weight: 700; line-height: 1; font-family: "JetBrains Mono", monospace; }
-.metric-card .metric-sub   { font-size: 0.72rem; opacity: 0.45; }
+.metric-card .metric-sub   { font-size: 0.72rem; opacity: 0.62; }
 .metric-card.accent { border-color: rgba(var(--accent-rgb), 0.35); }
 .metric-card.accent .metric-value { color: var(--accent); }
 .metric-card.danger { border-color: rgba(var(--danger-rgb), 0.35); }
@@ -254,7 +263,7 @@ li {
   font-size: 0.67rem;
   letter-spacing: 0.1em;
   text-transform: uppercase;
-  opacity: 0.42;
+  opacity: 0.58;
   border-bottom: 1px solid var(--line);
   font-weight: 600;
 }
@@ -324,7 +333,7 @@ li {
 .btn-ghost:hover { border-color: rgba(var(--accent-rgb), 0.35); color: var(--ink); }
 
 /* ── Loading/empty states ───────────────────────────── */
-.state-box { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 48px; opacity: 0.45; text-align: center; }
+.state-box { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 48px; opacity: 0.74; text-align: center; }
 .state-box p { font-size: 0.85rem; }
 
 /* ── Recharts dark theme overrides ─────────────────── */

@@ -430,6 +430,373 @@ def ingest_traffic_file(
         db.close()
 
 
+def ingest_paysim_file(
+    *,
+    input_file: str,
+    source_api_key: str,
+    dataset_name: Optional[str] = None,
+) -> Dict[str, object]:
+    """
+    Ingest a PaySim-format CSV (real or synthetic) as M-Pesa TRANSACTION_EVENTs.
+
+    Only fraud rows (isFraud=1) are ingested — they produce the mule-chain graph
+    structure (TRANSFER → TRANSFER → CASH_OUT) that the cyber GNN learns from.
+    Benign transactions are represented by other event sources already in the graph.
+
+    Real PaySim CSV: https://www.kaggle.com/datasets/ntnu-testimon/paysim1
+    Synthetic:       generate_paysim_csv() in seed_realistic_data.py
+    """
+    from app.integrations.real_data_pipeline import (
+        _iter_paysim_records,
+        ingest_records_via_connectors,
+        iter_rows_from_path,
+    )
+
+    if input_file is None:
+        raise ValueError(
+            "input_file is None — generate a synthetic file first:\n"
+            "  from seed_realistic_data import generate_paysim_csv\n"
+            "  paysim_path = generate_paysim_csv('data/kenya_paysim_synthetic.csv')\n"
+            "Then pass the returned path as input_file."
+        )
+
+    rows = iter_rows_from_path(input_file)
+    records = _iter_paysim_records(
+        rows,
+        dataset_name=dataset_name or "paysim_ke",
+    )
+
+    db = get_db_session()
+    try:
+        stats = ingest_records_via_connectors(
+            db=db,
+            records=records,
+            source_api_key=source_api_key,
+            classification="RESTRICTED",
+        )
+        return {
+            "job": "paysim",
+            "input_file": input_file,
+            "total_records": stats.total_records,
+            "accepted": stats.accepted,
+            "duplicates": stats.duplicates,
+            "skipped": stats.skipped,
+            "errors": stats.errors,
+        }
+    finally:
+        db.close()
+
+
+def ingest_ocds_file(
+    *,
+    input_file: str,
+    source_api_key: str,
+) -> Dict[str, object]:
+    """
+    Parse an OCDS-1.1 JSON releases file and write aggregated procurement
+    signals directly to graph_feature_snapshot (corruption domain).
+
+    Bypasses the connector/event_log path because the corruption GNN reads
+    directly from graph_feature_snapshot via snapshot_to_corruption_vector().
+    """
+    import json
+    from datetime import datetime, timezone
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+    if input_file is None:
+        raise ValueError(
+            "input_file is None — generate a synthetic file first:\n"
+            "  from seed_realistic_data import generate_ocds_json\n"
+            "  ocds_path = generate_ocds_json('data/kenya_ocds_synthetic.json')\n"
+            "Then pass the returned path as input_file."
+        )
+
+    with open(input_file, encoding="utf-8") as fh:
+        releases = json.load(fh)
+
+    # ── aggregate per-party (buyer + supplier) ────────────────────────────────
+    from collections import defaultdict
+
+    party_stats: Dict[str, dict] = defaultdict(
+        lambda: {
+            "total_value_ksh": 0.0,
+            "counterparty_ids": set(),
+            "amendment_count": 0,
+            "total_contracts": 0,
+            "fy_end_count": 0,
+            "director_conflict": False,
+            "price_inflated": False,
+            "single_source": False,
+            "shell_company": False,
+        }
+    )
+
+    for rel in releases:
+        meta = rel.get("_meta", {})
+        awards = rel.get("awards", [])
+        buyer_id = (rel.get("buyer") or {}).get("id", "")
+        amendments = rel.get("contracts", [{}])[0].get("amendments", [])
+        n_amendments = len(amendments)
+
+        # date for FY-end detection (Kenya FY ends 30 Jun)
+        date_str = rel.get("date", "")
+        try:
+            dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+            is_fy_end = dt.month in (5, 6)
+        except Exception:
+            is_fy_end = False
+
+        for award in awards:
+            value_ksh = float((award.get("value") or {}).get("amount", 0) or 0)
+            supplier_id = ""
+            for s in award.get("suppliers", []):
+                supplier_id = s.get("id", "")
+                if not supplier_id:
+                    continue
+
+                for pid in (buyer_id, supplier_id):
+                    if not pid:
+                        continue
+                    ps = party_stats[pid]
+                    ps["total_value_ksh"] += value_ksh
+                    ps["total_contracts"] += 1
+                    ps["amendment_count"] += n_amendments
+                    if is_fy_end:
+                        ps["fy_end_count"] += 1
+                    if buyer_id and supplier_id:
+                        ps["counterparty_ids"].add(
+                            supplier_id if pid == buyer_id else buyer_id
+                        )
+                    if meta.get("is_director_conflict"):
+                        ps["director_conflict"] = True
+                    if meta.get("is_price_inflated"):
+                        ps["price_inflated"] = True
+                    if meta.get("is_single_source"):
+                        ps["single_source"] = True
+                    if meta.get("is_shell"):
+                        ps["shell_company"] = True
+
+    # ── build feature vectors and upsert ─────────────────────────────────────
+    from app.analytics.ai_models import GraphFeatureSnapshot
+
+    text = _sql_text()
+    db = get_db_session()
+    upserted = 0
+    try:
+        now = datetime.now(timezone.utc)
+        # Fixed window: full FY 2024/25 (Kenya fiscal year)
+        window_start = datetime(2024, 7, 1, tzinfo=timezone.utc)
+        window_end = datetime(2025, 6, 30, 23, 59, 59, tzinfo=timezone.utc)
+
+        for entity_key, ps in party_stats.items():
+            n_contracts = max(1, ps["total_contracts"])
+            amendment_ratio = ps["amendment_count"] / n_contracts
+            fy_end_fraction = ps["fy_end_count"] / n_contracts
+            counterparty_count = len(ps["counterparty_ids"])
+
+            risk_flags: list[str] = []
+            if ps["price_inflated"]:
+                risk_flags.append("PRICE_INFLATION")
+            if ps["director_conflict"]:
+                risk_flags.append("DIRECTOR_CONFLICT")
+            if ps["shell_company"]:
+                risk_flags.append("SHELL_COMPANY")
+            if ps["single_source"] and ps["total_value_ksh"] > 5_000_000:
+                risk_flags.append("AUDIT_FINDING")
+
+            features = {
+                "entity_type": "procurement_entity",
+                "total_value_ksh": ps["total_value_ksh"],
+                "counterparty_count": counterparty_count,
+                "amendment_ratio": amendment_ratio,
+                "fy_end_fraction": fy_end_fraction,
+                "total_contracts": n_contracts,
+                "director_conflict": ps["director_conflict"],
+                "price_inflated": ps["price_inflated"],
+                "single_source": ps["single_source"],
+                "shell_company": ps["shell_company"],
+                "risk_flags": risk_flags,
+                "source": "ocds_ingest",
+            }
+
+            stmt = pg_insert(GraphFeatureSnapshot).values(
+                entity_key=entity_key,
+                entity_type="procurement_entity",
+                window_key="Wcorruption",
+                window_start=window_start,
+                window_end=window_end,
+                features=features,
+                risk_flags=risk_flags,
+                created_at=now,
+            )
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["entity_key", "window_key", "window_end"],
+                set_={
+                    "features": stmt.excluded.features,
+                    "risk_flags": stmt.excluded.risk_flags,
+                    "created_at": stmt.excluded.created_at,
+                },
+            )
+            db.execute(stmt)
+            upserted += 1
+
+        db.commit()
+        return {
+            "job": "ocds",
+            "input_file": input_file,
+            "parties_upserted": upserted,
+            "releases_parsed": len(releases),
+        }
+    finally:
+        db.close()
+
+
+def query_active_learning(
+    *,
+    domain: str = "cyber",
+    window_key: Optional[str] = None,
+    top_k: int = 50,
+) -> list:
+    """
+    Return the top-k most uncertain entities for analyst review.
+
+    Uses MC Dropout uncertainty scores stored in ai_prediction to surface
+    nodes where the model is least confident — the core of uncertainty-based
+    active learning (as used in Anthropic's RLHF pipeline and Scale AI).
+
+    Analysts should review these entities next; calling apply_feedback_to_snapshots()
+    after labelling them gives maximum accuracy improvement per annotation hour.
+
+    Returns a list of dicts: {entity_key, uncertainty, score, prediction_type}
+    sorted by uncertainty descending.
+    """
+    text = _sql_text()
+    db = get_db_session()
+    wk = window_key or ("Wcorruption" if domain == "corruption" else "Wmid")
+    try:
+        rows = db.execute(
+            text(
+                """
+                SELECT entity_key, uncertainty, score, prediction_type
+                FROM ai_prediction
+                WHERE window_key = :wk
+                  AND uncertainty IS NOT NULL
+                ORDER BY uncertainty DESC
+                LIMIT :top_k
+                """
+            ),
+            {"wk": wk, "top_k": top_k},
+        ).fetchall()
+        return [
+            {
+                "entity_key":      str(r[0]),
+                "uncertainty":     round(float(r[1] or 0), 4),
+                "score":           round(float(r[2] or 0), 4),
+                "prediction_type": str(r[3] or ""),
+            }
+            for r in rows
+        ]
+    finally:
+        db.close()
+
+
+def apply_feedback_to_snapshots(
+    *,
+    domain: str = "cyber",
+    window_key: Optional[str] = None,
+    limit: int = 10_000,
+) -> Dict[str, int]:
+    """
+    Pull accepted AIFeedbackLabel rows and stamp their risk_flags into the
+    corresponding graph_feature_snapshot rows before the next GNN training run.
+
+    This does NOT modify GNN code — it writes ground-truth signal directly
+    into the feature store so the trainer picks it up on next epoch.
+    """
+    text = _sql_text()
+    db = get_db_session()
+    wk = window_key or ("Wcorruption" if domain == "corruption" else "Wmid")
+    updated = 0
+    skipped = 0
+    try:
+        # feedback_label=1 → analyst confirmed threat; 0 → false positive
+        rows = db.execute(
+            text(
+                """
+                SELECT entity_key, feedback_label
+                FROM ai_feedback_label
+                WHERE status = 'accepted'
+                  AND feedback_label = 1
+                ORDER BY created_at DESC
+                LIMIT :lim
+                """
+            ),
+            {"lim": limit},
+        ).fetchall()
+
+        for entity_key, feedback_label in rows:
+            flag = "ANALYST_CONFIRMED_THREAT"
+            existing = db.execute(
+                text(
+                    """
+                    SELECT id, risk_flags
+                    FROM graph_feature_snapshot
+                    WHERE entity_key = :ek AND window_key = :wk
+                    ORDER BY window_end DESC
+                    LIMIT 1
+                    """
+                ),
+                {"ek": entity_key, "wk": wk},
+            ).fetchone()
+            if not existing:
+                skipped += 1
+                continue
+            snap_id, current_flags = existing
+            flags: list = list(current_flags or [])
+            if flag not in flags:
+                flags.append(flag)
+            db.execute(
+                text(
+                    "UPDATE graph_feature_snapshot "
+                    "SET risk_flags = :flags::jsonb "
+                    "WHERE id = :sid"
+                ),
+                {"flags": str(flags).replace("'", '"'), "sid": str(snap_id)},
+            )
+            updated += 1
+
+        db.commit()
+        return {"domain": domain, "window_key": wk, "updated": updated, "skipped": skipped}
+    finally:
+        db.close()
+
+
+def retrain_with_feedback(
+    *,
+    domain: str = "cyber",
+    window_key: Optional[str] = None,
+    epochs: Optional[int] = None,
+    model_version: Optional[str] = None,
+    feedback_limit: int = 10_000,
+) -> Dict[str, object]:
+    """
+    One-shot: apply analyst feedback labels → retrain GNN on the updated snapshots.
+    Returns combined feedback stats + training result.
+    """
+    feedback_stats = apply_feedback_to_snapshots(
+        domain=domain,
+        window_key=window_key,
+        limit=feedback_limit,
+    )
+    train_result = train_gnn(
+        domain=domain,
+        window_key=window_key,
+        epochs=epochs,
+        model_version=model_version,
+    )
+    return {"feedback": feedback_stats, "training": train_result}
+
+
 def event_type_counts_last_24h() -> Dict[str, int]:
     text = _sql_text()
     db = get_db_session()

@@ -6,7 +6,7 @@ import json
 import logging
 import re
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, Iterator, List, Mapping, Optional, Sequence
 
@@ -544,6 +544,71 @@ def _run_kev_epss_job(args: argparse.Namespace) -> IngestionJobStats:
         )
     finally:
         db.close()
+
+
+def normalize_paysim_row(
+    row: Mapping[str, Any],
+    *,
+    dataset_name: str = "paysim_ke",
+) -> Optional[NormalizedConnectorRecord]:
+    """
+    Map a PaySim-format mobile-money row to a TRANSACTION_EVENT via core_banking_tx_v1.
+
+    Only fraud rows (isFraud=1) with transferable types are ingested — benign
+    transactions are already represented in the graph through other event sources.
+    This produces the mule-chain graph structure: TRANSFER → TRANSFER → CASH_OUT
+    across a ring of accounts, which is the core M-Pesa fraud pattern.
+    """
+    is_fraud = str(row.get("isFraud", "0")).strip()
+    if is_fraud not in ("1", "True", "true"):
+        return None
+
+    tx_type = str(row.get("type", "") or "").strip().upper()
+    if tx_type not in ("CASH_OUT", "TRANSFER", "DEBIT"):
+        return None
+
+    # PaySim step = 1-based hour counter (744 steps = 31-day simulation).
+    # Anchor to 2024-01-01 UTC so events land in a realistic window.
+    step = max(1, int(float(row.get("step", 1) or 1)))
+    ts_dt = datetime(2024, 1, 1, tzinfo=timezone.utc) + timedelta(hours=(step - 1) % 744)
+
+    amount = _as_float({"v": row.get("amount", 0)}, ("v",)) or 0.0
+    name_orig = str(row.get("nameOrig", "") or "").strip() or None
+    name_dest = str(row.get("nameDest", "") or "").strip() or None
+
+    if not name_orig and not name_dest:
+        return None
+
+    payload: Dict[str, Any] = {
+        "timestamp": ts_dt.isoformat(),
+        "amount": amount,
+        "currency": "KES",
+        "channel": f"mpesa_{tx_type.lower()}",
+        "dataset": dataset_name,
+    }
+    if name_orig:
+        payload["account_from"] = name_orig
+    if name_dest:
+        payload["account_to"] = name_dest
+
+    # Higher confidence when the transaction was also flagged by PaySim's rule engine.
+    is_flagged = str(row.get("isFlaggedFraud", "0")).strip() in ("1", "True", "true")
+    return NormalizedConnectorRecord(
+        connector_key="core_banking_tx_v1",
+        payload=payload,
+        confidence=0.95 if is_flagged else 0.87,
+    )
+
+
+def _iter_paysim_records(
+    rows: Iterable[Mapping[str, Any]],
+    *,
+    dataset_name: str,
+) -> Iterator[NormalizedConnectorRecord]:
+    for row in rows:
+        record = normalize_paysim_row(row, dataset_name=dataset_name)
+        if record is not None:
+            yield record
 
 
 def _iter_cic_records(

@@ -417,6 +417,8 @@ def run_once(
             learning_rate = learning_rate,
             weight_decay  = weight_decay,
             seed          = seed,
+            label_smoothing=0.05,
+            pseudo_label_threshold=0.0,
         )
     except Exception as exc:
         db.rollback()

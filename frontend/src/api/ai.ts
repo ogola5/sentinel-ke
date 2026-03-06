@@ -49,13 +49,30 @@ export async function fetchGNNTrainingRuns(limit = 10): Promise<GNNTrainingRun[]
   }
 }
 
-export async function fetchAIPredictions(limit = 20): Promise<AIPrediction[]> {
+export async function fetchAIPredictions(limit = 20, window_key?: string): Promise<AIPrediction[]> {
   try {
-    const data = await apiFetchJson<ListResponse<AIPrediction> | AIPrediction[]>(endpoints.aiPredictions(limit));
+    const data = await apiFetchJson<ListResponse<AIPrediction> | AIPrediction[]>(
+      endpoints.aiPredictions(limit, 0, window_key),
+    );
     return Array.isArray(data) ? data : (data.items ?? []);
   } catch {
     return [];
   }
+}
+
+export async function submitFeedback(
+  predictionId: string,
+  feedbackLabel: 0 | 1 | 2,
+  analystId: string,
+  notes?: string,
+): Promise<void> {
+  const params = new URLSearchParams({
+    prediction_id: predictionId,
+    feedback_label: String(feedbackLabel),
+    analyst_id: analystId,
+    ...(notes ? { notes } : {}),
+  });
+  await apiFetchJson(`${endpoints.aiFeedback()}?${params.toString()}`, { method: "POST" });
 }
 
 export async function fetchCryptoPosture(): Promise<CryptoPosture | null> {

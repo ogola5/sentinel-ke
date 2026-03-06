@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import {
   LineChart,
   Line,
@@ -11,9 +11,13 @@ import {
   RadialBar,
   Legend,
 } from "recharts";
-import { Brain, RefreshCw, Loader, AlertTriangle, Zap, Play, Database } from "lucide-react";
-import { fetchAIPredictions, fetchGNNTrainingRuns, triggerGNNTrain, seedDemoData } from "../../api/ai";
+import { Brain, RefreshCw, Loader, AlertTriangle, Zap, Play, Database, CheckCircle, XCircle, HelpCircle } from "lucide-react";
+import { fetchAIPredictions, fetchGNNTrainingRuns, triggerGNNTrain, seedDemoData, submitFeedback } from "../../api/ai";
 import type { AIPrediction, FairnessMetrics, GNNTrainingRun } from "../../types/ai";
+
+type FeedbackState = "confirmed" | "false_positive" | "uncertain";
+type Domain = "cyber" | "corruption";
+const DOMAIN_WINDOW: Record<Domain, string> = { cyber: "Wmid", corruption: "Wcorruption" };
 
 const FAIRNESS_COLORS: Record<"PASS" | "WARN" | "FAIL", string> = {
   PASS: "#30d158",
@@ -80,19 +84,23 @@ export default function GNNIntelligence({ healthGnnLoaded, healthModelVersion, h
   const [trainMsg, setTrainMsg] = useState<string | null>(null);
   const [trainBusy, setTrainBusy] = useState(false);
   const [seedBusy, setSeedBusy] = useState(false);
+  const [activeDomain, setActiveDomain] = useState<Domain>("cyber");
+  const [feedbackState, setFeedbackState] = useState<Record<string, FeedbackState>>({});
+  const [feedbackBusy, setFeedbackBusy] = useState<Record<string, boolean>>({});
 
-  const load = async () => {
+  const load = useCallback(async () => {
     setSyncing(true);
-    const [r, p] = await Promise.all([fetchGNNTrainingRuns(12), fetchAIPredictions(30)]);
+    const wk = DOMAIN_WINDOW[activeDomain];
+    const [r, p] = await Promise.all([fetchGNNTrainingRuns(12), fetchAIPredictions(50, wk)]);
     setRuns(r);
     setPredictions(p);
     setLoading(false);
     setSyncing(false);
-  };
+  }, [activeDomain]);
 
   useEffect(() => {
     void load();
-  }, []);
+  }, [load]);
 
   const handleSeed = async (domain: "cyber" | "corruption") => {
     setSeedBusy(true);
@@ -120,10 +128,27 @@ export default function GNNIntelligence({ healthGnnLoaded, healthModelVersion, h
     }
   };
 
+  const handleFeedback = async (pred: AIPrediction, label: FeedbackState) => {
+    setFeedbackBusy((p) => ({ ...p, [pred.id]: true }));
+    try {
+      const numLabel: 0 | 1 | 2 = label === "confirmed" ? 1 : label === "false_positive" ? 0 : 2;
+      await submitFeedback(pred.id, numLabel, "analyst");
+      setFeedbackState((p) => ({ ...p, [pred.id]: label }));
+    } catch {
+      // silently ignore — prediction row stays un-labelled
+    } finally {
+      setFeedbackBusy((p) => ({ ...p, [pred.id]: false }));
+    }
+  };
+
   const latestRun = runs[0] ?? null;
 
   const auc = latestRun?.auc ?? (healthGnnMetrics.auc as number | null) ?? null;
   const precision = latestRun?.precision ?? (healthGnnMetrics.precision as number | null) ?? null;
+  const f1 = latestRun?.f1 ?? (healthGnnMetrics.f1 as number | null) ?? null;
+  const recall = latestRun?.recall ?? (healthGnnMetrics.recall as number | null) ?? null;
+  const ece = (latestRun?.metrics?.calibration_ece ?? healthGnnMetrics.calibration_ece) as number | null;
+  const brierScore = (latestRun?.metrics?.brier_score ?? healthGnnMetrics.brier_score) as number | null;
   const nodeCount = latestRun?.node_count ?? (healthGnnMetrics.node_count as number | null) ?? null;
   const edgeCount = latestRun?.edge_count ?? (healthGnnMetrics.edge_count as number | null) ?? null;
   const positiveCount = latestRun?.positive_count ?? (healthGnnMetrics.positive_count as number | null) ?? null;
@@ -157,6 +182,7 @@ export default function GNNIntelligence({ healthGnnLoaded, healthModelVersion, h
 
   const abstainedCount = predictions.filter((p) => p.abstained).length;
   const highRiskCount = predictions.filter((p) => p.score >= 0.7).length;
+  const highUncertainCount = predictions.filter((p) => (p.uncertainty ?? 0) >= 0.5).length;
 
   return (
     <div>
@@ -167,6 +193,23 @@ export default function GNNIntelligence({ healthGnnLoaded, healthModelVersion, h
           <span className="subtitle">— Graph Neural Network · MC-Dropout uncertainty</span>
         </h2>
         <div className="screen-header-actions">
+          {/* Domain tabs */}
+          <div className="gnn-domain-tabs">
+            <button
+              type="button"
+              className={activeDomain === "cyber" ? "gnn-domain-tab active" : "gnn-domain-tab"}
+              onClick={() => setActiveDomain("cyber")}
+            >
+              Cyber (Wmid)
+            </button>
+            <button
+              type="button"
+              className={activeDomain === "corruption" ? "gnn-domain-tab active" : "gnn-domain-tab"}
+              onClick={() => setActiveDomain("corruption")}
+            >
+              Corruption (Wcorruption)
+            </button>
+          </div>
           <button type="button" className="btn-ghost" onClick={() => void load()} disabled={syncing}>
             {syncing ? <Loader size={14} className="spin" /> : <RefreshCw size={14} />}
             &nbsp;Refresh
@@ -217,7 +260,7 @@ export default function GNNIntelligence({ healthGnnLoaded, healthModelVersion, h
         </div>
       )}
 
-      {/* Metric cards */}
+      {/* Metric cards — now includes F1, Recall, ECE, Brier */}
       <div className="metric-grid">
         <div className="metric-card accent">
           <div className="metric-label">AUC</div>
@@ -227,7 +270,27 @@ export default function GNNIntelligence({ healthGnnLoaded, healthModelVersion, h
         <div className="metric-card info">
           <div className="metric-label">Precision</div>
           <div className="metric-value">{precision != null ? precision.toFixed(3) : "—"}</div>
-          <div className="metric-sub">True positive rate</div>
+          <div className="metric-sub">TP / (TP + FP)</div>
+        </div>
+        <div className="metric-card info">
+          <div className="metric-label">Recall</div>
+          <div className="metric-value">{recall != null ? recall.toFixed(3) : "—"}</div>
+          <div className="metric-sub">TP / (TP + FN)</div>
+        </div>
+        <div className="metric-card accent">
+          <div className="metric-label">F1 Score</div>
+          <div className="metric-value">{f1 != null ? f1.toFixed(3) : "—"}</div>
+          <div className="metric-sub">Harmonic mean P/R</div>
+        </div>
+        <div className="metric-card">
+          <div className="metric-label">ECE</div>
+          <div className="metric-value">{ece != null ? ece.toFixed(4) : "—"}</div>
+          <div className="metric-sub">Calibration error ↓</div>
+        </div>
+        <div className="metric-card">
+          <div className="metric-label">Brier Score</div>
+          <div className="metric-value">{brierScore != null ? brierScore.toFixed(4) : "—"}</div>
+          <div className="metric-sub">Probabilistic accuracy ↓</div>
         </div>
         <div className="metric-card">
           <div className="metric-label">Graph nodes</div>
@@ -250,11 +313,18 @@ export default function GNNIntelligence({ healthGnnLoaded, healthModelVersion, h
           <div className="metric-sub">Input vector size</div>
         </div>
         <div className="metric-card">
-          <div className="metric-label">High-risk preds</div>
-          <div className="metric-value" style={{ color: highRiskCount > 0 ? "var(--risk-high)" : undefined }}>
+          <div className="metric-label">High-risk</div>
+          <div className={`metric-value${highRiskCount > 0 ? " gnn-metric-danger" : ""}`}>
             {highRiskCount}
           </div>
           <div className="metric-sub">Score ≥ 0.70</div>
+        </div>
+        <div className="metric-card">
+          <div className="metric-label">Uncertain</div>
+          <div className={`metric-value${highUncertainCount > 0 ? " gnn-metric-warn" : ""}`}>
+            {highUncertainCount}
+          </div>
+          <div className="metric-sub">Need analyst review</div>
         </div>
         <div className="metric-card">
           <div className="metric-label">Abstained</div>
@@ -264,7 +334,7 @@ export default function GNNIntelligence({ healthGnnLoaded, healthModelVersion, h
         <FairnessBadge fairness={latestRun?.fairness} blocked={latestRun?.fairness_blocked} />
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
+      <div className="gnn-charts-grid">
         {/* Radial performance gauge */}
         <div className="panel">
           <div className="panel-header">
@@ -273,33 +343,17 @@ export default function GNNIntelligence({ healthGnnLoaded, healthModelVersion, h
           </div>
           {auc != null ? (
             <ResponsiveContainer width="100%" height={220}>
-              <RadialBarChart
-                cx="50%"
-                cy="50%"
-                innerRadius={40}
-                outerRadius={90}
-                data={radialData}
-                startAngle={90}
-                endAngle={-270}
-              >
+              <RadialBarChart cx="50%" cy="50%" innerRadius={40} outerRadius={90} data={radialData} startAngle={90} endAngle={-270}>
                 <RadialBar dataKey="value" cornerRadius={6} background={{ fill: "rgba(31,63,46,0.35)" }} />
-                <Legend
-                  iconType="circle"
-                  layout="horizontal"
-                  verticalAlign="bottom"
-                  wrapperStyle={{ fontSize: "0.75rem", opacity: 0.7 }}
-                />
+                <Legend iconType="circle" layout="horizontal" verticalAlign="bottom" wrapperStyle={{ fontSize: "0.75rem", opacity: 0.7 }} />
                 <Tooltip
-                  formatter={(v: number | string | undefined) => [`${Number(v ?? 0)}%`]}
+                  formatter={(value: number | string | undefined) => [`${Number(value ?? 0)}%`]}
                   contentStyle={{ background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 8 }}
                 />
               </RadialBarChart>
             </ResponsiveContainer>
           ) : (
-            <div className="state-box">
-              <Brain size={28} />
-              <p>No model metrics yet</p>
-            </div>
+            <div className="state-box"><Brain size={28} /><p>No model metrics yet</p></div>
           )}
         </div>
 
@@ -317,17 +371,14 @@ export default function GNNIntelligence({ healthGnnLoaded, healthModelVersion, h
                 <YAxis domain={[0, 100]} tick={{ fontSize: 10, fill: "var(--ink-muted)" }} unit="%" />
                 <Tooltip
                   contentStyle={{ background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 8, fontSize: 12 }}
-                  formatter={(v: number | string | undefined) => [`${Number(v ?? 0).toFixed(1)}%`]}
+                  formatter={(value: number | string | undefined) => [`${Number(value ?? 0).toFixed(1)}%`]}
                 />
                 <Line type="monotone" dataKey="auc" name="AUC" stroke="var(--accent)" strokeWidth={2} dot={{ r: 3 }} />
                 <Line type="monotone" dataKey="precision" name="Precision" stroke="var(--info)" strokeWidth={2} dot={{ r: 3 }} />
               </LineChart>
             </ResponsiveContainer>
           ) : (
-            <div className="state-box">
-              <Zap size={24} />
-              <p>No training history — endpoint may not exist yet</p>
-            </div>
+            <div className="state-box"><Zap size={24} /><p>No training history yet</p></div>
           )}
         </div>
       </div>
@@ -346,142 +397,137 @@ export default function GNNIntelligence({ healthGnnLoaded, healthModelVersion, h
           <ResponsiveContainer width="100%" height={220}>
             <LineChart data={epochChartData} margin={{ top: 8, right: 16, left: -16, bottom: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="var(--line)" />
-              <XAxis
-                dataKey="epoch"
-                tick={{ fontSize: 10, fill: "var(--ink-muted)" }}
-                label={{ value: "Epoch", position: "insideBottomRight", offset: -4, fontSize: 10, fill: "var(--ink-muted)" }}
-              />
-              <YAxis
-                tick={{ fontSize: 10, fill: "var(--ink-muted)" }}
-                domain={["auto", "auto"]}
-                label={{ value: "Loss", angle: -90, position: "insideLeft", offset: 12, fontSize: 10, fill: "var(--ink-muted)" }}
-              />
+              <XAxis dataKey="epoch" tick={{ fontSize: 10, fill: "var(--ink-muted)" }} label={{ value: "Epoch", position: "insideBottomRight", offset: -4, fontSize: 10, fill: "var(--ink-muted)" }} />
+              <YAxis tick={{ fontSize: 10, fill: "var(--ink-muted)" }} domain={["auto", "auto"]} label={{ value: "Loss", angle: -90, position: "insideLeft", offset: 12, fontSize: 10, fill: "var(--ink-muted)" }} />
               <Tooltip
                 contentStyle={{ background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 8, fontSize: 12 }}
-                formatter={(v: number | string | undefined, name: string) => [
-                  typeof v === "number" ? v.toFixed(5) : v,
-                  name === "train" ? "Train loss" : "Val loss",
-                ]}
+                formatter={(value: number | string | undefined) => [typeof value === "number" ? value.toFixed(5) : String(value ?? "")]}
               />
-              <Line
-                type="monotone" dataKey="train" name="train"
-                stroke="var(--accent)" strokeWidth={2} dot={false}
-                activeDot={{ r: 4 }}
-              />
+              <Line type="monotone" dataKey="train" name="Train loss" stroke="var(--accent)" strokeWidth={2} dot={false} activeDot={{ r: 4 }} />
               {epochValLosses.length > 0 && (
-                <Line
-                  type="monotone" dataKey="val" name="val"
-                  stroke="var(--info)" strokeWidth={2} dot={false}
-                  strokeDasharray="5 3" activeDot={{ r: 4 }}
-                />
+                <Line type="monotone" dataKey="val" name="Val loss" stroke="var(--info)" strokeWidth={2} dot={false} strokeDasharray="5 3" activeDot={{ r: 4 }} />
               )}
-              <Legend
-                iconType="line" layout="horizontal" verticalAlign="top" align="right"
-                formatter={(v: string) => v === "train" ? "Train loss" : "Val loss"}
-                wrapperStyle={{ fontSize: "0.75rem", opacity: 0.7 }}
-              />
+              <Legend iconType="line" layout="horizontal" verticalAlign="top" align="right" wrapperStyle={{ fontSize: "0.75rem", opacity: 0.7 }} />
             </LineChart>
           </ResponsiveContainer>
         ) : (
-          <div className="state-box">
-            <Zap size={24} />
-            <p>Retrain the GNN to generate epoch-by-epoch loss curves here.</p>
-          </div>
+          <div className="state-box"><Zap size={24} /><p>Retrain the GNN to generate epoch-by-epoch loss curves here.</p></div>
         )}
       </div>
 
-      {/* Predictions table */}
+      {/* Predictions table — with uncertainty bar + analyst feedback */}
       <div className="panel">
         <div className="panel-header">
           <h3>Entity Predictions</h3>
-          <span className="muted">{predictions.length} predictions · MC-Dropout uncertainty</span>
+          <span className="muted">
+            {predictions.length} predictions · {activeDomain === "cyber" ? "Cyber / Wmid" : "Corruption / Wcorruption"}
+            {highUncertainCount > 0 && <span className="gnn-uncertain-badge">&nbsp;· {highUncertainCount} need review</span>}
+          </span>
         </div>
         {loading ? (
-          <div className="state-box">
-            <Loader size={22} />
-            <p>Loading predictions…</p>
-          </div>
+          <div className="state-box"><Loader size={22} /><p>Loading predictions…</p></div>
         ) : predictions.length === 0 ? (
-          <div className="state-box">
-            <Brain size={28} />
-            <p>No predictions yet. Run inference consumer to generate scores.</p>
-          </div>
+          <div className="state-box"><Brain size={28} /><p>No predictions yet — run the inference consumer or train the GNN.</p></div>
         ) : (
-          <div style={{ overflowX: "auto" }}>
+          <div className="gnn-table-scroll">
             <table className="data-table">
               <thead>
                 <tr>
-                  <th>Entity Key</th>
-                  <th>Type</th>
+                  <th>Entity</th>
                   <th>Risk Score</th>
-                  <th>Confidence</th>
                   <th>Uncertainty</th>
-                  <th>Kill-Chain Stage</th>
+                  <th>Confidence</th>
+                  <th>Kill-Chain</th>
                   <th>Top Driver</th>
-                  <th>Explainability</th>
                   <th>Status</th>
+                  <th>Analyst Feedback</th>
                 </tr>
               </thead>
               <tbody>
-                {predictions.map((p) => (
-                  <tr key={p.id}>
-                    <td>
-                      <span className="mono" style={{ fontSize: "0.78rem" }}>
-                        {shortKey(p.entity_key)}
-                      </span>
-                    </td>
-                    <td>
-                      <span className="muted" style={{ fontSize: "0.78rem" }}>
-                        {p.prediction_type}
-                      </span>
-                    </td>
-                    <td>
-                      <div className="score-bar-wrap">
-                        <div className="score-bar-track">
-                          <div
-                            className="score-bar-fill"
-                            style={{ width: `${p.score * 100}%`, background: scoreColor(p.score) }}
-                          />
+                {predictions.map((p) => {
+                  const u = p.uncertainty ?? 0;
+                  const isHighUncertain = u >= 0.5;
+                  const fb = feedbackState[p.id];
+                  const busy = feedbackBusy[p.id] ?? false;
+                  const uColor = u >= 0.75 ? "var(--risk-critical)" : u >= 0.5 ? "var(--warning)" : "var(--risk-low)";
+                  return (
+                    <tr key={p.id} className={isHighUncertain ? "gnn-row-uncertain" : undefined}>
+                      <td>
+                        <span className="mono gnn-entity-key">{shortKey(p.entity_key)}</span>
+                        <span className="muted gnn-pred-type">{p.prediction_type}</span>
+                      </td>
+                      <td>
+                        <div className="score-bar-wrap">
+                          <div className="score-bar-track">
+                            <div className="score-bar-fill" style={{ width: `${p.score * 100}%`, background: scoreColor(p.score) }} />
+                          </div>
+                          <span className="gnn-score-label" style={{ color: scoreColor(p.score) }}>{p.score.toFixed(2)}</span>
                         </div>
-                        <span style={{ fontSize: "0.78rem", color: scoreColor(p.score), minWidth: 36 }}>
-                          {p.score.toFixed(2)}
-                        </span>
-                      </div>
-                    </td>
-                    <td style={{ fontSize: "0.78rem" }}>{p.confidence != null ? p.confidence.toFixed(2) : "—"}</td>
-                    <td style={{ fontSize: "0.78rem" }}>{p.uncertainty != null ? p.uncertainty.toFixed(3) : "—"}</td>
-                    <td>
-                      {p.kill_chain_stage ? (
-                        <span className="risk-badge info">{p.kill_chain_stage}</span>
-                      ) : (
-                        <span className="muted">—</span>
-                      )}
-                    </td>
-                    <td>
-                      {p.top_feature ? (
-                        <span className="mono" style={{ fontSize: "0.72rem" }}>
-                          {p.top_feature}
-                        </span>
-                      ) : (
-                        <span className="muted">—</span>
-                      )}
-                    </td>
-                    <td style={{ fontSize: "0.74rem" }}>
-                      {p.explanation_method ? (
-                        p.explanation_method === "gradient_x_input" ? "Model attribution" : "Heuristic signals"
-                      ) : (
-                        "—"
-                      )}
-                    </td>
-                    <td>
-                      {p.abstained ? (
-                        <span className="risk-badge medium">Abstained</span>
-                      ) : (
-                        <span className={`risk-badge ${riskClass(p.score)}`}>{riskClass(p.score)}</span>
-                      )}
-                    </td>
-                  </tr>
-                ))}
+                      </td>
+                      <td>
+                        <div className="score-bar-wrap">
+                          <div className="score-bar-track">
+                            <div className="score-bar-fill" style={{ width: `${u * 100}%`, background: uColor }} />
+                          </div>
+                          <span className="gnn-score-label" style={{ color: uColor }}>{u.toFixed(3)}</span>
+                        </div>
+                      </td>
+                      <td className="gnn-cell-sm">{p.confidence != null ? p.confidence.toFixed(2) : "—"}</td>
+                      <td>
+                        {p.kill_chain_stage
+                          ? <span className="risk-badge info">{p.kill_chain_stage}</span>
+                          : <span className="muted">—</span>}
+                      </td>
+                      <td>
+                        {p.top_feature
+                          ? <span className="mono gnn-top-feature">{p.top_feature}</span>
+                          : <span className="muted">—</span>}
+                      </td>
+                      <td>
+                        {p.abstained
+                          ? <span className="risk-badge medium">Abstained</span>
+                          : <span className={`risk-badge ${riskClass(p.score)}`}>{riskClass(p.score)}</span>}
+                      </td>
+                      <td>
+                        {fb ? (
+                          <span className={`gnn-feedback-done ${fb}`}>
+                            {fb === "confirmed" ? "✓ Threat" : fb === "false_positive" ? "✗ FP" : "? Uncertain"}
+                          </span>
+                        ) : (
+                          <div className="gnn-feedback-btns">
+                            <button
+                              type="button"
+                              className="gnn-fb-btn confirm"
+                              title="Confirm threat"
+                              disabled={busy}
+                              onClick={() => void handleFeedback(p, "confirmed")}
+                            >
+                              {busy ? <Loader size={11} className="spin" /> : <CheckCircle size={13} />}
+                            </button>
+                            <button
+                              type="button"
+                              className="gnn-fb-btn reject"
+                              title="Mark false positive"
+                              disabled={busy}
+                              onClick={() => void handleFeedback(p, "false_positive")}
+                            >
+                              {busy ? <Loader size={11} className="spin" /> : <XCircle size={13} />}
+                            </button>
+                            <button
+                              type="button"
+                              className="gnn-fb-btn uncertain"
+                              title="Mark uncertain"
+                              disabled={busy}
+                              onClick={() => void handleFeedback(p, "uncertain")}
+                            >
+                              {busy ? <Loader size={11} className="spin" /> : <HelpCircle size={13} />}
+                            </button>
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

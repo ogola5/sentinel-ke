@@ -1199,6 +1199,8 @@ def run_once(
             pretrain_epochs=pretrain_epochs,
             split_policy=split_policy,
             val_ratio=val_ratio,
+            label_smoothing=0.05,
+            pseudo_label_threshold=0.0,
         )
     except Exception as exc:
         db.rollback()

@@ -46,7 +46,9 @@ export const endpoints = {
   anomalies: (limit = 10, offset = 0) => withQuery("/v1/anomalies", { limit, offset }),
   mitigations: (limit = 10, offset = 0) => withQuery("/v1/mitigations", { limit, offset }),
   mitigationsExport: () => withBase("/v1/mitigations/export"),
-  aiPredictions: (limit = 10, offset = 0) => withQuery("/v1/ai/predictions", { limit, offset }),
+  aiPredictions: (limit = 10, offset = 0, window_key?: string) =>
+    withQuery("/v1/ai/predictions", { limit, offset, ...(window_key ? { window_key } : {}) }),
+  aiFeedback: () => withBase("/v1/ai/feedback"),
   aiPredictionExplanation: (predictionId: string) =>
     withBase(`/v1/ai/explanations/${encodeURIComponent(predictionId)}`),
   economySignals: (limit = 10, offset = 0) => withQuery("/v1/economy/signals", { limit, offset }),
