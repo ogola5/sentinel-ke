@@ -2,13 +2,17 @@ export interface GNNTrainingRun {
   id: string;
   model_version: string;
   prediction_type: string;
+  window_key?: string | null;
   auc: number | null;
   precision: number | null;
+  recall?: number | null;
+  f1?: number | null;
   node_count: number | null;
   edge_count: number | null;
   positive_count: number | null;
   feature_dim: number | null;
   artifact_path: string | null;
+  metrics?: Record<string, unknown> | null;
   created_at: string;
 }
 
@@ -53,4 +57,16 @@ export interface SelfTestResult {
   passed: boolean;
   duration_ms?: number;
   detail?: string | null;
+}
+
+export interface AIFeedback {
+  id: string;
+  prediction_id: string;
+  entity_key: string;
+  feedback_label: number;
+  analyst_id: string;
+  notes?: string | null;
+  status: string;
+  used_in_training?: boolean;
+  created_at: string;
 }

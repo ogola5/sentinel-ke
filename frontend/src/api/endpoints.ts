@@ -16,10 +16,13 @@ const API_BASE = resolveApiBase();
 
 const withBase = (path: string) => `${API_BASE}${path}`;
 
-const withQuery = (path: string, query: Record<string, string | number | undefined>) => {
+const withQuery = (
+  path: string,
+  query: Record<string, string | number | boolean | undefined | null>,
+) => {
   const params = new URLSearchParams();
   Object.entries(query).forEach(([k, v]) => {
-    if (v === undefined) return;
+    if (v === undefined || v === null) return;
     params.set(k, String(v));
   });
   const qs = params.toString();
@@ -49,9 +52,19 @@ export const endpoints = {
   anomalies: (limit = 10, offset = 0) => withQuery("/v1/anomalies", { limit, offset }),
   mitigations: (limit = 10, offset = 0) => withQuery("/v1/mitigations", { limit, offset }),
   mitigationsExport: () => withBase("/v1/mitigations/export"),
-  aiPredictions: (limit = 10, offset = 0) => withQuery("/v1/ai/predictions", { limit, offset }),
+  aiPredictions: (limit = 10, offset = 0, windowKey?: string) =>
+    withQuery("/v1/ai/predictions", { limit, offset, window_key: windowKey }),
   aiPredictionExplanation: (predictionId: string) =>
     withBase(`/v1/ai/explanations/${encodeURIComponent(predictionId)}`),
+  aiFeedbackSubmit: (predictionId: string, feedbackLabel: number, analystId: string, notes?: string) =>
+    withQuery("/v1/ai/feedback", {
+      prediction_id: predictionId,
+      feedback_label: feedbackLabel,
+      analyst_id: analystId,
+      notes,
+    }),
+  aiFeedback: (limit = 50, offset = 0, analystId?: string) =>
+    withQuery("/v1/ai/feedback", { limit, offset, analyst_id: analystId }),
   economySignals: (limit = 10, offset = 0) => withQuery("/v1/economy/signals", { limit, offset }),
   economyProcurementAnomalies: (limit = 10, offset = 0) =>
     withQuery("/v1/economy/procurement/anomalies", { limit, offset }),

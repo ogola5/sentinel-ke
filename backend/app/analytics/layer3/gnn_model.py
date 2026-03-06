@@ -312,12 +312,32 @@ def _binary_metrics(
     recall    = tp / (tp + fn) if (tp + fn) > 0 else 0.0
     f1 = (2 * precision * recall / (precision + recall)) if (precision + recall) > 0 else 0.0
     acc = (tp + tn) / max(1, len(y_true))
+    brier = sum((float(prob) - float(label)) ** 2 for label, prob in zip(y_true, probs)) / max(1, len(y_true))
+
+    # Expected calibration error with 10 equal-width bins.
+    ece = 0.0
+    n = max(1, len(y_true))
+    for idx in range(10):
+        lower = idx / 10.0
+        upper = (idx + 1) / 10.0
+        bucket = [
+            (int(label), float(prob))
+            for label, prob in zip(y_true, probs)
+            if lower <= float(prob) < upper or (idx == 9 and float(prob) == 1.0)
+        ]
+        if not bucket:
+            continue
+        bucket_conf = sum(prob for _, prob in bucket) / len(bucket)
+        bucket_acc = sum(label for label, _ in bucket) / len(bucket)
+        ece += (len(bucket) / n) * abs(bucket_acc - bucket_conf)
 
     return {
         "accuracy":  round(acc, 6),
         "precision": round(precision, 6),
         "recall":    round(recall, 6),
         "f1":        round(f1, 6),
+        "brier":     round(brier, 6),
+        "ece":       round(ece, 6),
         "auc":       round(_auc_sampled(y_true, probs), 6),
     }
 

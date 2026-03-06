@@ -1,6 +1,6 @@
 import { apiFetchJson } from "./client";
 import { endpoints } from "./endpoints";
-import type { AIPrediction, CryptoPosture, GNNTrainingRun, SelfTestResult } from "../types/ai";
+import type { AIFeedback, AIPrediction, CryptoPosture, GNNTrainingRun, SelfTestResult } from "../types/ai";
 
 interface ListResponse<T> {
   total?: number;
@@ -31,9 +31,38 @@ export async function fetchGNNTrainingRuns(limit = 10): Promise<GNNTrainingRun[]
   }
 }
 
-export async function fetchAIPredictions(limit = 20): Promise<AIPrediction[]> {
+export async function fetchAIPredictions(limit = 20, windowKey?: string): Promise<AIPrediction[]> {
   try {
-    const data = await apiFetchJson<ListResponse<AIPrediction> | AIPrediction[]>(endpoints.aiPredictions(limit));
+    const data = await apiFetchJson<ListResponse<AIPrediction> | AIPrediction[]>(
+      endpoints.aiPredictions(limit, 0, windowKey),
+    );
+    return Array.isArray(data) ? data : (data.items ?? []);
+  } catch {
+    return [];
+  }
+}
+
+export async function submitAIFeedback(
+  predictionId: string,
+  feedbackLabel: number,
+  analystId: string,
+  notes?: string,
+): Promise<AIFeedback | null> {
+  try {
+    return await apiFetchJson<AIFeedback>(
+      endpoints.aiFeedbackSubmit(predictionId, feedbackLabel, analystId, notes),
+      { method: "POST" },
+    );
+  } catch {
+    return null;
+  }
+}
+
+export async function fetchAIFeedback(analystId: string, limit = 200): Promise<AIFeedback[]> {
+  try {
+    const data = await apiFetchJson<ListResponse<AIFeedback> | AIFeedback[]>(
+      endpoints.aiFeedback(limit, 0, analystId),
+    );
     return Array.isArray(data) ? data : (data.items ?? []);
   } catch {
     return [];

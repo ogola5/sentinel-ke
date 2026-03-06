@@ -45,4 +45,8 @@ def test_train_graphsage_on_synthetic_graph():
     assert len(out.embeddings[0]) == 8
     assert len(out.probabilities) == 8
     assert "auc" in out.metrics
+    assert "ece" in out.metrics
+    assert "brier" in out.metrics
     assert 0.0 <= out.metrics["auc"] <= 1.0
+    assert 0.0 <= out.metrics["ece"] <= 1.0
+    assert 0.0 <= out.metrics["brier"] <= 1.0
