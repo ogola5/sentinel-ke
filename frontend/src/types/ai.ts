@@ -17,6 +17,9 @@ export interface GNNTrainingRun {
   id: string;
   model_version: string;
   prediction_type: string;
+  source_backend?: string | null;
+  window_key?: string | null;
+  window_end?: string | null;
   auc: number | null;
   precision: number | null;
   recall: number | null;
@@ -29,13 +32,17 @@ export interface GNNTrainingRun {
   positive_count: number | null;
   feature_dim: number | null;
   artifact_path: string | null;
+  params?: Record<string, unknown> | null;
   fairness?: FairnessMetrics;
   fairness_blocked?: boolean;
+  provenance?: Record<string, unknown> | null;
+  real_data_gate?: Record<string, unknown> | null;
+  real_data_gate_passed?: boolean;
   metrics?: {
     epoch_train_losses?: number[];
     epoch_val_losses?: number[];
     [key: string]: unknown;
-  };
+  } | null;
   created_at: string;
 }
 
@@ -83,4 +90,16 @@ export interface SelfTestResult {
   passed: boolean;
   duration_ms?: number;
   detail?: string | null;
+}
+
+export interface AIFeedback {
+  id: string;
+  prediction_id: string;
+  entity_key: string;
+  feedback_label: number;
+  analyst_id: string;
+  notes?: string | null;
+  status: string;
+  used_in_training?: boolean;
+  created_at: string;
 }

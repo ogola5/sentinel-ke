@@ -1,29 +1,59 @@
-import { useEffect, useState, useCallback } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  LineChart,
+  CartesianGrid,
+  Legend,
   Line,
+  LineChart,
+  RadialBar,
+  RadialBarChart,
+  ResponsiveContainer,
+  Tooltip,
   XAxis,
   YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer,
-  RadialBarChart,
-  RadialBar,
-  Legend,
 } from "recharts";
-import { Brain, RefreshCw, Loader, AlertTriangle, Zap, Play, Database, CheckCircle, XCircle, HelpCircle } from "lucide-react";
-import { fetchAIPredictions, fetchGNNTrainingRuns, triggerGNNTrain, seedDemoData, submitFeedback } from "../../api/ai";
-import type { AIPrediction, FairnessMetrics, GNNTrainingRun } from "../../types/ai";
+import {
+  AlertTriangle,
+  Brain,
+  CheckCircle,
+  Database,
+  HelpCircle,
+  Loader,
+  Play,
+  RefreshCw,
+  XCircle,
+  Zap,
+} from "lucide-react";
+import {
+  fetchAIFeedback,
+  fetchAIPredictions,
+  fetchGNNTrainingRuns,
+  seedDemoData,
+  submitAIFeedback,
+  triggerGNNTrain,
+} from "../../api/ai";
+import type { AIFeedback, AIPrediction, FairnessMetrics, GNNTrainingRun } from "../../types/ai";
 
-type FeedbackState = "confirmed" | "false_positive" | "uncertain";
+const ANALYST_ID_STORAGE_KEY = "sentinel_analyst_id";
+
 type Domain = "cyber" | "corruption";
-const DOMAIN_WINDOW: Record<Domain, string> = { cyber: "Wmid", corruption: "Wcorruption" };
+type DomainWindowKey = "Wmid" | "Wcorruption";
+
+const DOMAIN_OPTIONS: Array<{ domain: Domain; windowKey: DomainWindowKey; label: string }> = [
+  { domain: "cyber", windowKey: "Wmid", label: "Cyber (Wmid)" },
+  { domain: "corruption", windowKey: "Wcorruption", label: "Corruption (Wcorruption)" },
+];
 
 const FAIRNESS_COLORS: Record<"PASS" | "WARN" | "FAIL", string> = {
   PASS: "#30d158",
   WARN: "#ff9f0a",
   FAIL: "#ff2d55",
 };
+
+const FEEDBACK_OPTIONS = [
+  { label: "Confirm threat", value: 1 as const, icon: CheckCircle },
+  { label: "False positive", value: 0 as const, icon: XCircle },
+  { label: "Uncertain", value: 2 as const, icon: HelpCircle },
+];
 
 function FairnessBadge({
   fairness,
@@ -45,11 +75,42 @@ function FairnessBadge({
       </div>
       {blocked && (
         <div style={{ marginTop: 4, fontSize: 11, color: "#ff2d55", fontWeight: 600 }}>
-          ⚠ Deployment blocked by fairness policy
+          Deployment blocked by fairness policy
         </div>
       )}
     </div>
   );
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+}
+
+function asNumber(value: unknown): number | null {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+function metricNumber(source: unknown, ...keys: string[]): number | null {
+  if (keys.length === 0) return asNumber(source);
+  const record = asRecord(source);
+  for (const key of keys) {
+    const parsed = asNumber(record[key]);
+    if (parsed != null) return parsed;
+  }
+  return null;
+}
+
+function asNumberArray(value: unknown): number[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((entry) => Number(entry))
+    .filter((entry) => Number.isFinite(entry));
+}
+
+function clampPercent(value: number | null | undefined): number {
+  if (value == null) return 0;
+  return Math.max(0, Math.min(100, value * 100));
 }
 
 function riskClass(score: number): string {
@@ -66,8 +127,39 @@ function scoreColor(score: number): string {
   return "var(--risk-low)";
 }
 
+function uncertaintyColor(uncertainty: number | null | undefined): string {
+  if ((uncertainty ?? 0) >= 0.75) return "var(--risk-critical)";
+  if ((uncertainty ?? 0) >= 0.5) return "var(--warning)";
+  return "var(--accent)";
+}
+
 function shortKey(key: string): string {
   return key.length > 14 ? `${key.slice(0, 6)}…${key.slice(-6)}` : key;
+}
+
+function feedbackClass(label: number): "confirmed" | "false_positive" | "uncertain" {
+  if (label === 1) return "confirmed";
+  if (label === 0) return "false_positive";
+  return "uncertain";
+}
+
+function feedbackLabelText(label: number): string {
+  if (label === 1) return "Threat confirmed";
+  if (label === 0) return "False positive";
+  return "Marked uncertain";
+}
+
+function loadAnalystId(): string {
+  const fromEnv = String(import.meta.env.VITE_ANALYST_ID ?? "").trim();
+  if (fromEnv) return fromEnv;
+  if (typeof window === "undefined") return "sentinel-ui-analyst";
+
+  const fromStorage = window.localStorage.getItem(ANALYST_ID_STORAGE_KEY)?.trim();
+  if (fromStorage) return fromStorage;
+
+  const generated = `sentinel-ui-${Math.random().toString(36).slice(2, 10)}`;
+  window.localStorage.setItem(ANALYST_ID_STORAGE_KEY, generated);
+  return generated;
 }
 
 interface Props {
@@ -76,113 +168,152 @@ interface Props {
   healthGnnMetrics: Record<string, unknown>;
 }
 
-export default function GNNIntelligence({ healthGnnLoaded, healthModelVersion, healthGnnMetrics }: Props) {
+export default function GNNIntelligence({
+  healthGnnLoaded,
+  healthModelVersion,
+  healthGnnMetrics,
+}: Props) {
   const [runs, setRuns] = useState<GNNTrainingRun[]>([]);
   const [predictions, setPredictions] = useState<AIPrediction[]>([]);
+  const [feedbackByPrediction, setFeedbackByPrediction] = useState<Record<string, AIFeedback>>({});
+  const [activeDomain, setActiveDomain] = useState<Domain>("cyber");
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [trainMsg, setTrainMsg] = useState<string | null>(null);
   const [trainBusy, setTrainBusy] = useState(false);
   const [seedBusy, setSeedBusy] = useState(false);
-  const [activeDomain, setActiveDomain] = useState<Domain>("cyber");
-  const [feedbackState, setFeedbackState] = useState<Record<string, FeedbackState>>({});
-  const [feedbackBusy, setFeedbackBusy] = useState<Record<string, boolean>>({});
+  const [feedbackBusyId, setFeedbackBusyId] = useState<string | null>(null);
+  const [feedbackError, setFeedbackError] = useState("");
+
+  const analystId = useMemo(() => loadAnalystId(), []);
+  const activeWindowKey = DOMAIN_OPTIONS.find((option) => option.domain === activeDomain)?.windowKey ?? "Wmid";
 
   const load = useCallback(async () => {
     setSyncing(true);
-    const wk = DOMAIN_WINDOW[activeDomain];
-    const [r, p] = await Promise.all([fetchGNNTrainingRuns(12), fetchAIPredictions(50, wk)]);
-    setRuns(r);
-    setPredictions(p);
-    setLoading(false);
-    setSyncing(false);
-  }, [activeDomain]);
+    setFeedbackError("");
+    try {
+      const [runRows, predictionRows, feedbackRows] = await Promise.all([
+        fetchGNNTrainingRuns(24),
+        fetchAIPredictions(50, activeWindowKey),
+        fetchAIFeedback(analystId, 200),
+      ]);
+      setRuns(runRows);
+      setPredictions(predictionRows);
+      setFeedbackByPrediction(
+        feedbackRows.reduce<Record<string, AIFeedback>>((acc, row) => {
+          acc[row.prediction_id] = row;
+          return acc;
+        }, {}),
+      );
+    } finally {
+      setLoading(false);
+      setSyncing(false);
+    }
+  }, [activeWindowKey, analystId]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
-  const handleSeed = async (domain: "cyber" | "corruption") => {
+  const handleSeed = async (domain: Domain) => {
     setSeedBusy(true);
     setTrainMsg(null);
     try {
-      const r = await seedDemoData(domain);
-      setTrainMsg(`Seeding started: ${r.message}`);
-    } catch (e: unknown) {
-      setTrainMsg(`Seed failed: ${String(e)}`);
+      const response = await seedDemoData(domain);
+      setTrainMsg(`Seeding started: ${response.message}`);
+    } catch (error: unknown) {
+      setTrainMsg(`Seed failed: ${String(error)}`);
     } finally {
       setSeedBusy(false);
     }
   };
 
-  const handleTrain = async (domain: "cyber" | "corruption") => {
+  const handleTrain = async (domain: Domain) => {
     setTrainBusy(true);
     setTrainMsg(null);
     try {
-      const r = await triggerGNNTrain(domain);
-      setTrainMsg(`Training accepted (${r.model_version}): ${r.message}`);
-    } catch (e: unknown) {
-      setTrainMsg(`Train failed: ${String(e)}`);
+      const response = await triggerGNNTrain(domain);
+      setTrainMsg(`Training accepted (${response.model_version}): ${response.message}`);
+    } catch (error: unknown) {
+      setTrainMsg(`Train failed: ${String(error)}`);
     } finally {
       setTrainBusy(false);
     }
   };
 
-  const handleFeedback = async (pred: AIPrediction, label: FeedbackState) => {
-    setFeedbackBusy((p) => ({ ...p, [pred.id]: true }));
-    try {
-      const numLabel: 0 | 1 | 2 = label === "confirmed" ? 1 : label === "false_positive" ? 0 : 2;
-      await submitFeedback(pred.id, numLabel, "analyst");
-      setFeedbackState((p) => ({ ...p, [pred.id]: label }));
-    } catch {
-      // silently ignore — prediction row stays un-labelled
-    } finally {
-      setFeedbackBusy((p) => ({ ...p, [pred.id]: false }));
+  const handleFeedback = async (predictionId: string, feedbackLabel: 0 | 1 | 2) => {
+    setFeedbackBusyId(predictionId);
+    setFeedbackError("");
+    const response = await submitAIFeedback(predictionId, feedbackLabel, analystId);
+    if (!response) {
+      setFeedbackError("Feedback submission failed. Check API key and backend auth.");
+      setFeedbackBusyId(null);
+      return;
     }
+    setFeedbackByPrediction((prev) => ({ ...prev, [predictionId]: response }));
+    setFeedbackBusyId(null);
   };
 
-  const latestRun = runs[0] ?? null;
+  const filteredRuns = useMemo(
+    () => runs.filter((run) => (run.window_key ?? "") === activeWindowKey),
+    [runs, activeWindowKey],
+  );
 
-  const auc = latestRun?.auc ?? (healthGnnMetrics.auc as number | null) ?? null;
-  const precision = latestRun?.precision ?? (healthGnnMetrics.precision as number | null) ?? null;
-  const f1 = latestRun?.f1 ?? (healthGnnMetrics.f1 as number | null) ?? null;
-  const recall = latestRun?.recall ?? (healthGnnMetrics.recall as number | null) ?? null;
-  const ece = (latestRun?.metrics?.calibration_ece ?? healthGnnMetrics.calibration_ece) as number | null;
-  const brierScore = (latestRun?.metrics?.brier_score ?? healthGnnMetrics.brier_score) as number | null;
-  const nodeCount = latestRun?.node_count ?? (healthGnnMetrics.node_count as number | null) ?? null;
-  const edgeCount = latestRun?.edge_count ?? (healthGnnMetrics.edge_count as number | null) ?? null;
-  const positiveCount = latestRun?.positive_count ?? (healthGnnMetrics.positive_count as number | null) ?? null;
-  const featureDim = latestRun?.feature_dim ?? (healthGnnMetrics.feature_dim as number | null) ?? null;
+  const latestRun = filteredRuns[0] ?? null;
+  const latestMetrics = asRecord(latestRun?.metrics);
+
+  const auc = latestRun?.auc ?? metricNumber(healthGnnMetrics, "auc");
+  const precision = latestRun?.precision ?? metricNumber(healthGnnMetrics, "precision");
+  const recall = latestRun?.recall ?? metricNumber(latestMetrics, "recall") ?? metricNumber(healthGnnMetrics, "recall");
+  const f1 = latestRun?.f1 ?? metricNumber(latestMetrics, "f1") ?? metricNumber(healthGnnMetrics, "f1");
+  const ece = metricNumber(latestMetrics, "calibration_ece", "ece") ?? metricNumber(healthGnnMetrics, "calibration_ece", "ece");
+  const brierScore = metricNumber(latestMetrics, "brier_score", "brier") ?? metricNumber(healthGnnMetrics, "brier_score", "brier");
+  const nodeCount = latestRun?.node_count ?? metricNumber(healthGnnMetrics, "node_count");
+  const edgeCount = latestRun?.edge_count ?? metricNumber(healthGnnMetrics, "edge_count");
+  const positiveCount = latestRun?.positive_count ?? metricNumber(healthGnnMetrics, "positive_count");
+  const featureDim = latestRun?.feature_dim ?? metricNumber(healthGnnMetrics, "feature_dim");
   const modelVersion = latestRun?.model_version ?? healthModelVersion ?? "—";
-  const predictionType = latestRun?.prediction_type ?? (healthGnnMetrics.prediction_type as string | null) ?? "—";
+  const predictionType = latestRun?.prediction_type ?? (typeof healthGnnMetrics.prediction_type === "string" ? healthGnnMetrics.prediction_type : "—");
 
-  // Epoch loss curve data from metrics_json
-  const epochTrainLosses = latestRun?.metrics?.epoch_train_losses ?? [];
-  const epochValLosses   = latestRun?.metrics?.epoch_val_losses   ?? [];
-  const epochChartData   = epochTrainLosses.map((tl, i) => ({
-    epoch: i + 1,
-    train: Math.round(tl * 10000) / 10000,
-    val:   epochValLosses[i] != null ? Math.round(epochValLosses[i] * 10000) / 10000 : undefined,
+  const epochTrainLosses = asNumberArray(latestMetrics.epoch_train_losses);
+  const epochValLosses = asNumberArray(latestMetrics.epoch_val_losses);
+  const epochChartData = epochTrainLosses.map((trainLoss, index) => ({
+    epoch: index + 1,
+    train: Math.round(trainLoss * 10000) / 10000,
+    val: epochValLosses[index] != null ? Math.round(epochValLosses[index] * 10000) / 10000 : undefined,
   }));
 
   const radialData = [
-    { name: "AUC", value: Math.round((auc ?? 0) * 100), fill: "var(--accent)" },
-    { name: "Precision", value: Math.round((precision ?? 0) * 100), fill: "var(--info)" },
+    { name: "AUC", value: clampPercent(auc), fill: "var(--accent)" },
+    { name: "Precision", value: clampPercent(precision), fill: "var(--info)" },
+    { name: "Recall", value: clampPercent(recall), fill: "var(--warning)" },
   ];
 
-  const runsChartData = runs
+  const runsChartData = filteredRuns
     .slice()
     .reverse()
-    .map((r, i) => ({
-      idx: i + 1,
-      auc: r.auc != null ? Math.round(r.auc * 1000) / 10 : null,
-      precision: r.precision != null ? Math.round(r.precision * 1000) / 10 : null,
-      label: r.model_version,
+    .map((run, index) => ({
+      idx: index + 1,
+      auc: run.auc != null ? Math.round(run.auc * 1000) / 10 : null,
+      precision: run.precision != null ? Math.round(run.precision * 1000) / 10 : null,
+      recall: run.recall != null ? Math.round(run.recall * 1000) / 10 : null,
     }));
 
-  const abstainedCount = predictions.filter((p) => p.abstained).length;
-  const highRiskCount = predictions.filter((p) => p.score >= 0.7).length;
-  const highUncertainCount = predictions.filter((p) => (p.uncertainty ?? 0) >= 0.5).length;
+  const sortedPredictions = useMemo(
+    () =>
+      predictions
+        .slice()
+        .sort(
+          (left, right) =>
+            (right.uncertainty ?? 0) - (left.uncertainty ?? 0) ||
+            right.score - left.score,
+        ),
+    [predictions],
+  );
+
+  const highRiskCount = sortedPredictions.filter((prediction) => prediction.score >= 0.7).length;
+  const needsReviewCount = sortedPredictions.filter((prediction) => (prediction.uncertainty ?? 0) >= 0.5).length;
+  const abstainedCount = sortedPredictions.filter((prediction) => prediction.abstained).length;
 
   return (
     <div>
@@ -190,25 +321,20 @@ export default function GNNIntelligence({ healthGnnLoaded, healthModelVersion, h
         <h2>
           <Brain size={20} color="var(--accent)" />
           GNN Intelligence Hub
-          <span className="subtitle">— Graph Neural Network · MC-Dropout uncertainty</span>
+          <span className="subtitle">— network analysis model · active learning review queue</span>
         </h2>
         <div className="screen-header-actions">
-          {/* Domain tabs */}
           <div className="gnn-domain-tabs">
-            <button
-              type="button"
-              className={activeDomain === "cyber" ? "gnn-domain-tab active" : "gnn-domain-tab"}
-              onClick={() => setActiveDomain("cyber")}
-            >
-              Cyber (Wmid)
-            </button>
-            <button
-              type="button"
-              className={activeDomain === "corruption" ? "gnn-domain-tab active" : "gnn-domain-tab"}
-              onClick={() => setActiveDomain("corruption")}
-            >
-              Corruption (Wcorruption)
-            </button>
+            {DOMAIN_OPTIONS.map((option) => (
+              <button
+                key={option.domain}
+                type="button"
+                className={activeDomain === option.domain ? "gnn-domain-tab active" : "gnn-domain-tab"}
+                onClick={() => setActiveDomain(option.domain)}
+              >
+                {option.label}
+              </button>
+            ))}
           </div>
           <button type="button" className="btn-ghost" onClick={() => void load()} disabled={syncing}>
             {syncing ? <Loader size={14} className="spin" /> : <RefreshCw size={14} />}
@@ -217,7 +343,6 @@ export default function GNNIntelligence({ healthGnnLoaded, healthModelVersion, h
         </div>
       </div>
 
-      {/* Train / Seed action panel */}
       <div className="panel gnn-train-panel">
         <div className="panel-header">
           <h3><Zap size={14} /> Training Controls</h3>
@@ -248,19 +373,23 @@ export default function GNNIntelligence({ healthGnnLoaded, healthModelVersion, h
         )}
       </div>
 
-      {/* Model status banner */}
+      {feedbackError && (
+        <div className="panel" style={{ marginBottom: 16, borderColor: "rgba(255,140,66,.35)" }}>
+          <div style={{ color: "var(--risk-high)", fontSize: "0.85rem" }}>{feedbackError}</div>
+        </div>
+      )}
+
       {!healthGnnLoaded && (
         <div className="panel gnn-no-artifact-banner">
           <div className="gnn-no-artifact-inner">
             <AlertTriangle size={16} />
             <span>
-              No trained GNN artifact found. Use &ldquo;Seed Cyber Data&rdquo; then &ldquo;Train Cyber GNN&rdquo; above to generate a model.
+              No trained GNN artifact found. Use the seeding and training controls above to generate a model.
             </span>
           </div>
         </div>
       )}
 
-      {/* Metric cards — now includes F1, Recall, ECE, Brier */}
       <div className="metric-grid">
         <div className="metric-card accent">
           <div className="metric-label">AUC</div>
@@ -270,27 +399,27 @@ export default function GNNIntelligence({ healthGnnLoaded, healthModelVersion, h
         <div className="metric-card info">
           <div className="metric-label">Precision</div>
           <div className="metric-value">{precision != null ? precision.toFixed(3) : "—"}</div>
-          <div className="metric-sub">TP / (TP + FP)</div>
+          <div className="metric-sub">Positive precision</div>
         </div>
         <div className="metric-card info">
           <div className="metric-label">Recall</div>
           <div className="metric-value">{recall != null ? recall.toFixed(3) : "—"}</div>
-          <div className="metric-sub">TP / (TP + FN)</div>
+          <div className="metric-sub">Threat recall</div>
         </div>
         <div className="metric-card accent">
           <div className="metric-label">F1 Score</div>
           <div className="metric-value">{f1 != null ? f1.toFixed(3) : "—"}</div>
-          <div className="metric-sub">Harmonic mean P/R</div>
+          <div className="metric-sub">Harmonic mean of precision and recall</div>
         </div>
         <div className="metric-card">
           <div className="metric-label">ECE</div>
           <div className="metric-value">{ece != null ? ece.toFixed(4) : "—"}</div>
-          <div className="metric-sub">Calibration error ↓</div>
+          <div className="metric-sub">Calibration error</div>
         </div>
         <div className="metric-card">
           <div className="metric-label">Brier Score</div>
           <div className="metric-value">{brierScore != null ? brierScore.toFixed(4) : "—"}</div>
-          <div className="metric-sub">Probabilistic accuracy ↓</div>
+          <div className="metric-sub">Probabilistic accuracy</div>
         </div>
         <div className="metric-card">
           <div className="metric-label">Graph nodes</div>
@@ -314,16 +443,12 @@ export default function GNNIntelligence({ healthGnnLoaded, healthModelVersion, h
         </div>
         <div className="metric-card">
           <div className="metric-label">High-risk</div>
-          <div className={`metric-value${highRiskCount > 0 ? " gnn-metric-danger" : ""}`}>
-            {highRiskCount}
-          </div>
+          <div className={`metric-value${highRiskCount > 0 ? " gnn-metric-danger" : ""}`}>{highRiskCount}</div>
           <div className="metric-sub">Score ≥ 0.70</div>
         </div>
         <div className="metric-card">
           <div className="metric-label">Uncertain</div>
-          <div className={`metric-value${highUncertainCount > 0 ? " gnn-metric-warn" : ""}`}>
-            {highUncertainCount}
-          </div>
+          <div className={`metric-value${needsReviewCount > 0 ? " gnn-metric-warn" : ""}`}>{needsReviewCount}</div>
           <div className="metric-sub">Need analyst review</div>
         </div>
         <div className="metric-card">
@@ -335,7 +460,6 @@ export default function GNNIntelligence({ healthGnnLoaded, healthModelVersion, h
       </div>
 
       <div className="gnn-charts-grid">
-        {/* Radial performance gauge */}
         <div className="panel">
           <div className="panel-header">
             <h3>Model Performance</h3>
@@ -357,11 +481,10 @@ export default function GNNIntelligence({ healthGnnLoaded, healthModelVersion, h
           )}
         </div>
 
-        {/* Training run history */}
         <div className="panel">
           <div className="panel-header">
             <h3>Training History</h3>
-            <span className="muted">{runs.length} runs</span>
+            <span className="muted">{filteredRuns.length} runs</span>
           </div>
           {runsChartData.length > 0 ? (
             <ResponsiveContainer width="100%" height={220}>
@@ -375,6 +498,7 @@ export default function GNNIntelligence({ healthGnnLoaded, healthModelVersion, h
                 />
                 <Line type="monotone" dataKey="auc" name="AUC" stroke="var(--accent)" strokeWidth={2} dot={{ r: 3 }} />
                 <Line type="monotone" dataKey="precision" name="Precision" stroke="var(--info)" strokeWidth={2} dot={{ r: 3 }} />
+                <Line type="monotone" dataKey="recall" name="Recall" stroke="var(--warning)" strokeWidth={2} dot={{ r: 3 }} />
               </LineChart>
             </ResponsiveContainer>
           ) : (
@@ -383,7 +507,6 @@ export default function GNNIntelligence({ healthGnnLoaded, healthModelVersion, h
         </div>
       </div>
 
-      {/* Epoch loss curves */}
       <div className="panel gnn-loss-panel">
         <div className="panel-header">
           <h3>Training Loss Curves</h3>
@@ -397,8 +520,16 @@ export default function GNNIntelligence({ healthGnnLoaded, healthModelVersion, h
           <ResponsiveContainer width="100%" height={220}>
             <LineChart data={epochChartData} margin={{ top: 8, right: 16, left: -16, bottom: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="var(--line)" />
-              <XAxis dataKey="epoch" tick={{ fontSize: 10, fill: "var(--ink-muted)" }} label={{ value: "Epoch", position: "insideBottomRight", offset: -4, fontSize: 10, fill: "var(--ink-muted)" }} />
-              <YAxis tick={{ fontSize: 10, fill: "var(--ink-muted)" }} domain={["auto", "auto"]} label={{ value: "Loss", angle: -90, position: "insideLeft", offset: 12, fontSize: 10, fill: "var(--ink-muted)" }} />
+              <XAxis
+                dataKey="epoch"
+                tick={{ fontSize: 10, fill: "var(--ink-muted)" }}
+                label={{ value: "Epoch", position: "insideBottomRight", offset: -4, fontSize: 10, fill: "var(--ink-muted)" }}
+              />
+              <YAxis
+                tick={{ fontSize: 10, fill: "var(--ink-muted)" }}
+                domain={["auto", "auto"]}
+                label={{ value: "Loss", angle: -90, position: "insideLeft", offset: 12, fontSize: 10, fill: "var(--ink-muted)" }}
+              />
               <Tooltip
                 contentStyle={{ background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 8, fontSize: 12 }}
                 formatter={(value: number | string | undefined) => [typeof value === "number" ? value.toFixed(5) : String(value ?? "")]}
@@ -415,18 +546,17 @@ export default function GNNIntelligence({ healthGnnLoaded, healthModelVersion, h
         )}
       </div>
 
-      {/* Predictions table — with uncertainty bar + analyst feedback */}
       <div className="panel">
         <div className="panel-header">
           <h3>Entity Predictions</h3>
           <span className="muted">
-            {predictions.length} predictions · {activeDomain === "cyber" ? "Cyber / Wmid" : "Corruption / Wcorruption"}
-            {highUncertainCount > 0 && <span className="gnn-uncertain-badge">&nbsp;· {highUncertainCount} need review</span>}
+            {sortedPredictions.length} predictions · {activeDomain === "cyber" ? "Cyber / Wmid" : "Corruption / Wcorruption"}
+            {needsReviewCount > 0 && <span className="gnn-uncertain-badge">&nbsp;· {needsReviewCount} need review</span>}
           </span>
         </div>
         {loading ? (
           <div className="state-box"><Loader size={22} /><p>Loading predictions…</p></div>
-        ) : predictions.length === 0 ? (
+        ) : sortedPredictions.length === 0 ? (
           <div className="state-box"><Brain size={28} /><p>No predictions yet — run the inference consumer or train the GNN.</p></div>
         ) : (
           <div className="gnn-table-scroll">
@@ -444,84 +574,87 @@ export default function GNNIntelligence({ healthGnnLoaded, healthModelVersion, h
                 </tr>
               </thead>
               <tbody>
-                {predictions.map((p) => {
-                  const u = p.uncertainty ?? 0;
-                  const isHighUncertain = u >= 0.5;
-                  const fb = feedbackState[p.id];
-                  const busy = feedbackBusy[p.id] ?? false;
-                  const uColor = u >= 0.75 ? "var(--risk-critical)" : u >= 0.5 ? "var(--warning)" : "var(--risk-low)";
+                {sortedPredictions.map((prediction) => {
+                  const uncertainty = prediction.uncertainty ?? 0;
+                  const isHighUncertain = uncertainty >= 0.5;
+                  const feedback = feedbackByPrediction[prediction.id];
+                  const busy = feedbackBusyId === prediction.id;
                   return (
-                    <tr key={p.id} className={isHighUncertain ? "gnn-row-uncertain" : undefined}>
+                    <tr key={prediction.id} className={isHighUncertain ? "gnn-row-uncertain" : undefined}>
                       <td>
-                        <span className="mono gnn-entity-key">{shortKey(p.entity_key)}</span>
-                        <span className="muted gnn-pred-type">{p.prediction_type}</span>
+                        <span className="mono gnn-entity-key">{shortKey(prediction.entity_key)}</span>
+                        <span className="muted gnn-pred-type">{prediction.prediction_type}</span>
                       </td>
                       <td>
                         <div className="score-bar-wrap">
                           <div className="score-bar-track">
-                            <div className="score-bar-fill" style={{ width: `${p.score * 100}%`, background: scoreColor(p.score) }} />
+                            <div
+                              className="score-bar-fill"
+                              style={{ width: `${prediction.score * 100}%`, background: scoreColor(prediction.score) }}
+                            />
                           </div>
-                          <span className="gnn-score-label" style={{ color: scoreColor(p.score) }}>{p.score.toFixed(2)}</span>
+                          <span className="gnn-score-label" style={{ color: scoreColor(prediction.score) }}>
+                            {prediction.score.toFixed(2)}
+                          </span>
                         </div>
                       </td>
                       <td>
                         <div className="score-bar-wrap">
                           <div className="score-bar-track">
-                            <div className="score-bar-fill" style={{ width: `${u * 100}%`, background: uColor }} />
+                            <div
+                              className="score-bar-fill"
+                              style={{ width: `${uncertainty * 100}%`, background: uncertaintyColor(uncertainty) }}
+                            />
                           </div>
-                          <span className="gnn-score-label" style={{ color: uColor }}>{u.toFixed(3)}</span>
+                          <span className="gnn-score-label" style={{ color: uncertaintyColor(uncertainty) }}>
+                            {uncertainty.toFixed(3)}
+                          </span>
                         </div>
                       </td>
-                      <td className="gnn-cell-sm">{p.confidence != null ? p.confidence.toFixed(2) : "—"}</td>
+                      <td className="gnn-cell-sm">{prediction.confidence != null ? prediction.confidence.toFixed(2) : "—"}</td>
                       <td>
-                        {p.kill_chain_stage
-                          ? <span className="risk-badge info">{p.kill_chain_stage}</span>
-                          : <span className="muted">—</span>}
+                        {prediction.kill_chain_stage ? (
+                          <span className="risk-badge info">{prediction.kill_chain_stage}</span>
+                        ) : (
+                          <span className="muted">—</span>
+                        )}
                       </td>
                       <td>
-                        {p.top_feature
-                          ? <span className="mono gnn-top-feature">{p.top_feature}</span>
-                          : <span className="muted">—</span>}
+                        {prediction.top_feature ? (
+                          <span className="mono gnn-top-feature">{prediction.top_feature}</span>
+                        ) : (
+                          <span className="muted">—</span>
+                        )}
                       </td>
                       <td>
-                        {p.abstained
-                          ? <span className="risk-badge medium">Abstained</span>
-                          : <span className={`risk-badge ${riskClass(p.score)}`}>{riskClass(p.score)}</span>}
+                        {prediction.abstained ? (
+                          <span className="risk-badge medium">Abstained</span>
+                        ) : (
+                          <span className={`risk-badge ${riskClass(prediction.score)}`}>{riskClass(prediction.score)}</span>
+                        )}
                       </td>
                       <td>
-                        {fb ? (
-                          <span className={`gnn-feedback-done ${fb}`}>
-                            {fb === "confirmed" ? "✓ Threat" : fb === "false_positive" ? "✗ FP" : "? Uncertain"}
+                        {feedback ? (
+                          <span className={`gnn-feedback-done ${feedbackClass(feedback.feedback_label)}`}>
+                            {feedbackLabelText(feedback.feedback_label)}
                           </span>
                         ) : (
                           <div className="gnn-feedback-btns">
-                            <button
-                              type="button"
-                              className="gnn-fb-btn confirm"
-                              title="Confirm threat"
-                              disabled={busy}
-                              onClick={() => void handleFeedback(p, "confirmed")}
-                            >
-                              {busy ? <Loader size={11} className="spin" /> : <CheckCircle size={13} />}
-                            </button>
-                            <button
-                              type="button"
-                              className="gnn-fb-btn reject"
-                              title="Mark false positive"
-                              disabled={busy}
-                              onClick={() => void handleFeedback(p, "false_positive")}
-                            >
-                              {busy ? <Loader size={11} className="spin" /> : <XCircle size={13} />}
-                            </button>
-                            <button
-                              type="button"
-                              className="gnn-fb-btn uncertain"
-                              title="Mark uncertain"
-                              disabled={busy}
-                              onClick={() => void handleFeedback(p, "uncertain")}
-                            >
-                              {busy ? <Loader size={11} className="spin" /> : <HelpCircle size={13} />}
-                            </button>
+                            {FEEDBACK_OPTIONS.map((option) => {
+                              const Icon = option.icon;
+                              return (
+                                <button
+                                  key={option.value}
+                                  type="button"
+                                  className={`gnn-fb-btn ${feedbackClass(option.value) === "confirmed" ? "confirm" : feedbackClass(option.value) === "false_positive" ? "reject" : "uncertain"}`}
+                                  title={option.label}
+                                  disabled={busy}
+                                  onClick={() => void handleFeedback(prediction.id, option.value)}
+                                >
+                                  {busy ? <Loader size={11} className="spin" /> : <Icon size={13} />}
+                                </button>
+                              );
+                            })}
                           </div>
                         )}
                       </td>

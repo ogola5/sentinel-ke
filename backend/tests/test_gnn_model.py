@@ -49,10 +49,16 @@ def test_train_graphsage_on_synthetic_graph():
     assert len(out.embeddings[0]) == 8
     assert len(out.probabilities) == 8
     assert "auc" in out.metrics
-    assert 0.0 <= out.metrics["auc"] <= 1.0
+    assert "ece" in out.metrics
+    assert "brier" in out.metrics
     assert "calibration_ece" in out.metrics
     assert "brier_score" in out.metrics
     assert out.metrics["split_policy"] in {"entity_hash_holdout", "random", "temporal_recency_holdout"}
+    assert 0.0 <= out.metrics["auc"] <= 1.0
+    assert 0.0 <= out.metrics["ece"] <= 1.0
+    assert 0.0 <= out.metrics["brier"] <= 1.0
+    assert 0.0 <= out.metrics["calibration_ece"] <= 1.0
+    assert 0.0 <= out.metrics["brier_score"] <= 1.0
 
 
 def test_train_graphsage_entity_holdout_is_deterministic():
@@ -76,6 +82,7 @@ def test_train_graphsage_entity_holdout_is_deterministic():
     b = train_graphsage(dataset, epochs=5, hidden_dim=8, embed_dim=4, seed=13, split_policy="entity_hash_holdout")
     assert a.metrics["val_count"] == b.metrics["val_count"]
     assert a.metrics["split_policy"] == "entity_hash_holdout"
+
 
 
 def test_integrated_gradients_returns_feature_vectors():
