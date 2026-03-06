@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import datetime
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, List, Mapping, Optional, Tuple
 
 from sqlalchemy import text
 from sqlalchemy.dialects.postgresql import insert
@@ -83,6 +83,55 @@ def _event_type_counts(db: Session, window) -> Dict[str, Dict[str, int]]:
     return out
 
 
+def _source_type_counts(db: Session, window) -> Dict[str, Dict[str, int]]:
+    rows = db.execute(
+        text(
+            """
+            SELECT
+                ee.entity_key,
+                LOWER(COALESCE(sr.source_type, 'unknown')) AS source_type,
+                COUNT(*)::int AS cnt
+            FROM event_entity_index ee
+            JOIN event_log el ON el.event_hash = ee.event_hash
+            LEFT JOIN source_registry sr ON sr.source_id = el.source_id
+            WHERE el.occurred_at >= :start AND el.occurred_at <= :end
+            GROUP BY ee.entity_key, LOWER(COALESCE(sr.source_type, 'unknown'))
+            """
+        ),
+        {"start": window.start, "end": window.end},
+    ).fetchall()
+
+    out: Dict[str, Dict[str, int]] = defaultdict(dict)
+    for entity_key, source_type, cnt in rows:
+        key = str(entity_key)
+        st = str(source_type or "unknown").strip().lower() or "unknown"
+        out[key][st] = int(cnt or 0)
+    return out
+
+
+def _is_synthetic_source_type(source_type: str) -> bool:
+    x = str(source_type or "").strip().lower()
+    return x in {"synthetic", "simulated", "demo"}
+
+
+def _provenance_tag_from_counts(counts: Mapping[str, int]) -> Tuple[str, float]:
+    total = sum(max(0, int(v or 0)) for v in counts.values())
+    if total <= 0:
+        return "unknown", 0.0
+    synthetic = sum(
+        max(0, int(v or 0))
+        for k, v in counts.items()
+        if _is_synthetic_source_type(str(k))
+    )
+    real = max(0, total - synthetic)
+    real_ratio = float(real / total)
+    if synthetic <= 0:
+        return "real", round(real_ratio, 6)
+    if real <= 0:
+        return "synthetic", round(real_ratio, 6)
+    return "mixed", round(real_ratio, 6)
+
+
 def _entity_stats(db: Session, window, max_entities: int) -> Iterable[Dict[str, object]]:
     rows = db.execute(
         text(
@@ -136,6 +185,7 @@ def run_once(
         ddos_services, ddos_endpoints = _ddos_alert_sets(db, win)
         campaign_entities = _campaign_entity_set(db, win)
         event_types = _event_type_counts(db, win)
+        source_type_counts = _source_type_counts(db, win)
 
         rows: List[Dict[str, object]] = []
         for stat in _entity_stats(db, win, max_entities):
@@ -172,9 +222,14 @@ def run_once(
             age_sec = None
             if isinstance(last_seen, datetime):
                 age_sec = max(0.0, (win.end - last_seen).total_seconds())
+            src_counts = dict(source_type_counts.get(entity_key, {}))
+            provenance_tag, real_signal_ratio = _provenance_tag_from_counts(src_counts)
 
             features = {
                 "source_count": int(stat["source_count"]),
+                "source_type_counts": src_counts,
+                "provenance_tag": provenance_tag,
+                "real_signal_ratio": real_signal_ratio,
                 "event_types": top_event_types,
                 "event_types_other_count": int(other_event_count),
                 "last_seen_age_sec": age_sec,

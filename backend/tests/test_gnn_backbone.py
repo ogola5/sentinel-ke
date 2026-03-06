@@ -34,9 +34,13 @@ def test_weak_label_low_signal_is_negative():
 
 
 def test_feature_vector_shape_and_recency():
+    from app.analytics.layer3.gnn_backbone import FEATURE_DIM
     v = build_feature_vector(
+        entity_type="ip",
         event_count=10,
         source_count=3,
+        degree=4,
+        weighted_degree=6,
         risk_flags=["VPN_CLUSTER_MEMBER"],
         features={
             "last_seen_age_sec": 60,
@@ -46,12 +50,11 @@ def test_feature_vector_shape_and_recency():
             },
         },
     )
-    # base 7 + tracked 5
-    assert len(v) == 12
-    # recency signal should be > 0 for recent activity
-    assert v[2] > 0
-    # vpn flag channel
-    assert v[5] == 1.0
+    assert len(v) == FEATURE_DIM
+    # Recency signal is in Block 2 (temporal), should be > 0 for recent activity
+    assert v[15] > 0
+    # VPN_CLUSTER_MEMBER flag is in Block 3 risk flags (index 21)
+    assert v[21] == 1.0
 
 
 def test_collapse_edges_merges_bidirectional_duplicates():

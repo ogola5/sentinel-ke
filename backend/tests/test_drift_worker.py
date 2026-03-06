@@ -1,4 +1,4 @@
-from app.analytics.layer3.drift_worker import _drift_score, _status_for_score
+from app.analytics.layer3.drift_worker import _drift_score, _status_for_fairness, _status_for_score
 
 
 def test_drift_score_increases_with_distribution_shift():
@@ -13,3 +13,9 @@ def test_status_for_score_thresholds():
     assert _status_for_score(0.05) == "ok"
     assert _status_for_score(0.13) == "warning"
     assert _status_for_score(0.25) == "critical"
+
+
+def test_status_for_fairness_thresholds():
+    assert _status_for_fairness(None) == "ok"
+    assert _status_for_fairness(0.1) == "ok"
+    assert _status_for_fairness(0.31) in {"warning", "critical"}

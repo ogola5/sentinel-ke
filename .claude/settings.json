@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile app/core/rate_limit.py app/core/config.py app/core/http_hardening.py app/core/runtime_hardening.py app/main.py app/ledger/models.py app/ledger/repository.py app/ledger/seed_sources.py app/api/auth.py app/ingestion/router.py app/api/ai.py app/api/defense.py)",
+      "Bash(git checkout -b cleanup/production-ready)",
+      "Bash(git add backend/scripts/replay_incident.sh infra/k8s/backend.yaml backend/app/core/metrics_store.py)",
+      "Bash(git add -u render-backend.env test1.txt test3.txt)",
+      "Bash(git push -u origin cleanup/production-ready)",
+      "Bash(gh auth status)",
+      "Bash(git remote set-url origin git@github.com:ogola5/sentinel-ke.git)"
+    ]
+  }
+}

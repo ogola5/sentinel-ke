@@ -19,6 +19,10 @@ class SourceRegistry(Base):
     classification_level = Column(String, nullable=False, default="RESTRICTED")
     api_key_hash = Column(String, nullable=False, unique=True)
 
+    # Fast O(1) lookup: SHA-256(raw_api_key) stored at registration time.
+    # Not a secret — the full HMAC verify still happens after the indexed lookup.
+    api_key_lookup = Column(String(64), nullable=True, index=True, unique=True)
+
     is_active = Column(Boolean, default=True, nullable=False)
     created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
 

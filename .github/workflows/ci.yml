@@ -85,6 +85,58 @@ jobs:
       - name: TypeScript check
         run: npx tsc --noEmit
 
+  unit-tests:
+    name: Unit tests (backend)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install test dependencies
+        run: |
+          pip install --quiet \
+            pytest \
+            pytest-asyncio \
+            httpx \
+            pydantic \
+            pydantic-settings \
+            fastapi \
+            sqlalchemy \
+            cryptography \
+            python-jose \
+            passlib \
+            bcrypt
+
+      - name: Run unit tests
+        run: pytest -m "not integration and not slow" -q --tb=short
+        env:
+          PYTHONPATH: .
+          # Stub values so config validation passes without a real DB
+          DATABASE_URL: "postgresql+psycopg2://sentinel:sentinel@localhost:5432/sentinel"
+          POSTGRES_HOST: localhost
+          POSTGRES_PORT: "5432"
+          POSTGRES_DB: sentinel
+          POSTGRES_USER: sentinel
+          POSTGRES_PASSWORD: sentinel
+          NEO4J_URI: "bolt://localhost:7687"
+          NEO4J_USER: neo4j
+          NEO4J_PASSWORD: neo4j
+          REDPANDA_BROKERS: "localhost:9092"
+          INGEST_API_KEY: ci-test-key
+          AUTH_BOOTSTRAP_ADMIN_PASSWORD: CiTestPass1!
+          FEDERATION_CORRELATION_SALT: ci-test-salt
+          PSEUDONYM_SALT: ci-test-pseudonym-salt
+          AUTH_PASSWORD_PEPPER: ci-test-pepper
+
   edge-agent-check:
     name: Edge-agent schema check
     runs-on: ubuntu-latest
@@ -100,8 +152,8 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install minimal deps
-        run: pip install --quiet pydantic pydantic-settings
+      - name: Install deps
+        run: pip install --quiet pydantic pydantic-settings pytest sqlalchemy
 
       - name: Config and feature-builder check
         run: |
@@ -119,6 +171,14 @@ jobs:
           print(f'OK: feature vector = {len(vec)} dims')
           "
         env:
+          NATIONAL_SALT: test-salt
+          HUB_API_KEY: test-key
+          HMAC_SALT: test-hmac
+
+      - name: DbConnector unit tests
+        run: pytest tests/ -q --tb=short
+        env:
+          PYTHONPATH: .
           NATIONAL_SALT: test-salt
           HUB_API_KEY: test-key
           HMAC_SALT: test-hmac

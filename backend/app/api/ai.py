@@ -1,12 +1,17 @@
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import datetime
+from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_db, pagination_params
+from app.api.deps import get_db, pagination_params, require_central_access
+from app.core.config import settings
+from app.core.rate_limit import limiter
 from app.analytics.ai_models import (
     AIExplanation,
     AIAttackPathScore,
@@ -26,6 +31,7 @@ from app.analytics.ai_models import (
 )
 from app.analytics.layer3.threat_intel_worker import export_stix_bundle, import_stix_bundle
 
+log = logging.getLogger("sentinel.api.ai")
 router = APIRouter(prefix="/v1/ai", tags=["ai"])
 
 
@@ -38,6 +44,15 @@ def _severity_from_score(score: float) -> str:
     if s >= 55:
         return "medium"
     return "low"
+
+
+def _top_feature(details: dict) -> str | None:
+    attributions = details.get("feature_attributions", [])
+    if not isinstance(attributions, list) or not attributions:
+        return None
+    first = attributions[0] if isinstance(attributions[0], dict) else {}
+    name = str(first.get("feature") or "").strip()
+    return name or None
 
 
 @router.get("/predictions")
@@ -88,6 +103,8 @@ def list_predictions(
                 "decision_source": r.decision_source,
                 "reason_codes": r.reason_codes,
                 "details": r.details_json,
+                "explanation_method": (r.details_json or {}).get("explanation_method"),
+                "top_feature": _top_feature(dict(r.details_json or {})),
                 "created_at": r.created_at.isoformat(),
             }
             for r in rows
@@ -116,6 +133,8 @@ def get_prediction(prediction_id: str, db: Session = Depends(get_db)):
         "decision_source": r.decision_source,
         "reason_codes": r.reason_codes,
         "details": r.details_json,
+        "explanation_method": (r.details_json or {}).get("explanation_method"),
+        "top_feature": _top_feature(dict(r.details_json or {})),
         "created_at": r.created_at.isoformat(),
     }
 
@@ -128,6 +147,9 @@ def get_explanation(prediction_id: str, db: Session = Depends(get_db)):
     expl = db.query(AIExplanation).filter(AIExplanation.prediction_id == r.id).first()
     if not expl:
         raise HTTPException(status_code=404, detail="explanation_not_found")
+    details = dict(expl.details_json or {})
+    method = str(details.get("explanation_method") or "unknown")
+    top_feature = _top_feature(details)
     return {
         "prediction_id": str(r.id),
         "entity_key": r.entity_key,
@@ -140,7 +162,12 @@ def get_explanation(prediction_id: str, db: Session = Depends(get_db)):
         "evidence_paths": expl.evidence_paths,
         "recommended_controls": expl.recommended_controls_json,
         "counterfactual": expl.counterfactual_json,
-        "details": expl.details_json,
+        "explanation_method": method,
+        "model_based": method == "gradient_x_input",
+        "top_feature": top_feature,
+        "feature_attributions": details.get("feature_attributions", []),
+        "attribution_group_scores": details.get("attribution_group_scores", []),
+        "details": details,
         "created_at": expl.created_at.isoformat(),
     }
 
@@ -189,10 +216,96 @@ def list_gnn_runs(
                 "artifact_path": r.artifact_path,
                 "params": r.params_json,
                 "metrics": r.metrics_json,
+                "fairness": (r.metrics_json or {}).get("fairness", {}),
+                "fairness_blocked": (
+                    (r.metrics_json or {}).get("fairness", {}).get(
+                        "max_positive_rate_disparity", 0
+                    ) > settings.fairness_disparity_threshold
+                ),
+                "provenance": (r.metrics_json or {}).get("provenance", {}),
+                "real_data_gate": (r.metrics_json or {}).get("real_data_gate", {}),
+                "real_data_gate_passed": bool(
+                    ((r.metrics_json or {}).get("real_data_gate") or {}).get("passed", False)
+                ),
                 "created_at": r.created_at.isoformat(),
             }
             for r in rows
         ],
+    }
+
+
+class GNNTrainRequest(BaseModel):
+    domain: Literal["cyber", "corruption"] = "cyber"
+    epochs: int = 60
+    model_version: str | None = None
+
+
+def _run_cyber_train(epochs: int, model_version: str) -> None:
+    from app.analytics.layer3.gnn_train_worker import run_once
+    from app.ledger.db import SessionLocal
+    db = SessionLocal()
+    try:
+        result = run_once(
+            db=db,
+            window_key="Wmid",
+            epochs=epochs,
+            model_version=model_version,
+        )
+        log.info("gnn_train_cyber_done: %s", result)
+    except Exception as exc:
+        log.error("gnn_train_cyber_failed: %s", exc)
+    finally:
+        db.close()
+
+
+def _run_corruption_train(epochs: int, model_version: str) -> None:
+    from app.analytics.corruption.train_worker import run_once
+    from app.ledger.db import SessionLocal
+    db = SessionLocal()
+    try:
+        result = run_once(
+            db=db,
+            window_key="Wcorruption",
+            epochs=epochs,
+            model_version=model_version,
+        )
+        log.info("gnn_train_corruption_done: %s", result)
+    except Exception as exc:
+        log.error("gnn_train_corruption_failed: %s", exc)
+    finally:
+        db.close()
+
+
+@router.post("/gnn/train", status_code=202)
+@limiter.limit("5/minute")
+def trigger_gnn_train(
+    request: Request,
+    body: GNNTrainRequest,
+    background_tasks: BackgroundTasks,
+    _principal=Depends(require_central_access),
+):
+    """
+    Trigger a GNN retraining run in the background.
+
+    domain = "cyber"       → cyber threat GNN (window_key Wmid, feat_dim 44)
+    domain = "corruption"  → corruption risk GNN (window_key Wcorruption, feat_dim 42)
+
+    Returns immediately; poll GET /v1/ai/gnn/runs to see the new run when complete.
+    """
+    default_versions = {"cyber": "gnn-sage-v1", "corruption": "corruption-gnn-v1"}
+    mv = body.model_version or default_versions[body.domain]
+
+    if body.domain == "cyber":
+        background_tasks.add_task(_run_cyber_train, body.epochs, mv)
+    else:
+        background_tasks.add_task(_run_corruption_train, body.epochs, mv)
+
+    return {
+        "accepted": True,
+        "domain": body.domain,
+        "model_version": mv,
+        "epochs": body.epochs,
+        "message": "Training started in background. Poll GET /v1/ai/gnn/runs for results.",
     }
 
 
@@ -222,6 +335,11 @@ def get_gnn_run(run_id: str, db: Session = Depends(get_db)):
         "artifact_path": r.artifact_path,
         "params": r.params_json,
         "metrics": r.metrics_json,
+        "provenance": (r.metrics_json or {}).get("provenance", {}),
+        "real_data_gate": (r.metrics_json or {}).get("real_data_gate", {}),
+        "real_data_gate_passed": bool(
+            ((r.metrics_json or {}).get("real_data_gate") or {}).get("passed", False)
+        ),
         "created_at": r.created_at.isoformat(),
     }
 

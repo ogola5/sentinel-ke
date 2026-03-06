@@ -1,9 +1,13 @@
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+import logging
 import os
 
 from app.ledger.models import Base, SourceRegistry
 from app.core.security import hash_api_key
+from app.ledger.repository import _key_lookup_hash
+
+log = logging.getLogger("sentinel.seed_sources")
 
 DATABASE_URL = os.environ["DATABASE_URL"]
 
@@ -68,7 +72,7 @@ def seed():
         )
 
         if exists:
-            print(f"[SKIP] {src['source_id']} already exists")
+            log.debug("seed_sources skip existing source_id=%s", src["source_id"])
             continue
 
         record = SourceRegistry(
@@ -77,11 +81,12 @@ def seed():
             section_code=src["section_code"],
             classification_level=src["classification_level"],
             api_key_hash=hash_api_key(src["api_key"]),
+            api_key_lookup=_key_lookup_hash(src["api_key"]),
             is_active=True,
         )
 
         db.add(record)
-        print(f"[ADD] {src['source_id']}")
+        log.info("seed_sources added source_id=%s", src["source_id"])
 
     db.commit()
     db.close()

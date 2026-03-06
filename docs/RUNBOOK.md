@@ -10,6 +10,15 @@ Backend architecture and security reference:
 Phase 2 quality hardening controls:
 `docs/QUALITY_HARDENING_PHASE2.md`
 
+Mission-loop demo script:
+`docs/MISSION_LOOP_DEMO.md`
+
+Performance/SLO evidence log:
+`docs/PERFORMANCE_SLO_EVIDENCE.md`
+
+Production deployment proof package:
+`docs/PRODUCTION_DEPLOYMENT_PROOF.md`
+
 API examples for frontend/integration consumers:
 `docs/API_CONSUMER_GUIDE.md`
 
@@ -96,11 +105,19 @@ Notebook files are in:
 ```
 notebooks/
 ```
+Notebook quick guide:
+`notebooks/README.md`
 
 Suggested order:
-1. `notebooks/01_feature_build.ipynb`
-2. `notebooks/02_gnn_train.ipynb`
-3. `notebooks/03_eval_and_explain.ipynb`
+1. `notebooks/00_pipeline_setup.ipynb`
+2. `notebooks/04_real_data_ingest_and_hybrid_pipeline.ipynb` (optional; real data path)
+3. `notebooks/01_feature_build.ipynb`
+4. `notebooks/02_gnn_train.ipynb`
+5. `notebooks/03_eval_and_explain.ipynb`
+
+Important for local VS Code kernels:
+- If `.env` has `DATABASE_URL=...@postgres:5432/...`, notebook setup rewrites this to `localhost:5433` outside Docker.
+- You still need the project backend dependencies in the selected kernel. If unsure, use the notebook container kernel.
 
 ## 1.3) Database migrations (Alembic)
 
@@ -391,6 +408,31 @@ PYTHONPATH=backend python -m app.integrations.local_network_probe \
   --interval-seconds 10
 ```
 
+Real-data ingestion jobs (connector flow, no bypass path):
+```
+# 1) KEV + EPSS -> VULNERABILITY_EVENT (kev_vuln_feed_v1)
+PYTHONPATH=backend python -m app.integrations.real_data_pipeline \
+  --source-api-key "<SOURCE_API_KEY>" \
+  kev-epss \
+  --asset-id "county-finance-db-01"
+
+# 2) CIC rows -> DDOS_SIGNAL_EVENT / WEB_ATTACK_EVENT
+PYTHONPATH=backend python -m app.integrations.real_data_pipeline \
+  --source-api-key "<SOURCE_API_KEY>" \
+  traffic \
+  --dataset cic \
+  --input-file /path/to/cic_rows.csv \
+  --service-id-prefix "safaricom"
+
+# 3) CAIDA aggregate rows -> DDOS_SIGNAL_EVENT
+PYTHONPATH=backend python -m app.integrations.real_data_pipeline \
+  --source-api-key "<SOURCE_API_KEY>" \
+  traffic \
+  --dataset caida \
+  --input-file /path/to/caida_rows.csv \
+  --service-id-prefix "national-infra"
+```
+
 Events:
 ```
 GET /v1/events/search
@@ -474,7 +516,36 @@ GET  /v1/stix/mitigations?kind=DDOS
 Metrics:
 ```
 GET /v1/metrics
+GET /metrics
 ```
+
+Incident replay under load:
+```bash
+PYTHONPATH=backend python -m app.demo.replay \
+  --mode direct \
+  --base-url http://localhost:8000 \
+  --api-key <VALID_SOURCE_RAW_API_KEY> \
+  --start-at 2026-03-01T00:00:00Z \
+  --end-at 2026-03-01T23:59:59Z \
+  --section-code telecom \
+  --concurrency 20 \
+  --rate-per-sec 120 \
+  --limit 2000
+```
+
+Wrapper script (recommended):
+```bash
+MODE=direct HUB_API_KEY=<VALID_SOURCE_RAW_API_KEY> \
+START_AT=2026-03-01T00:00:00Z END_AT=2026-03-01T23:59:59Z \
+KAFKA_ENABLED=false \
+bash backend/scripts/replay_incident.sh
+```
+
+Replay summary now includes:
+- `rows_loaded`
+- `skipped_invalid`
+- `status_counts`
+- `error_samples`
 
 Economy (procurement + guardrails + tamper integrity):
 ```

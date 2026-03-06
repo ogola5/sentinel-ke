@@ -1,0 +1,15 @@
+# Sentinel-KE code ownership map.
+# Enforce this in GitHub branch protection:
+# - Require pull request reviews before merging
+# - Require review from Code Owners
+
+* @ogola5
+
+/backend/ @ogola5
+/frontend/ @ogola5
+/edge-agent/ @ogola5
+/infra/ @ogola5
+/notebooks/ @ogola5
+/docs/ @ogola5
+/scripts/ @ogola5
+

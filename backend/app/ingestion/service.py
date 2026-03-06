@@ -283,22 +283,25 @@ class IngestionService:
                         },
                         event=event_doc,
                     )
-                    get_producer.publish(
-                        topic=settings.kafka_events_topic,
-                        key=event_hash,
-                        value=msg,
-                    )
+                    producer = get_producer()
+                    if producer:
+                        producer.publish(
+                            topic=settings.kafka_events_topic,
+                            key=event_hash,
+                            value=msg,
+                        )
 
                     gmsg = build_graph_delta_message(
                         event_hash=event_hash,
                         nodes=nodes_payload,
                         edges=edges_payload,
                     )
-                    get_producer.publish(
-                        topic=settings.kafka_graph_topic,
-                        key=event_hash,
-                        value=gmsg,
-                    )
+                    if producer:
+                        producer.publish(
+                            topic=settings.kafka_graph_topic,
+                            key=event_hash,
+                            value=gmsg,
+                        )
             except Exception as e:
                 log.warning("ingest_kafka_publish_failed event_hash=%s err=%s", event_hash, e)
 

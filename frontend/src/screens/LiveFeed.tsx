@@ -1,9 +1,34 @@
+/**
+ * LiveFeed — S1: National Live Feed
+ *
+ * Real-time threat events via SSE stream (/v1/stream/events).
+ * Falls back to historical events from 30-second backend sync.
+ *
+ * UX: compact event cards in a scrollable column.
+ *     Click any card → DetailPanel slides in with full event details.
+ */
 import { useMemo, useState } from "react";
 import type { EventRecord, SourceType } from "../types/domain";
 import { BarChart } from "../components/Charts";
+import DetailPanel from "../components/DetailPanel";
+import { useEventStream } from "../hooks/useEventStream";
 import { shortHash } from "../utils/formatters";
 
-const sourceLabel = (source: SourceType) => source.toUpperCase();
+const SOURCE_LABEL: Record<SourceType, string> = {
+  telco: "TELCO",
+  bank:  "BANK",
+  gov:   "GOV",
+  osint: "OSINT",
+  infra: "INFRA",
+};
+
+function relativeTime(iso: string): string {
+  if (!iso) return "—";
+  const diff = Date.now() - new Date(iso).getTime();
+  if (diff < 60_000)    return `${Math.round(diff / 1_000)}s ago`;
+  if (diff < 3_600_000) return `${Math.round(diff / 60_000)}m ago`;
+  return `${Math.round(diff / 3_600_000)}h ago`;
+}
 
 type LiveFeedProps = {
   events: EventRecord[];
@@ -16,7 +41,7 @@ type LiveFeedProps = {
 };
 
 export default function LiveFeed({
-  events,
+  events: historicalEvents,
   timeline,
   activeSources,
   onSelectEvent,
@@ -25,27 +50,42 @@ export default function LiveFeed({
   onShowEvidence,
 }: LiveFeedProps) {
   const [typeFilter, setTypeFilter] = useState("all");
-  const availableEventTypes = useMemo(
-    () => Array.from(new Set(events.map((event) => event.type))).sort(),
-    [events],
+  const [selected,   setSelected]   = useState<EventRecord | null>(null);
+
+  const { liveEvents, streamStatus } = useEventStream();
+
+  const merged = useMemo(() => {
+    const seen = new Set<string>();
+    const out: EventRecord[] = [];
+    for (const e of [...liveEvents, ...historicalEvents]) {
+      if (!seen.has(e.event_hash)) { seen.add(e.event_hash); out.push(e); }
+    }
+    return out;
+  }, [liveEvents, historicalEvents]);
+
+  const availableTypes = useMemo(
+    () => Array.from(new Set(merged.map((e) => e.type))).sort(),
+    [merged],
   );
 
-  const filtered = useMemo(() => {
-    return events.filter((event) => {
-      if (!activeSources[event.source]) {
-        return false;
-      }
-      if (typeFilter !== "all" && event.type !== typeFilter) {
-        return false;
-      }
-      return true;
-    });
-  }, [events, activeSources, typeFilter]);
+  const filtered = useMemo(
+    () => merged.filter(
+      (e) => activeSources[e.source] && (typeFilter === "all" || e.type === typeFilter),
+    ),
+    [merged, activeSources, typeFilter],
+  );
 
   const activeSourceCount = useMemo(
-    () => new Set(filtered.map((event) => event.source)).size,
+    () => new Set(filtered.map((e) => e.source)).size,
     [filtered],
   );
+
+  const isLive = streamStatus === "live";
+
+  const openDetail = (event: EventRecord) => {
+    setSelected(event);
+    onSelectEvent(event);
+  };
 
   return (
     <section className="screen">
@@ -53,129 +93,183 @@ export default function LiveFeed({
         <div>
           <p className="eyebrow">S1</p>
           <h2>National Live Feed</h2>
-          <p className="subtle">Multi-agency signal ingestion with provenance and hashes.</p>
+          <p className="subtle">Multi-agency signal ingestion · provenance · event hashes</p>
         </div>
-        <div className="live-indicator">
-          <span className="pulse" />
-          <span>{activeSourceCount} active sources</span>
+        <div className="lf-header-right">
+          <span className={`stream-badge ${isLive ? "stream-live" : "stream-poll"}`}>
+            <span className={isLive ? "pulse" : ""} />
+            {isLive ? "LIVE" : streamStatus === "connecting" ? "CONNECTING…" : "POLL"}
+          </span>
+          <span className="lf-counts muted">
+            {activeSourceCount} sources · {filtered.length} events
+          </span>
         </div>
       </div>
 
       <div className="grid-two">
-        <div className="panel">
+        {/* ── Event card list ─────────────────────────────────────────────── */}
+        <div className="panel panel-col">
           <div className="panel-header">
             <h3>Incoming events</h3>
             <div className="select-inline">
-              <label htmlFor="event-type">Type</label>
+              <label htmlFor="lf-type">Type</label>
               <select
-                id="event-type"
+                id="lf-type"
                 value={typeFilter}
-                onChange={(event) => setTypeFilter(event.target.value)}
+                onChange={(e) => setTypeFilter(e.target.value)}
               >
                 <option value="all">All</option>
-                {availableEventTypes.map((type) => (
-                  <option key={type} value={type}>
-                    {type}
-                  </option>
+                {availableTypes.map((t) => (
+                  <option key={t} value={t}>{t}</option>
                 ))}
               </select>
             </div>
           </div>
-          <div className="table">
-            <div className="table-row table-header">
-              <span>Type</span>
-              <span>Source</span>
-              <span>Classification</span>
-              <span>Event hash</span>
-              <span>Occurred / Received</span>
-              <span>Actions</span>
-            </div>
-            {filtered.map((event) => (
-              <div
-                key={event.event_hash}
-                className="table-row table-button"
-                role="button"
-                tabIndex={0}
-                onClick={() => onSelectEvent(event)}
-                onKeyDown={(evt) => {
-                  if (evt.key === "Enter" || evt.key === " ") {
-                    evt.preventDefault();
-                    onSelectEvent(event);
-                  }
-                }}
-              >
-                <span className={`tag tag-${event.classification}`}>{event.type}</span>
-                <span className="chip">{sourceLabel(event.source)}</span>
-                <span>{event.classification}</span>
-                <span className="mono">{shortHash(event.event_hash)}</span>
-                <span>
-                  <div>{event.occurred_at}</div>
-                  <div className="muted">{event.received_at}</div>
-                </span>
-                <span className="actions">
-                  <button
-                    className="ghost"
-                    type="button"
-                    onClick={(evt) => {
-                      evt.stopPropagation();
-                      onShowGraph(event);
-                    }}
-                  >
-                    Show in Graph
-                  </button>
-                  <button
-                    className="ghost"
-                    type="button"
-                    onClick={(evt) => {
-                      evt.stopPropagation();
-                      onShowTimeline(event);
-                    }}
-                  >
-                    Timeline Context
-                  </button>
-                  <button
-                    className="ghost"
-                    type="button"
-                    onClick={(evt) => {
-                      evt.stopPropagation();
-                      onShowEvidence(`Evidence for ${event.event_hash}`, event);
-                    }}
-                  >
-                    Evidence
-                  </button>
-                </span>
-              </div>
-            ))}
+
+          <div className="event-card-list">
             {filtered.length === 0 && (
-              <p className="muted">No backend events matched current filters.</p>
+              <p className="muted ec-empty">
+                {streamStatus === "connecting" ? "Connecting to stream…" : "No events match current filters."}
+              </p>
             )}
+            {filtered.map((event, idx) => {
+              const isNew = idx < liveEvents.length && liveEvents.includes(event);
+              return (
+                <button
+                  key={event.event_hash}
+                  type="button"
+                  className={`event-card${isNew ? " event-card-new" : ""}`}
+                  onClick={() => openDetail(event)}
+                >
+                  <div className="ec-left">
+                    <span className={`ec-type-badge ec-cls-${event.classification.toLowerCase()}`}>
+                      {event.type.replace(/_/g, " ")}
+                    </span>
+                    <span className="ec-summary">{event.summary || event.type}</span>
+                  </div>
+                  <div className="ec-right">
+                    <span className="chip ec-source">{SOURCE_LABEL[event.source] ?? event.source}</span>
+                    <span className="ec-time muted">{relativeTime(event.occurred_at)}</span>
+                  </div>
+                </button>
+              );
+            })}
           </div>
         </div>
 
+        {/* ── Timeline bar chart ────────────────────────────────────────── */}
         <div className="panel">
           <div className="panel-header">
             <h3>Events per minute</h3>
-            <span className="muted">Counts from `/v1/events/timeline`</span>
+            <span className="muted lf-interval-label">last 30 min</span>
           </div>
-          <BarChart data={timeline.map((item) => item.value)} />
+          <BarChart data={timeline.map((p) => p.value)} />
           <div className="timeline-labels">
-            {timeline.map((item) => (
-              <span key={item.label}>{item.label}</span>
-            ))}
+            {timeline.map((p) => <span key={p.label}>{p.label}</span>)}
           </div>
-          {timeline.length === 0 && <p className="muted">No timeline points returned by backend.</p>}
-          <div className="insight-row">
+          {timeline.length === 0 && <p className="muted">No timeline data yet.</p>}
+
+          <div className="insight-row lf-insight-row">
             <div>
-              <p className="label">Provenance coverage</p>
-              <p className="stat">{activeSourceCount} active source classes</p>
+              <p className="label">Live stream</p>
+              <p className="stat">{liveEvents.length} new this session</p>
             </div>
             <div>
               <p className="label">Audit trail</p>
-              <p className="stat">{events.length} event hashes loaded</p>
+              <p className="stat">{merged.length} event hashes</p>
             </div>
           </div>
         </div>
       </div>
+
+      {/* ── Event detail panel ────────────────────────────────────────────── */}
+      <DetailPanel
+        open={!!selected}
+        title={selected ? selected.type.replace(/_/g, " ") : ""}
+        subtitle={selected?.service_id || undefined}
+        onClose={() => setSelected(null)}
+      >
+        {selected && (
+          <div className="dp-event-detail">
+            <div className="dp-field-grid">
+              <div>
+                <p className="label">Event hash</p>
+                <p className="mono">{shortHash(selected.event_hash)}</p>
+              </div>
+              <div>
+                <p className="label">Source</p>
+                <p>{SOURCE_LABEL[selected.source] ?? selected.source}</p>
+              </div>
+              <div>
+                <p className="label">Classification</p>
+                <p className={`dp-cls dp-cls-${selected.classification.toLowerCase()}`}>
+                  {selected.classification}
+                </p>
+              </div>
+              <div>
+                <p className="label">Confidence</p>
+                <p>{(selected.confidence * 100).toFixed(0)}%</p>
+              </div>
+              <div>
+                <p className="label">Occurred</p>
+                <p className="mono">{selected.occurred_at}</p>
+              </div>
+              <div>
+                <p className="label">Received</p>
+                <p className="mono">{selected.received_at}</p>
+              </div>
+              {selected.service_id && (
+                <div>
+                  <p className="label">Service</p>
+                  <p>{selected.service_id}</p>
+                </div>
+              )}
+              {selected.endpoint && (
+                <div>
+                  <p className="label">Endpoint</p>
+                  <p className="mono">{selected.endpoint}</p>
+                </div>
+              )}
+            </div>
+
+            {selected.summary && (
+              <div className="dp-summary-row">
+                <p className="label">Summary</p>
+                <p>{selected.summary}</p>
+              </div>
+            )}
+
+            {selected.evidence.length > 0 && (
+              <div className="dp-evidence-row">
+                <p className="label">Evidence ({selected.evidence.length})</p>
+                <div className="list">
+                  {selected.evidence.map((ev) => (
+                    <div key={ev.event_hash} className="list-item">
+                      <span className="mono">{shortHash(ev.event_hash)}</span>
+                      <span className="muted">{ev.detail}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div className="dp-actions">
+              <button className="ghost" type="button"
+                onClick={() => { onShowGraph(selected); setSelected(null); }}>
+                Show in Graph
+              </button>
+              <button className="ghost" type="button"
+                onClick={() => { onShowTimeline(selected); setSelected(null); }}>
+                Timeline Context
+              </button>
+              <button className="ghost" type="button"
+                onClick={() => { onShowEvidence(`Evidence — ${shortHash(selected.event_hash)}`, selected); setSelected(null); }}>
+                Full Evidence
+              </button>
+            </div>
+          </div>
+        )}
+      </DetailPanel>
     </section>
   );
 }

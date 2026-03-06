@@ -5,8 +5,11 @@ import time
 import uuid
 
 from fastapi import FastAPI, Request
+from starlette.responses import Response
 
 from app.core.config import settings
+
+_MAX_BODY_BYTES = 10 * 1024 * 1024  # 10 MB global request body cap
 
 
 http_log = logging.getLogger("sentinel.http")
@@ -43,6 +46,19 @@ def install_http_hardening(app: FastAPI) -> None:
     async def _request_context_middleware(request: Request, call_next):
         request_id = normalize_request_id(request.headers.get("X-Request-ID"))
         request.state.request_id = request_id
+
+        # Reject oversized requests before parsing the body
+        content_length = request.headers.get("content-length")
+        if content_length:
+            try:
+                if int(content_length) > _MAX_BODY_BYTES:
+                    return Response(
+                        content='{"detail":"request_body_too_large"}',
+                        status_code=413,
+                        media_type="application/json",
+                    )
+            except ValueError:
+                pass  # non-integer content-length — let FastAPI handle it
 
         started = time.perf_counter()
         try:

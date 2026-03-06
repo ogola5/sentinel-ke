@@ -36,6 +36,9 @@ boto3
 # STIX threat intelligence
 stix2
 
+# Rate limiting
+slowapi
+
 # Post-quantum cryptography (NIST FIPS 203 / 204 / 197)
 # AES-256-GCM + HKDF-SHA3-512 — replaces custom XOR cipher for MFA secret storage
 cryptography

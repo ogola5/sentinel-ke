@@ -40,11 +40,46 @@ class Settings(BaseSettings):
     # -----------------------------------------------------------------------
     # Local data source  (demo mode uses built-in synthetic data)
     # -----------------------------------------------------------------------
-    # Options: demo | postgres | csv
+    # Options: demo | db | csv
+    #   demo     Built-in synthetic Kenya fraud profiles (no external deps)
+    #   db       Query a live database (PostgreSQL, MySQL, MSSQL, Oracle, SQLite)
+    #   csv      Read from a pre-exported CSV file
     data_source: str = "demo"
 
-    # If data_source == "postgres": local partner database URL
+    # If data_source == "db": SQLAlchemy connection URL for the partner's database
+    #   PostgreSQL: postgresql+psycopg2://user:pass@host:5432/dbname
+    #   MySQL:      mysql+pymysql://user:pass@host:3306/dbname
+    #   MSSQL:      mssql+pyodbc://user:pass@host/dbname?driver=ODBC+Driver+17+for+SQL+Server
+    #   Oracle:     oracle+cx_oracle://user:pass@host:1521/SID
+    #   SQLite:     sqlite:////absolute/path/to/file.db
     local_db_url: str = ""
+
+    # Built-in query preset — populates db_query/column mapping automatically.
+    # Options: kra_tax | ifmis_payments | kemsa_procurement | mpesa_core |
+    #          ecitizen_logins | mpesa_agent | custom
+    # Leave blank or set "custom" to use db_query directly.
+    db_preset: str = ""
+
+    # Custom SQL query — must include {window_start} and {window_end} placeholders.
+    # Example:
+    #   SELECT account_no, 'TRANSACTION_EVENT' AS event_type,
+    #          transaction_date AS occurred_at, amount, risk_code
+    #   FROM payments
+    #   WHERE transaction_date BETWEEN '{window_start}' AND '{window_end}'
+    db_query: str = ""
+
+    # Column mapping — which column in query results maps to each EntityRecord field.
+    # These are used when NOT using a built-in preset.
+    db_entity_key_col:    str = "entity_key"      # uniquely identifies the entity
+    db_entity_type_fixed: str = ""                # force all rows to this type (e.g. "account_h")
+    db_entity_type_col:   str = "entity_type"     # or read from a column
+    db_event_type_col:    str = "event_type"      # e.g. TRANSACTION_EVENT
+    db_timestamp_col:     str = "occurred_at"     # ISO-8601 or datetime column
+    db_risk_flags_col:    str = ""                # optional pipe-separated flags column
+    db_amount_col:        str = ""                # optional KES amount column
+
+    # Max rows fetched per window (safety cap)
+    db_batch_size: int = 10_000
 
     # If data_source == "csv": path to event CSV file
     csv_path: str = ""

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import time
 from typing import Any, Dict, Tuple
@@ -11,6 +12,8 @@ from app.core.config import settings
 from app.ledger.db import SessionLocal
 from app.ingestion.schemas import CanonicalEvent
 from app.ingestion.service import IngestionService
+
+log = logging.getLogger("sentinel.ingest_consumer")
 
 
 def _build_consumer(topics: list[str]) -> KafkaConsumer:
@@ -63,10 +66,10 @@ def run(topics: list[str]) -> None:
                 processed += 1
             else:
                 failed += 1
-                print(f"[ingest_consumer] failed key={msg.key} error={err}")
+                log.warning("ingest_consumer failed key=%s error=%s", msg.key, err)
             consumer.commit()
     finally:
-        print(f"[ingest_consumer] shutting down processed={processed} failed={failed}")
+        log.info("ingest_consumer shutting down processed=%d failed=%d", processed, failed)
         db.close()
         try:
             consumer.close()
@@ -89,7 +92,7 @@ def main():
         try:
             run(args.topics)
         except Exception as e:
-            print(f"[ingest_consumer] restart after error: {e}")
+            log.error("ingest_consumer restarting after error: %s", e)
             time.sleep(2.0)
 
 

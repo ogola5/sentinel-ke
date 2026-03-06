@@ -1,0 +1,31 @@
+name: PR Guardrails
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+
+jobs:
+  guardrails:
+    name: Churn and plan guardrails
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Ensure base branch is fetched
+        run: git fetch --no-tags --prune --depth=1 origin "${{ github.base_ref }}"
+
+      - name: Run guardrails
+        run: |
+          python3 scripts/pr_guardrails.py \
+            --base-ref "origin/${{ github.base_ref }}" \
+            --head-ref "HEAD" \
+            --max-churn 1600 \
+            --max-files 60 \
+            --test-threshold 300
+

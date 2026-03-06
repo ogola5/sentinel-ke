@@ -13,6 +13,16 @@ torch-geometric>=2.5.0
 # Optional: CSV connector
 # (no extra dep — uses stdlib csv)
 
-# Optional: PostgreSQL connector
-# psycopg2-binary>=2.9
-# sqlalchemy>=2.0
+# DbConnector — SQLAlchemy core (required for any db data_source)
+sqlalchemy>=2.0
+
+# DbConnector — install the driver(s) matching your database:
+#   PostgreSQL  →  psycopg2-binary
+#   MySQL       →  pymysql
+#   MSSQL       →  pyodbc
+#   Oracle      →  cx_oracle
+#
+# Uncomment the line(s) you need:
+# psycopg2-binary>=2.9   # PostgreSQL (KRA iTax, IFMIS, KEMSA, M-Pesa)
+# pymysql>=1.1           # MySQL / MariaDB
+# pyodbc>=5.0            # Microsoft SQL Server (MSSQL)

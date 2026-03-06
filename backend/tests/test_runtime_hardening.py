@@ -8,6 +8,7 @@ from app.core.runtime_hardening import evaluate_runtime_hardening
 def _settings(**overrides):
     base = {
         "app_env": "development",
+        "database_url": "postgresql+psycopg2://sentinel:sentinel@localhost:5433/sentinel",
         "frontend_api_key": "k" * 24,
         "ingest_api_key": "k" * 24,
         "pseudonym_salt": "s" * 16,
@@ -44,15 +45,27 @@ def test_runtime_hardening_flags_insecure_production_settings_as_errors():
             ingest_allow_unauthenticated=True,
             db_auto_create=True,
             cors_allow_origins=["*"],
+            database_url="postgresql+psycopg2://sentinel:sentinel@postgres:5432/sentinel",
         )
     )
     assert "API_AUTH_DISABLED_true" in report.errors
     assert "INGEST_ALLOW_UNAUTH_true" in report.errors
     assert "DB_AUTO_CREATE_true" in report.errors
     assert "CORS_ALLOW_ORIGINS_wildcard" in report.errors
+    assert "DATABASE_URL_host_not_deployable" in report.errors
 
 
 def test_runtime_hardening_treats_missing_secret_as_warning_in_development():
     report = evaluate_runtime_hardening(_settings(auth_token_secret=""))
     assert report.errors == ()
     assert "AUTH_TOKEN_SECRET_missing" in report.warnings
+
+
+def test_runtime_hardening_flags_invalid_database_scheme():
+    report = evaluate_runtime_hardening(
+        _settings(
+            app_env="production",
+            database_url="mysql://u:p@db/sentinel",
+        )
+    )
+    assert "DATABASE_URL_scheme_invalid" in report.errors

@@ -7,6 +7,7 @@ from fastapi import Depends
 from fastapi.routing import APIRouter
 
 from app.api.ai import router as ai_router
+from app.api.demo import router as demo_router
 from app.api.anomalies import router as anomalies_router
 from app.api.auth import router as auth_router
 from app.api.crypto_posture import router as crypto_posture_router
@@ -35,6 +36,7 @@ from app.api.metrics import router as metrics_router
 from app.api.mitigations import router as mitigations_router
 from app.api.stix import router as stix_router
 from app.api.federation import router as federation_router
+from app.api.stream import router as stream_router
 from app.cases.api import router as cases_router
 from app.ingestion.router import router as ingest_router
 
@@ -63,6 +65,7 @@ def build_tags_metadata(*, ai_enabled: bool) -> list[dict[str, str]]:
         {"name": "defense", "description": "Vulnerability, incident response, backup resilience, and crypto posture"},
         {"name": "crypto-posture", "description": "Post-quantum cryptographic posture — FIPS 203/204/197 compliance and algorithm status"},
         {"name": "federation", "description": "Federated intelligence network — edge-agent pattern ingestion and cross-partner threat correlations"},
+        {"name": "stream", "description": "Server-Sent Events real-time threat event stream"},
     ]
     if ai_enabled:
         tags.append({"name": "ai", "description": "AI predictions and explanations"})
@@ -73,6 +76,7 @@ def build_router_mounts(*, ai_enabled: bool) -> list[RouterMount]:
     mounts = [
         RouterMount(auth_router, ()),
         RouterMount(crypto_posture_router, ()),  # public — no auth on /posture; self-test requires section access
+        RouterMount(stream_router, ()),           # SSE stream — auth handled internally via ?token= param
         RouterMount(ingest_router, (Depends(require_api_key),)),
         RouterMount(events_router, (Depends(require_section_access), Depends(require_scope("events.read")))),
         RouterMount(graph_router, (Depends(require_central_access), Depends(require_scope("graph.read")))),
@@ -133,6 +137,8 @@ def build_router_mounts(*, ai_enabled: bool) -> list[RouterMount]:
         #   GET  /partners, /stream, /correlations → section access (analysts)
         #   POST /register  → central access + integrations.write (admin)
         RouterMount(federation_router, ()),
+        # Demo/seed endpoints — central access only; gated by DEMO_ENDPOINTS_ENABLED
+        RouterMount(demo_router, ()),
     ]
 
     if ai_enabled:

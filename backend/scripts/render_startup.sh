@@ -9,7 +9,10 @@ set -e
 #    Render injects:  postgresql://user:pass@host/db
 #    psycopg2 needs:  postgresql+psycopg2://user:pass@host/db
 # ---------------------------------------------------------------------------
-if echo "$DATABASE_URL" | grep -q "^postgresql://"; then
+if echo "$DATABASE_URL" | grep -q "^postgres://"; then
+  export DATABASE_URL="postgresql+psycopg2://${DATABASE_URL#postgres://}"
+  echo "[startup] Patched DATABASE_URL (postgres:// -> postgresql+psycopg2://)"
+elif echo "$DATABASE_URL" | grep -q "^postgresql://"; then
   export DATABASE_URL="postgresql+psycopg2://${DATABASE_URL#postgresql://}"
   echo "[startup] Patched DATABASE_URL driver prefix"
 fi
@@ -66,6 +69,15 @@ from sqlalchemy import create_engine, text
 engine = create_engine(os.environ["DATABASE_URL"])
 
 patches = [
+    # legacy core ledger columns
+    """ALTER TABLE source_registry ADD COLUMN IF NOT EXISTS section_code VARCHAR""",
+    """ALTER TABLE source_registry ADD COLUMN IF NOT EXISTS api_key_lookup VARCHAR(64)""",
+    """CREATE UNIQUE INDEX IF NOT EXISTS ux_source_registry_api_key_lookup
+         ON source_registry (api_key_lookup)""",
+    """ALTER TABLE event_log ADD COLUMN IF NOT EXISTS section_code VARCHAR""",
+    """ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS section_code VARCHAR""",
+    """ALTER TABLE entity_embedding ADD COLUMN IF NOT EXISTS embedding_type VARCHAR DEFAULT 'gnn'""",
+
     # ai_prediction missing columns
     """ALTER TABLE ai_prediction
          ADD COLUMN IF NOT EXISTS model_version    VARCHAR NOT NULL DEFAULT 'unknown',
@@ -107,13 +119,17 @@ PYEOF
 
 # ---------------------------------------------------------------------------
 # 5. Start the web server
-#    - 2 uvicorn workers for concurrency (free tier has 0.5 CPU)
-#    - 120s timeout for long GNN queries
+#    Respect Render WEB_CONCURRENCY (defaults to 1 on small instances).
 # ---------------------------------------------------------------------------
-echo "[startup] Starting Sentinel-KE API on port ${PORT:-8000}..."
+WORKERS="${WEB_CONCURRENCY:-1}"
+if [ "$WORKERS" -lt 1 ] 2>/dev/null; then
+  WORKERS=1
+fi
+
+echo "[startup] Starting Sentinel-KE API on port ${PORT:-8000} with workers=${WORKERS}..."
 exec gunicorn app.main:app \
   --worker-class uvicorn.workers.UvicornWorker \
-  --workers 2 \
+  --workers "$WORKERS" \
   --bind "0.0.0.0:${PORT:-8000}" \
   --timeout 120 \
   --keep-alive 5 \

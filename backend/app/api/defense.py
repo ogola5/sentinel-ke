@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -28,6 +28,7 @@ from app.defense.schemas import (
 from app.defense.executor import encrypt_webhook_secret
 from app.defense.models import ContainmentWebhook, WebhookDelivery
 from app.defense.service import DefenseService
+from app.core.rate_limit import limiter
 
 
 router = APIRouter(prefix="/v1/defense", tags=["defense"])
@@ -204,7 +205,9 @@ def list_incident_runs(
 
 
 @router.post("/incidents/runs/{run_id}/actions", dependencies=[Depends(require_scope("defense.write"))])
+@limiter.limit("30/minute")
 def execute_incident_actions(
+    request: Request,
     run_id: str,
     payload: IncidentRunActionBatchRequest,
     principal: AuthPrincipal = Depends(require_request_principal),
@@ -292,7 +295,7 @@ def snapshot_crypto_posture(
 
 class WebhookRegisterRequest(BaseModel):
     section_code: str = Field(..., description="Organisation this webhook belongs to")
-    action_type:  str = Field(..., description="block_ip | isolate_host")
+    action_type:  str = Field(..., description="block_ip | unblock_ip | isolate_host")
     webhook_url:  str = Field(..., description="Partner HTTPS endpoint")
     secret:       str = Field(..., min_length=16,
                               description="Shared signing secret (stored as SHA-256 hash)")
@@ -309,7 +312,7 @@ def register_webhook(
     db: Session = Depends(get_db),
 ):
     """
-    Register or update a partner webhook for last-mile block_ip / isolate_host dispatch.
+    Register or update a partner webhook for last-mile block_ip / unblock_ip / isolate_host dispatch.
 
     The hub signs every webhook call with HMAC-SHA256(body, raw_secret) and sets
     the header `X-Sentinel-Signature: sha256=<hex>`.  The partner verifies this

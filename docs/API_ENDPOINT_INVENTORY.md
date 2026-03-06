@@ -11,6 +11,7 @@ python3 scripts/generate_api_inventory.py --write
 | Method | Path | Tag | Handler |
 |---|---|---|---|
 | `GET` | `/health` | `ops` | `backend.app.main:health` |
+| `GET` | `/metrics` | `ops` | `backend.app.main:prometheus_metrics` |
 | `GET` | `/ready` | `ops` | `backend.app.main:ready` |
 | `GET` | `/v1/ai/baselines` | `ai` | `backend.app.api.ai:list_baselines` |
 | `GET` | `/v1/ai/campaign-indicators` | `ai` | `backend.app.api.ai:list_campaign_indicators` |
@@ -21,6 +22,7 @@ python3 scripts/generate_api_inventory.py --write
 | `POST` | `/v1/ai/feedback` | `ai` | `backend.app.api.ai:create_feedback` |
 | `GET` | `/v1/ai/gnn/runs` | `ai` | `backend.app.api.ai:list_gnn_runs` |
 | `GET` | `/v1/ai/gnn/runs/{run_id}` | `ai` | `backend.app.api.ai:get_gnn_run` |
+| `POST` | `/v1/ai/gnn/train` | `ai` | `backend.app.api.ai:trigger_gnn_train` |
 | `GET` | `/v1/ai/input-anomalies` | `ai` | `backend.app.api.ai:list_input_anomalies` |
 | `GET` | `/v1/ai/link-predictions` | `ai` | `backend.app.api.ai:list_link_predictions` |
 | `GET` | `/v1/ai/path-scores` | `ai` | `backend.app.api.ai:list_path_scores` |
@@ -76,6 +78,8 @@ python3 scripts/generate_api_inventory.py --write
 | `POST` | `/v1/defense/webhooks` | `defense` | `backend.app.api.defense:register_webhook` |
 | `GET` | `/v1/defense/webhooks/deliveries` | `defense` | `backend.app.api.defense:list_webhook_deliveries` |
 | `DELETE` | `/v1/defense/webhooks/{webhook_id}` | `defense` | `backend.app.api.defense:disable_webhook` |
+| `POST` | `/v1/demo/ingest-corruption-data` | `demo` | `backend.app.api.demo:ingest_corruption_synthetic` |
+| `POST` | `/v1/demo/ingest-synthetic-gnn-data` | `demo` | `backend.app.api.demo:ingest_cyber_synthetic` |
 | `GET` | `/v1/economy/coverup/alerts` | `economy` | `backend.app.api.economy_coverup:list_coverup_alerts` |
 | `POST` | `/v1/economy/coverup/run` | `economy` | `backend.app.api.economy_coverup:run_coverup` |
 | `GET` | `/v1/economy/coverup/summary` | `economy` | `backend.app.api.economy_coverup:coverup_summary` |

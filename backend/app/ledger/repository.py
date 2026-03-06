@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import uuid
 from datetime import datetime, timezone
 from sqlalchemy.orm import Session
@@ -14,6 +15,15 @@ from app.ledger.models import (
 from app.core.security import verify_api_key
 
 
+def _key_lookup_hash(raw_api_key: str) -> str:
+    """SHA-256 of the raw key — used as a non-secret indexed lookup token.
+
+    Not a replacement for the HMAC stored in api_key_hash; the full
+    verify_api_key() call still happens after the indexed DB lookup.
+    """
+    return hashlib.sha256(raw_api_key.encode()).hexdigest()
+
+
 class LedgerRepository:
     def __init__(self, db: Session):
         self.db = db
@@ -23,9 +33,32 @@ class LedgerRepository:
     # -------------------------
 
     def get_source_by_api_key(self, raw_api_key: str) -> SourceRegistry | None:
-        for src in self.db.query(SourceRegistry).all():
+        lookup = _key_lookup_hash(raw_api_key)
+
+        # O(1) fast path — indexed lookup
+        src = (
+            self.db.query(SourceRegistry)
+            .filter(SourceRegistry.api_key_lookup == lookup)
+            .first()
+        )
+        if src and verify_api_key(raw_api_key, src.api_key_hash):
+            return src
+
+        # Backward-compat fallback for rows created before the lookup column existed.
+        # On first match the column is back-filled so subsequent calls use the fast path.
+        for src in (
+            self.db.query(SourceRegistry)
+            .filter(SourceRegistry.api_key_lookup.is_(None))
+            .all()
+        ):
             if verify_api_key(raw_api_key, src.api_key_hash):
+                try:
+                    src.api_key_lookup = lookup
+                    self.db.commit()
+                except Exception:
+                    self.db.rollback()
                 return src
+
         return None
 
     def ensure_source_active(self, source: SourceRegistry):

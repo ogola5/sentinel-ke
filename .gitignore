@@ -72,3 +72,16 @@ wandb/
 *.joblib
 *.pickle
 *.pkl
+# Secrets and environment files (never commit these)
+render-backend.env
+.env.render
+.env.render.backend-only
+*.env.backend-only
+
+# Virtual environments (anywhere in project)
+**/.venv/
+**/venv/
+**/.virtualenv/
+
+# Node modules (project-wide)
+**/node_modules/

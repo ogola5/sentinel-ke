@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
+from app.core import metrics_store
 from app.ledger.db import get_db
 from app.ledger.models import EventLog
 from app.graph.models import GraphDeltaLog
@@ -25,7 +26,9 @@ def metrics(db: Session = Depends(get_db)):
     feedback_count = db.query(AIFeedbackLabel).count()
     rollout_count = db.query(AIModelRollout).count()
     decision_fusion_count = db.query(AIDecisionFusion).count()
+    perf = metrics_store.snapshot()
     return {
+        # DB entity counts
         "events": event_count,
         "graph_deltas": delta_count,
         "anomalies": anomaly_count,
@@ -34,4 +37,12 @@ def metrics(db: Session = Depends(get_db)):
         "ai_feedback_labels": feedback_count,
         "ai_rollouts": rollout_count,
         "ai_decision_fusions": decision_fusion_count,
+        # Runtime performance
+        "uptime_seconds": perf["uptime_seconds"],
+        "request_count": perf["request_count"],
+        "error_count": perf["error_count"],
+        "latency_sample_size": perf["sample_size"],
+        "latency_p50_ms": perf["latency_p50_ms"],
+        "latency_p95_ms": perf["latency_p95_ms"],
+        "latency_p99_ms": perf["latency_p99_ms"],
     }

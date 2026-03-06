@@ -1,16 +1,67 @@
 # =============================================================================
-# Sentinel-KE — Full dependency bundle  (BUILD ONCE strategy)
+# Sentinel-KE — All dependencies (single file)
 #
-# Dependency tree:
-#   requirements.txt
-#     └─ requirements-dev.txt        (dev/test/notebook tools)
-#          └─ requirements-runtime.txt  (API + workers, always installed)
-#     └─ requirements-ml.txt         (PyTorch — CPU or GPU)
-#
-# Docker-compose default: INSTALL_ALL_REQUIREMENTS=1
-#   → installs this file once at build time
-#   → code changes flow through volume mounts with --reload (no rebuild)
-#   → only rebuild when YOU add a new package here
+# Install:  pip install -r requirements.txt
+# Docker:   baked into image at build time (see Dockerfile)
+# GPU:      change --extra-index-url below to https://download.pytorch.org/whl/cu121
 # =============================================================================
--r requirements-dev.txt
--r requirements-ml.txt
+
+# ── Web framework ─────────────────────────────────────────────────────────────
+fastapi
+uvicorn[standard]
+gunicorn
+starlette
+python-multipart
+
+# ── Data validation ───────────────────────────────────────────────────────────
+pydantic
+email-validator
+
+# ── ORM & database ───────────────────────────────────────────────────────────
+sqlalchemy
+psycopg2-binary
+alembic
+
+# ── Graph database ────────────────────────────────────────────────────────────
+neo4j
+
+# ── Search & analytics ───────────────────────────────────────────────────────
+opensearch-py
+
+# ── Streaming (Kafka / Redpanda) ──────────────────────────────────────────────
+kafka-python
+
+# ── HTTP & cloud ──────────────────────────────────────────────────────────────
+requests
+httpx
+boto3
+
+# ── STIX threat intelligence ─────────────────────────────────────────────────
+stix2
+
+# ── Rate limiting ─────────────────────────────────────────────────────────────
+slowapi
+
+# ── Post-quantum cryptography (NIST FIPS 203 / 204 / 197) ────────────────────
+cryptography
+kyber-py
+dilithium-py
+pycryptodome
+
+# ── ML — PyTorch CUDA 12.1 build ─────────────────────────────────────────────
+# +cu121 suffix forces the CUDA wheel; compatible with host CUDA ≥ 12.1
+# For CPU-only dev: change to  torch  (no suffix, drop extra-index-url)
+--extra-index-url https://download.pytorch.org/whl/cu121
+torch==2.4.0+cu121
+
+# ── Dev / test / notebooks ────────────────────────────────────────────────────
+pytest
+pytest-asyncio
+jupyterlab
+ipykernel
+numpy
+pandas
+matplotlib
+seaborn
+scikit-learn
+networkx

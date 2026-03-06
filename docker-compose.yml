@@ -1,31 +1,22 @@
 # =============================================================================
-# Sentinel-KE — docker-compose
-#
-# BUILD ONCE STRATEGY
-# -------------------
-#   1. docker compose build          ← builds image with ALL deps (torch + dev)
-#   2. docker compose up -d          ← starts stack; hot-reload handles code
-#   3. edit Python / React files     ← uvicorn --reload / Vite HMR pick it up
-#   4. add new pip package?          → add to requirements-runtime.txt then
-#                                       docker compose build backend  (only once)
+# Sentinel-KE — Production Docker Compose
 #
 # QUICK START
-#   cp .env.example .env && docker compose up -d
+#   cp .env.example .env   # fill in secrets
+#   docker compose build
+#   docker compose up -d
+#
+# AFTER CODE CHANGES
+#   docker compose build <service> && docker compose up -d <service>
+#
+# SCALING
+#   WEB_CONCURRENCY=8 docker compose up -d          # more workers, single host
+#   docker stack deploy -c docker-compose.yml sentinel  # Docker Swarm
+#   kubectl apply -f infra/k8s/backend.yaml             # Kubernetes
 # =============================================================================
 
-# ─── Reusable build fragments ────────────────────────────────────────────────
-
-x-backend-build-full: &backend-build-full
+x-backend-build: &backend-build
   context: ./backend
-  args:
-    INSTALL_ALL_REQUIREMENTS: "1"   # torch + dev + runtime — build once
-
-x-backend-build-lite: &backend-build-lite
-  context: ./backend
-  args:
-    INSTALL_ALL_REQUIREMENTS: "0"
-    INSTALL_DEV: "1"
-    INSTALL_ML: "0"
 
 x-backend-env: &backend-env
   env_file: .env
@@ -33,18 +24,17 @@ x-backend-env: &backend-env
     PYTHONPATH: /app
 
 x-backend-volumes: &backend-volumes
-  - ./backend:/app                  # code hot-reload (no rebuild needed)
   - gnn_artifacts:/app/artifacts    # GNN model persistence across restarts
-
-# ─── Services ────────────────────────────────────────────────────────────────
 
 services:
 
-  # ── API server ─────────────────────────────────────────────────────────────
+  # ── API server ──────────────────────────────────────────────────────────────
   backend:
-    build: *backend-build-full
-    container_name: sentinel-backend
+    build: *backend-build
     <<: *backend-env
+    environment:
+      PYTHONPATH: /app
+      WEB_CONCURRENCY: ${WEB_CONCURRENCY:-2}
     ports:
       - "8000:8000"
     depends_on:
@@ -57,12 +47,18 @@ services:
       neo4j:
         condition: service_started
     volumes: *backend-volumes
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     command: >
       uvicorn app.main:app
         --host 0.0.0.0
         --port 8000
-        --reload
-        --reload-dir /app/app
+        --workers ${WEB_CONCURRENCY:-2}
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
@@ -71,10 +67,9 @@ services:
       retries: 5
       start_period: 30s
 
-  # ── JupyterLab (ML training, notebooks) ────────────────────────────────────
+  # ── JupyterLab (ML training / notebooks) ───────────────────────────────────
   notebook:
-    build: *backend-build-full
-    container_name: sentinel-notebook
+    build: *backend-build
     <<: *backend-env
     environment:
       PYTHONPATH: /app
@@ -86,12 +81,16 @@ services:
         condition: service_healthy
       neo4j:
         condition: service_started
-      opensearch:
-        condition: service_healthy
     volumes:
-      - ./backend:/app
       - ./notebooks:/notebooks
       - gnn_artifacts:/app/artifacts
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     command: >
       jupyter lab
         --ip=0.0.0.0
@@ -102,28 +101,23 @@ services:
         --IdentityProvider.token=${JUPYTER_TOKEN:-change-me-jupyter-token}
     restart: unless-stopped
 
-  # ── Frontend (React + Vite HMR) ────────────────────────────────────────────
+  # ── Frontend (React + Vite) ─────────────────────────────────────────────────
   frontend:
     build:
       context: ./frontend
-    container_name: sentinel-frontend
     environment:
       VITE_API_PROXY_TARGET: http://backend:8000
     ports:
       - "3000:5173"
-    volumes:
-      - ./frontend:/usr/src/app
-      - /usr/src/app/node_modules    # keep container node_modules isolated
-    command: npm run dev -- --host 0.0.0.0
+    command: sh ./scripts/dev-start.sh
     depends_on:
       backend:
         condition: service_healthy
     restart: unless-stopped
 
-  # ── Redpanda consumer (Kafka-compatible stream processor) ──────────────────
+  # ── Redpanda ingest consumer ────────────────────────────────────────────────
   redpanda-consumer:
-    build: *backend-build-lite
-    container_name: sentinel-redpanda-consumer
+    build: *backend-build
     <<: *backend-env
     command: python -m app.streaming.ingest_consumer --topics sentinel.ingest
     depends_on:
@@ -132,10 +126,9 @@ services:
     volumes: *backend-volumes
     restart: unless-stopped
 
-  # ── AI inference consumer (Kafka → run_once) ───────────────────────────────
+  # ── AI inference consumer (Kafka → GNN scoring) ────────────────────────────
   inference-consumer:
-    build: *backend-build-lite
-    container_name: sentinel-inference-consumer
+    build: *backend-build
     <<: *backend-env
     environment:
       PYTHONPATH: /app
@@ -155,8 +148,7 @@ services:
 
   # ── Corruption GNN training worker ─────────────────────────────────────────
   corruption-train-worker:
-    build: *backend-build-full
-    container_name: sentinel-corruption-train
+    build: *backend-build
     <<: *backend-env
     environment:
       PYTHONPATH: /app
@@ -171,12 +163,18 @@ services:
       postgres:
         condition: service_healthy
     volumes: *backend-volumes
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     restart: unless-stopped
 
   # ── Mule campaign analytics worker ─────────────────────────────────────────
   mule-campaign-worker:
-    build: *backend-build-lite
-    container_name: sentinel-mule-campaign-worker
+    build: *backend-build
     <<: *backend-env
     command: >
       /bin/sh -c "while true; do
@@ -192,11 +190,10 @@ services:
     volumes: *backend-volumes
     restart: unless-stopped
 
-  # ─── Infrastructure ─────────────────────────────────────────────────────────
+  # ─── Infrastructure ──────────────────────────────────────────────────────────
 
   postgres:
     image: postgres:15-alpine
-    container_name: sentinel-postgres
     environment:
       POSTGRES_DB:       ${POSTGRES_DB:-sentinel}
       POSTGRES_USER:     ${POSTGRES_USER:-sentinel}
@@ -215,7 +212,6 @@ services:
 
   neo4j:
     image: neo4j:5
-    container_name: sentinel-neo4j
     environment:
       NEO4J_AUTH: ${NEO4J_AUTH:-neo4j/change-me-neo4j-password}
       NEO4J_dbms_security_procedures_unrestricted: apoc.*
@@ -230,7 +226,6 @@ services:
 
   opensearch:
     image: opensearchproject/opensearch:2.11.1
-    container_name: sentinel-opensearch
     environment:
       discovery.type: single-node
       plugins.security.disabled: "true"
@@ -248,8 +243,7 @@ services:
       start_period: 30s
 
   redpanda:
-    image: redpandadata/redpanda:v24.1.1   # pinned — never use latest in compose
-    container_name: sentinel-redpanda
+    image: redpandadata/redpanda:v24.1.1
     command:
       - redpanda
       - start
@@ -274,7 +268,7 @@ services:
       - redpanda_data:/var/lib/redpanda/data
     restart: unless-stopped
 
-# ─── Volumes ─────────────────────────────────────────────────────────────────
+# ─── Volumes ──────────────────────────────────────────────────────────────────
 
 volumes:
   postgres_data:

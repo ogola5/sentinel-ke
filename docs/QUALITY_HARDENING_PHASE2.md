@@ -70,6 +70,63 @@ This reduces drift between declared routes and authorization requirements.
   - route conflict check
   - API inventory freshness check
 
+### 7) Schema + environment contracts
+
+- `backend/app/core/schema_contract.py` centralizes schema drift patching and status checks.
+- `backend/app/core/env_contract.py` validates/normalizes `DATABASE_URL`.
+- `/health` now includes schema contract status fields:
+  - `schema_contract_ok`
+  - `schema_missing_count`
+  - `schema_missing`
+
+### 8) Streaming path reliability
+
+- Kafka publish path in ingestion now uses producer instances correctly (`producer.publish(...)`).
+- Contract tests were added to validate:
+  - dual-topic publish when producer is available
+  - graceful ingest success when producer is unavailable
+
+### 9) Evaluation protocol lock
+
+- GNN training now persists deterministic split/calibration metadata:
+  - `split_policy`, `train_count`, `val_count`, `val_ratio_actual`
+  - `calibration_ece`, `calibration_mce`, `brier_score`
+- `GNNTrainingRun.metrics_json.evaluation_protocol` records holdout + calibration contract.
+
+### 10) Explainability depth upgrade
+
+- API now exposes model-attribution fields in prediction/explanation payloads:
+  - `explanation_method`
+  - `top_feature`
+  - `feature_attributions`
+  - `attribution_group_scores`
+- Frontend GNN intelligence table now surfaces top driver + explainability type.
+- Model attribution now supports `integrated_gradients` (configurable), with
+  fallback to `gradient_x_input` and then `heuristic_signals`.
+
+### 11) Bounded auto-response + rollback safety
+
+- Auto-containment guardrails now enforce:
+  - section resolution requirement (`AI_AUTO_CONTAINMENT_REQUIRE_SECTION`)
+  - uncertainty ceiling
+  - per-target cooldown (`AI_AUTO_CONTAINMENT_COOLDOWN_MINUTES`)
+  - routable-IP-only auto `block_ip`
+- Rollback path implemented:
+  - `rollback_block_ip` action resolves to signed `unblock_ip` dispatch
+  - strict rollback window (`DEFENSE_ROLLBACK_WINDOW_MINUTES`)
+  - duplicate rollback prevention
+
+### 12) Production proof artifacts
+
+- Prometheus scrape endpoint at `/metrics` with request counters + latency histogram.
+- Kubernetes HA template includes:
+  - rolling update strategy
+  - anti-affinity + topology spread
+  - startup/readiness/liveness probes
+  - HPA + PodDisruptionBudget
+- Incident replay-under-load tool:
+  - `python -m app.demo.replay` for deterministic replay and p50/p95/p99 evidence.
+
 ## Canonical/UCIC-style Alignment
 
 This is not a formal compliance certificate. It is a practical alignment to common Ubuntu/Canonical hardening expectations:

@@ -167,7 +167,7 @@ class ContainmentAction(Base):
     run_id = Column(UUID(as_uuid=True), ForeignKey("incident_playbook_run.id", ondelete="CASCADE"), nullable=False)
 
     section_code = Column(String, nullable=True)
-    action_type = Column(String, nullable=False)  # isolate_host|block_ip|revoke_user|disable_source_key|force_password_reset
+    action_type = Column(String, nullable=False)  # isolate_host|block_ip|rollback_block_ip|revoke_user|disable_source_key|force_password_reset
     target = Column(String, nullable=False)
     status = Column(String, nullable=False, default="queued")  # queued|executed|failed
 
@@ -197,7 +197,7 @@ class ContainmentWebhook(Base):
     Columns
     -------
     section_code   Which organisation owns this webhook (e.g. "safaricom")
-    action_type    "block_ip" | "isolate_host"
+    action_type    "block_ip" | "unblock_ip" | "isolate_host"
     webhook_url    Partner-side HTTPS endpoint
     secret_hash    SHA-256 of the shared signing secret.
                    Hub signs payloads with HMAC-SHA256 so the partner can
@@ -209,7 +209,7 @@ class ContainmentWebhook(Base):
 
     id           = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     section_code = Column(String, nullable=False)
-    action_type  = Column(String, nullable=False)   # block_ip | isolate_host
+    action_type  = Column(String, nullable=False)   # block_ip | unblock_ip | isolate_host
     webhook_url  = Column(String(512), nullable=False)
     secret_enc   = Column(String,      nullable=True)   # Fernet-encrypted raw signing secret
     is_active    = Column(Boolean, nullable=False, default=True)

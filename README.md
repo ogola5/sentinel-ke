@@ -86,6 +86,11 @@ Repository health gate (secrets/defaults/size/syntax/routes/docs checks):
 ./scripts/repo_health_check.sh
 ```
 
+Engineering workflow guardrails (PR review + planning + churn controls):
+```
+docs/ENGINEERING_WORKFLOW.md
+```
+
 Delivery tracker (5 phases to 90% readiness):
 ```
 docs/PHASES_90_TRACKER.md

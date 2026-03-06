@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 from fastapi import HTTPException
+from starlette.requests import Request
 
 from app.api.defense import execute_incident_actions, snapshot_crypto_posture, upsert_vulnerability
 from app.api.deps import AuthPrincipal
@@ -77,8 +78,11 @@ def test_execute_incident_actions_maps_not_found(monkeypatch):
 
     monkeypatch.setattr("app.api.defense.DefenseService", _Svc)
 
+    request = Request({"type": "http", "method": "POST", "path": "/v1/defense/incidents/runs/x/actions", "headers": []})
+
     with pytest.raises(HTTPException) as e:
         execute_incident_actions(
+            request=request,
             run_id="55f2f2c5-8ab2-4b2f-8904-9e3adf674d58",
             payload=IncidentRunActionBatchRequest(
                 actions=[ContainmentActionRequest(action_type="disable_source_key", target="safaricom")]

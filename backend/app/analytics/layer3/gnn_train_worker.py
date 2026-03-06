@@ -4,8 +4,9 @@ import hashlib
 import json
 from datetime import datetime, timezone
 import logging
+import math
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Set, Tuple
+from typing import Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
 from sqlalchemy import text
 from sqlalchemy.dialects.postgresql import insert
@@ -28,8 +29,19 @@ from app.analytics.layer3.ai_intel import (
     event_types_to_kill_chain_stage,
     reason_codes_to_d3fend_controls,
 )
+from app.analytics.explainability import (
+    heuristic_signal_attributions,
+    summarize_feature_attributions,
+    summarize_group_scores,
+    top_feature_hint,
+)
 from app.analytics.layer3.gnn_backbone import GNNDataset, load_dataset
-from app.analytics.layer3.gnn_model import train_graphsage
+from app.analytics.layer3.gnn_model import (
+    build_sentinel_gnn,
+    gradient_x_input_attributions,
+    integrated_gradients_attributions,
+    train_graphsage,
+)
 from app.campaign.models import Campaign, CampaignEntity
 from app.core.config import settings
 from app.core.security import compute_event_hash, sha256_hex, stable_json_dumps
@@ -415,6 +427,148 @@ def _upsert_link_predictions(
     )
     res = db.execute(stmt)
     return int(res.rowcount or 0)
+
+
+def _compute_fairness_metrics(
+    *,
+    entity_types: Sequence[str],
+    labels: Sequence[int],
+    probabilities: Sequence[float],
+    threshold: float = 0.5,
+    min_group_size: int = 3,
+) -> Dict[str, object]:
+    """
+    Compute per-entity-type fairness metrics (demographic parity + equalized odds).
+
+    Returns a dict suitable for storing in metrics_json["fairness"].
+    No new dependencies — pure Python arithmetic only.
+
+    Metrics per entity_type subgroup:
+      positive_rate          P(ŷ=1 | type)  — demographic parity check
+      actual_positive_rate   P(y=1 | type)  — calibration check
+      precision              TP/(TP+FP)     — equalized odds (positive predictive value)
+      recall                 TP/(TP+FN)     — equalized odds (true positive rate)
+      count / positive_count — sample sizes for context
+
+    Summary scalars:
+      max_positive_rate_disparity   max - min positive_rate across evaluated types
+      max_recall_disparity          max - min recall across evaluated types
+      types_evaluated               groups with >= min_group_size samples
+      fairness_flag                 PASS (<0.25 disparity) / WARN (<0.40) / FAIL
+    """
+    groups: Dict[str, Dict[str, List]] = {}
+    for etype, y, prob in zip(entity_types, labels, probabilities):
+        g = groups.setdefault(str(etype), {"y": [], "prob": []})
+        g["y"].append(int(y))
+        g["prob"].append(float(prob))
+
+    per_type: Dict[str, Dict[str, object]] = {}
+    positive_rates: List[float] = []
+    recalls: List[float] = []
+
+    for etype, g in groups.items():
+        n = len(g["y"])
+        if n < min_group_size:
+            per_type[etype] = {"count": n, "skipped": True, "reason": "too_few_samples"}
+            continue
+
+        y_true = g["y"]
+        y_pred = [1 if p >= threshold else 0 for p in g["prob"]]
+
+        tp = sum(1 for a, b in zip(y_true, y_pred) if a == 1 and b == 1)
+        fp = sum(1 for a, b in zip(y_true, y_pred) if a == 0 and b == 1)
+        fn = sum(1 for a, b in zip(y_true, y_pred) if a == 1 and b == 0)
+
+        pos_rate        = sum(y_pred) / n
+        actual_pos_rate = sum(y_true) / n
+        precision       = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+        recall          = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+
+        per_type[etype] = {
+            "count":               n,
+            "positive_count":      sum(y_true),
+            "positive_rate":       round(pos_rate, 4),
+            "actual_positive_rate": round(actual_pos_rate, 4),
+            "precision":           round(precision, 4),
+            "recall":              round(recall, 4),
+        }
+        positive_rates.append(pos_rate)
+        recalls.append(recall)
+
+    if len(positive_rates) >= 2:
+        max_pr_disp = round(max(positive_rates) - min(positive_rates), 4)
+        max_rc_disp = round(max(recalls) - min(recalls), 4) if len(recalls) >= 2 else None
+    else:
+        max_pr_disp = None
+        max_rc_disp = None
+
+    if max_pr_disp is None:
+        flag = "INSUFFICIENT_DATA"
+    elif max_pr_disp < 0.25:
+        flag = "PASS"
+    elif max_pr_disp < 0.40:
+        flag = "WARN"
+    else:
+        flag = "FAIL"
+
+    return {
+        "per_type":                    per_type,
+        "max_positive_rate_disparity": max_pr_disp,
+        "max_recall_disparity":        max_rc_disp,
+        "types_evaluated":             len(positive_rates),
+        "fairness_flag":               flag,
+        "threshold_used":              threshold,
+    }
+
+
+def _normalize_provenance_tag(value: object) -> str:
+    tag = str(value or "").strip().lower()
+    if tag in {"real", "synthetic", "mixed", "unknown"}:
+        return tag
+    return "unknown"
+
+
+def _compute_provenance_metrics(
+    *,
+    node_meta: Sequence[Mapping[str, object]],
+    probabilities: Sequence[float],
+    threshold_score: float = 70.0,
+) -> Dict[str, object]:
+    counts = {"real": 0, "synthetic": 0, "mixed": 0, "unknown": 0}
+    high_risk_counts = {"real": 0, "synthetic": 0, "mixed": 0, "unknown": 0}
+    real_ratio_sum = 0.0
+    real_ratio_count = 0
+
+    thr = max(0.0, min(100.0, float(threshold_score))) / 100.0
+    for i, meta in enumerate(node_meta):
+        m = dict(meta or {})
+        tag = _normalize_provenance_tag(m.get("provenance_tag"))
+        counts[tag] = int(counts.get(tag, 0)) + 1
+
+        try:
+            rr = float(m.get("real_signal_ratio") or 0.0)
+        except Exception:  # noqa: BLE001
+            rr = 0.0
+        rr = max(0.0, min(1.0, rr))
+        real_ratio_sum += rr
+        real_ratio_count += 1
+
+        prob = float(probabilities[i]) if i < len(probabilities) else 0.0
+        if prob >= thr:
+            high_risk_counts[tag] = int(high_risk_counts.get(tag, 0)) + 1
+
+    total = max(1, sum(int(v) for v in counts.values()))
+    real_effective = float(counts["real"] + counts["mixed"])
+    real_ratio = round(real_effective / float(total), 6)
+    avg_real_signal_ratio = round(real_ratio_sum / max(1, real_ratio_count), 6)
+
+    return {
+        "counts": counts,
+        "high_risk_counts": high_risk_counts,
+        "real_ratio": real_ratio,
+        "avg_real_signal_ratio": avg_real_signal_ratio,
+        "threshold_score": round(float(threshold_score), 4),
+    }
 
 
 def _f1_for_threshold(labels: Sequence[int], scores: Sequence[float], thr: float) -> float:
@@ -887,6 +1041,99 @@ def _upsert_campaign_indicators(
     return {"created": created, "updated": updated}
 
 
+def _compute_feature_attribution_map(
+    *,
+    dataset: GNNDataset,
+    model_state: Dict[str, object],
+    hidden_dim: int,
+    embed_dim: int,
+    dropout: float,
+    temporal_decay: float,
+    max_nodes: int,
+) -> Tuple[str, Dict[int, List[float]]]:
+    if not bool(settings.ai_explainability_enabled):
+        return "disabled", {}
+    if not dataset.feature_matrix or not model_state:
+        return "disabled", {}
+
+    try:
+        import torch  # noqa: PLC0415
+    except Exception:  # noqa: BLE001
+        return "disabled", {}
+
+    feat_dim = len(dataset.feature_matrix[0])
+    model = build_sentinel_gnn(feat_dim, hidden_dim, embed_dim, dropout)
+    try:
+        model.load_state_dict(model_state)
+    except Exception:  # noqa: BLE001
+        return "disabled", {}
+    model.eval()
+
+    # Build graph tensors matching training-time construction.
+    src_idx: List[int] = []
+    dst_idx: List[int] = []
+    edge_w: List[float] = []
+    for i, j, w in dataset.edges:
+        ew = math.log1p(max(0.0, float(w)))
+        if temporal_decay > 0:
+            ew *= math.exp(-temporal_decay * min(10.0, ew))
+        src_idx += [int(i), int(j)]
+        dst_idx += [int(j), int(i)]
+        edge_w += [ew, ew]
+    for i in range(len(dataset.feature_matrix)):
+        src_idx.append(i)
+        dst_idx.append(i)
+        edge_w.append(1.0)
+
+    x = torch.tensor(
+        [
+            [0.0 if not math.isfinite(float(v)) else float(v) for v in row]
+            for row in dataset.feature_matrix
+        ],
+        dtype=torch.float32,
+    )
+    edge_src_t = torch.tensor(src_idx, dtype=torch.long)
+    edge_dst_t = torch.tensor(dst_idx, dtype=torch.long)
+    edge_weight_t = torch.tensor(edge_w, dtype=torch.float32)
+
+    # Prioritize high-risk entities so attributions are available for critical rows.
+    ranked_idx = sorted(
+        range(len(dataset.feature_matrix)),
+        key=lambda idx: float((dataset.node_meta[idx] or {}).get("event_count") or 0),
+        reverse=True,
+    )
+    method = str(settings.ai_explainability_method or "integrated_gradients").strip().lower()
+    if method in {"integrated_gradients", "ig"}:
+        try:
+            attr = integrated_gradients_attributions(
+                model,
+                x,
+                edge_src_t,
+                edge_dst_t,
+                edge_weight_t,
+                node_indices=ranked_idx,
+                max_nodes=max(1, int(max_nodes)),
+                steps=max(8, int(settings.ai_explainability_ig_steps)),
+            )
+            if attr:
+                return "integrated_gradients", attr
+        except Exception as exc:  # noqa: BLE001
+            log.warning("integrated_gradients_failed fallback=gradient_x_input err=%s", exc)
+
+    attr = gradient_x_input_attributions(
+        model,
+        x,
+        edge_src_t,
+        edge_dst_t,
+        edge_weight_t,
+        node_indices=ranked_idx,
+        max_nodes=max(1, int(max_nodes)),
+    )
+    if attr:
+        return "gradient_x_input", attr
+    return "heuristic_signals", {}
+
+
 def run_once(
     *,
     db: Session,
@@ -908,6 +1155,8 @@ def run_once(
     learning_rate: float = 0.001,
     weight_decay: float = 0.0001,
     temporal_decay: float = 0.015,
+    split_policy: str = "entity_hash_holdout",
+    val_ratio: float = 0.2,
     pretrain_epochs: int = 5,
     seed: int = 7,
     uncertainty_abstain_threshold: float = 0.45,
@@ -948,10 +1197,24 @@ def run_once(
             seed=seed,
             temporal_decay=temporal_decay,
             pretrain_epochs=pretrain_epochs,
+            split_policy=split_policy,
+            val_ratio=val_ratio,
+            label_smoothing=0.05,
+            pseudo_label_threshold=0.0,
         )
     except Exception as exc:
         db.rollback()
         return {"status": "error", "stage": "train_graphsage", "detail": str(exc)}
+
+    attribution_method, attribution_map = _compute_feature_attribution_map(
+        dataset=dataset,
+        model_state=dict(train_result.model_state or {}),
+        hidden_dim=hidden_dim,
+        embed_dim=embed_dim,
+        dropout=dropout,
+        temporal_decay=temporal_decay,
+        max_nodes=int(settings.ai_explainability_max_nodes),
+    )
 
     try:
         thresholds = _calibrate_thresholds(
@@ -961,6 +1224,33 @@ def run_once(
             model_version=model_version,
             prediction_type=prediction_type,
         )
+
+        fairness = _compute_fairness_metrics(
+            entity_types=dataset.entity_types,
+            labels=dataset.labels,
+            probabilities=train_result.probabilities,
+        )
+        if fairness.get("fairness_flag") == "FAIL":
+            log.warning(
+                "fairness_policy_violation model_version=%s max_positive_rate_disparity=%.3f",
+                model_version,
+                fairness.get("max_positive_rate_disparity", 0),
+            )
+
+        provenance = _compute_provenance_metrics(
+            node_meta=dataset.node_meta,
+            probabilities=train_result.probabilities,
+            threshold_score=70.0,
+        )
+        min_real_ratio = max(0.0, min(1.0, float(settings.gnn_min_real_ratio)))
+        real_data_gate_passed = float(provenance.get("real_ratio") or 0.0) >= min_real_ratio
+        if not real_data_gate_passed:
+            log.warning(
+                "real_data_gate_failed model_version=%s real_ratio=%.3f min_required=%.3f",
+                model_version,
+                float(provenance.get("real_ratio") or 0.0),
+                min_real_ratio,
+            )
 
         run = GNNTrainingRun(
             model_version=model_version,
@@ -996,9 +1286,12 @@ def run_once(
                 "learning_rate": learning_rate,
                 "weight_decay": weight_decay,
                 "temporal_decay": temporal_decay,
+                "split_policy": split_policy,
+                "val_ratio": val_ratio,
                 "pretrain_epochs": pretrain_epochs,
                 "seed": seed,
                 "uncertainty_abstain_threshold": uncertainty_abstain_threshold,
+                "min_real_ratio": min_real_ratio,
             },
             metrics_json={
                 **train_result.metrics,
@@ -1006,6 +1299,28 @@ def run_once(
                 "positive_count": dataset.positive_count,
                 "negative_count": dataset.negative_count,
                 "benign_negative_count": dataset.benign_negative_count,
+                "fairness": fairness,
+                "provenance": provenance,
+                "real_data_gate": {
+                    "min_real_ratio": min_real_ratio,
+                    "passed": bool(real_data_gate_passed),
+                },
+                "evaluation_protocol": {
+                    "temporal_policy": "window_ordered",
+                    "holdout_policy": split_policy,
+                    "calibration": {
+                        "ece": float(train_result.metrics.get("calibration_ece") or 0.0),
+                        "mce": float(train_result.metrics.get("calibration_mce") or 0.0),
+                        "brier_score": float(train_result.metrics.get("brier_score") or 0.0),
+                        "eval_samples": int(train_result.metrics.get("eval_samples") or 0),
+                    },
+                },
+                "explainability": {
+                    "method": attribution_method,
+                    "top_k": int(settings.ai_explainability_top_k),
+                    "ig_steps": int(settings.ai_explainability_ig_steps),
+                    "model_based_rows": int(len(attribution_map)),
+                },
             },
         )
         db.add(run)
@@ -1083,13 +1398,31 @@ def run_once(
             kill_chain_stage = event_types_to_kill_chain_stage(event_types)
             technique_hits = event_types_to_attack_techniques(event_types)
             controls = reason_codes_to_d3fend_controls(reasons)
-            top_feature_hint = "event_count"
-            if bool((meta or {}).get("risk_flags")):
-                top_feature_hint = "risk_flags"
+
+            feature_contribs = attribution_map.get(i)
+            if feature_contribs:
+                explanation_method = attribution_method
+                feature_attributions = summarize_feature_attributions(
+                    feature_values=list(dataset.feature_matrix[i]),
+                    feature_contributions=feature_contribs,
+                    top_k=max(1, int(settings.ai_explainability_top_k)),
+                )
+            else:
+                explanation_method = "heuristic_signals"
+                feature_attributions = heuristic_signal_attributions(
+                    event_count=int((meta or {}).get("event_count") or 0),
+                    source_count=int((meta or {}).get("source_count") or 0),
+                    event_types=event_types,
+                    risk_flags=list((meta or {}).get("risk_flags") or []),
+                    top_k=max(1, int(settings.ai_explainability_top_k)),
+                )
+            group_scores = summarize_group_scores(feature_attributions)
+            top_feature = top_feature_hint(feature_attributions, fallback="log_event_count")
+
             counterfactual = build_counterfactual(
                 probability=prob,
                 threshold_score=threshold_score,
-                top_feature_hint=top_feature_hint,
+                top_feature_hint=top_feature,
             )
             if abstained:
                 reasons = sorted(set(reasons + ["UNCERTAIN_REQUIRES_ANALYST_REVIEW"]))
@@ -1110,6 +1443,9 @@ def run_once(
                 "lineage_id": lineage_id,
                 "source_backend": dataset.source_backend_used,
                 "feature_dim": len(dataset.feature_matrix[i]),
+                "explanation_method": explanation_method,
+                "feature_attributions": feature_attributions,
+                "attribution_group_scores": group_scores,
                 "legal_notice": LEGAL_RISK_NOTICE,
             }
 
@@ -1184,6 +1520,9 @@ def run_once(
                 "kill_chain_stage": kill_chain_stage,
                 "recommended_controls": controls,
                 "counterfactual": counterfactual,
+                "explanation_method": explanation_method,
+                "feature_attributions": feature_attributions,
+                "attribution_group_scores": group_scores,
                 "legal_notice": LEGAL_RISK_NOTICE,
             }
             if expl:
@@ -1255,6 +1594,7 @@ def run_once(
         "components_considered": component_stats["components_considered"],
         "campaign_indicators_created": campaign_indicator_stats["created"],
         "campaign_indicators_updated": campaign_indicator_stats["updated"],
+        "model_based_explanations": int(len(attribution_map)),
         "metrics": train_result.metrics,
         "artifact_path": artifact_path,
         "legal_notice": LEGAL_RISK_NOTICE,
@@ -1283,6 +1623,12 @@ def main() -> None:
     p.add_argument("--learning-rate", type=float, default=settings.gnn_learning_rate)
     p.add_argument("--weight-decay", type=float, default=settings.gnn_weight_decay)
     p.add_argument("--temporal-decay", type=float, default=settings.ai_temporal_edge_decay)
+    p.add_argument(
+        "--split-policy",
+        default=settings.gnn_split_policy,
+        choices=["entity_hash_holdout", "temporal_recency_holdout", "random"],
+    )
+    p.add_argument("--val-ratio", type=float, default=settings.gnn_val_ratio)
     p.add_argument("--pretrain-epochs", type=int, default=5)
     p.add_argument("--seed", type=int, default=settings.gnn_seed)
     p.add_argument("--uncertainty-abstain-threshold", type=float, default=settings.ai_uncertainty_abstain_threshold)
@@ -1321,6 +1667,8 @@ def main() -> None:
             learning_rate=args.learning_rate,
             weight_decay=args.weight_decay,
             temporal_decay=args.temporal_decay,
+            split_policy=args.split_policy,
+            val_ratio=args.val_ratio,
             pretrain_epochs=args.pretrain_epochs,
             seed=args.seed,
             uncertainty_abstain_threshold=args.uncertainty_abstain_threshold,

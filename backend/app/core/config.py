@@ -2,6 +2,7 @@
 from __future__ import annotations
 import os
 
+from app.core.env_contract import normalize_database_url
 
 def env_bool(name: str, default: bool = False) -> bool:
     v = os.environ.get(name)
@@ -17,6 +18,7 @@ def env_csv(name: str, default: str = "") -> list[str]:
 
 class Settings:
     app_env = os.environ.get("APP_ENV", "development").lower()
+    database_url = normalize_database_url(os.environ.get("DATABASE_URL", ""))
 
     # ---------------------------------------------------------
     # Kafka / Redpanda
@@ -60,6 +62,9 @@ class Settings:
     gnn_dropout = float(os.environ.get("GNN_DROPOUT", "0.2"))
     gnn_learning_rate = float(os.environ.get("GNN_LEARNING_RATE", "0.001"))
     gnn_weight_decay = float(os.environ.get("GNN_WEIGHT_DECAY", "0.0001"))
+    gnn_split_policy = os.environ.get("GNN_SPLIT_POLICY", "entity_hash_holdout").strip().lower()
+    gnn_val_ratio = float(os.environ.get("GNN_VAL_RATIO", "0.2"))
+    gnn_min_real_ratio = float(os.environ.get("GNN_MIN_REAL_RATIO", "0.3"))
     gnn_threshold_min_samples = int(os.environ.get("GNN_THRESHOLD_MIN_SAMPLES", "10"))
     gnn_component_discovery_enabled = env_bool("GNN_COMPONENT_DISCOVERY_ENABLED", True)
     gnn_component_min_size = int(os.environ.get("GNN_COMPONENT_MIN_SIZE", "3"))
@@ -77,6 +82,29 @@ class Settings:
     ai_rollout_mode_default = os.environ.get("AI_ROLLOUT_MODE_DEFAULT", "single").strip().lower()
     ai_canary_ratio_default = float(os.environ.get("AI_CANARY_RATIO_DEFAULT", "0.1"))
     ai_feedback_enabled = env_bool("AI_FEEDBACK_ENABLED", True)
+    ai_explainability_enabled = env_bool("AI_EXPLAINABILITY_ENABLED", True)
+    ai_explainability_method = os.environ.get("AI_EXPLAINABILITY_METHOD", "integrated_gradients").strip().lower()
+    ai_explainability_top_k = int(os.environ.get("AI_EXPLAINABILITY_TOP_K", "6"))
+    ai_explainability_max_nodes = int(os.environ.get("AI_EXPLAINABILITY_MAX_NODES", "64"))
+    ai_explainability_ig_steps = int(os.environ.get("AI_EXPLAINABILITY_IG_STEPS", "24"))
+    ai_auto_containment_enabled = env_bool("AI_AUTO_CONTAINMENT_ENABLED", False)
+    ai_auto_containment_min_score = float(os.environ.get("AI_AUTO_CONTAINMENT_MIN_SCORE", "90.0"))
+    ai_auto_containment_max_actions_per_run = int(
+        os.environ.get("AI_AUTO_CONTAINMENT_MAX_ACTIONS_PER_RUN", "10")
+    )
+    ai_auto_containment_require_impact_stage = env_bool(
+        "AI_AUTO_CONTAINMENT_REQUIRE_IMPACT_STAGE",
+        True,
+    )
+    ai_auto_containment_allowed_actions = env_csv(
+        "AI_AUTO_CONTAINMENT_ALLOWED_ACTIONS",
+        "block_ip,isolate_host",
+    )
+    ai_auto_containment_dry_run = env_bool("AI_AUTO_CONTAINMENT_DRY_RUN", False)
+    ai_auto_containment_require_section = env_bool("AI_AUTO_CONTAINMENT_REQUIRE_SECTION", True)
+    ai_auto_containment_cooldown_minutes = int(
+        os.environ.get("AI_AUTO_CONTAINMENT_COOLDOWN_MINUTES", "30")
+    )
 
     # ---------------------------------------------------------
     # Platform hardening
@@ -144,6 +172,29 @@ class Settings:
     # MUST be set in production. Dev fallback is derived deterministically in executor.py.
     # ---------------------------------------------------------
     webhook_secret_encryption_key = os.environ.get("WEBHOOK_SECRET_ENCRYPTION_KEY", "").strip()
+    defense_rollback_window_minutes = int(
+        os.environ.get("DEFENSE_ROLLBACK_WINDOW_MINUTES", "240")
+    )
+
+    # ---------------------------------------------------------
+    # Fairness policy
+    # GNN runs with max_positive_rate_disparity above this threshold are
+    # flagged fairness_blocked=True in the API response and logged as warnings.
+    # Set FAIRNESS_DISPARITY_THRESHOLD=0.0 to block on any disparity.
+    # ---------------------------------------------------------
+    fairness_disparity_threshold = float(
+        os.environ.get("FAIRNESS_DISPARITY_THRESHOLD", "0.4")
+    )
+
+    # ---------------------------------------------------------
+    # Rate limiting  (slowapi)
+    # RATE_LIMIT_ENABLED=false to disable globally (e.g. in tests).
+    # Individual endpoint limits are set via @limiter.limit() decorators.
+    # ---------------------------------------------------------
+    rate_limit_enabled       = env_bool("RATE_LIMIT_ENABLED", True)
+    rate_limit_global_per_min = int(os.environ.get("RATE_LIMIT_GLOBAL_PER_MIN", "200"))
+    rate_limit_auth_per_min  = int(os.environ.get("RATE_LIMIT_AUTH_PER_MIN", "10"))
+    rate_limit_ingest_per_min = int(os.environ.get("RATE_LIMIT_INGEST_PER_MIN", "300"))
 
 
 settings = Settings()

@@ -20,6 +20,24 @@ const asString = (value: unknown, fallback = ""): string =>
 
 const asBoolean = (value: unknown): boolean => value === true;
 
+export async function triggerGNNTrain(
+  domain: "cyber" | "corruption",
+  epochs = 60,
+): Promise<{ accepted: boolean; domain: string; model_version: string; message: string }> {
+  return apiFetchJson(endpoints.aiGNNTrain(), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ domain, epochs }),
+  });
+}
+
+export async function seedDemoData(
+  domain: "cyber" | "corruption",
+): Promise<{ accepted: boolean; domain: string; message: string }> {
+  const url = domain === "cyber" ? endpoints.demoIngestCyber() : endpoints.demoIngestCorruption();
+  return apiFetchJson(url, { method: "POST" });
+}
+
 export async function fetchGNNTrainingRuns(limit = 10): Promise<GNNTrainingRun[]> {
   try {
     const data = await apiFetchJson<ListResponse<GNNTrainingRun> | GNNTrainingRun[]>(
@@ -44,7 +62,7 @@ export async function fetchAIPredictions(limit = 20, windowKey?: string): Promis
 
 export async function submitAIFeedback(
   predictionId: string,
-  feedbackLabel: number,
+  feedbackLabel: 0 | 1 | 2,
   analystId: string,
   notes?: string,
 ): Promise<AIFeedback | null> {
@@ -61,11 +79,23 @@ export async function submitAIFeedback(
 export async function fetchAIFeedback(analystId: string, limit = 200): Promise<AIFeedback[]> {
   try {
     const data = await apiFetchJson<ListResponse<AIFeedback> | AIFeedback[]>(
-      endpoints.aiFeedback(limit, 0, analystId),
+      endpoints.aiFeedbackList(limit, 0, analystId),
     );
     return Array.isArray(data) ? data : (data.items ?? []);
   } catch {
     return [];
+  }
+}
+
+export async function submitFeedback(
+  predictionId: string,
+  feedbackLabel: 0 | 1 | 2,
+  analystId: string,
+  notes?: string,
+): Promise<void> {
+  const response = await submitAIFeedback(predictionId, feedbackLabel, analystId, notes);
+  if (!response) {
+    throw new Error("feedback_submit_failed");
   }
 }
 

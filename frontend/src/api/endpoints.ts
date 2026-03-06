@@ -1,14 +1,11 @@
 const resolveApiBase = (): string => {
+  // Explicit override (production builds set VITE_API_BASE_URL at build time)
   const fromEnv = String(import.meta.env.VITE_API_BASE_URL ?? "").trim();
-  if (fromEnv) {
-    return fromEnv.replace(/\/$/, "");
-  }
-  if (typeof window !== "undefined") {
-    const host = window.location.hostname;
-    if (host === "localhost" || host === "127.0.0.1") {
-      return "http://localhost:8000";
-    }
-  }
+  if (fromEnv) return fromEnv.replace(/\/$/, "");
+  // Default: relative URLs so all requests go through the Vite dev-server proxy.
+  // Docker:  VITE_API_PROXY_TARGET=http://backend:8000  (set in docker-compose)
+  // Local:   proxy falls back to http://localhost:8000
+  // This avoids CORS entirely — the proxy is same-origin from the browser's view.
   return "";
 };
 
@@ -54,6 +51,7 @@ export const endpoints = {
   mitigationsExport: () => withBase("/v1/mitigations/export"),
   aiPredictions: (limit = 10, offset = 0, windowKey?: string) =>
     withQuery("/v1/ai/predictions", { limit, offset, window_key: windowKey }),
+  aiFeedbackBase: () => withBase("/v1/ai/feedback"),
   aiPredictionExplanation: (predictionId: string) =>
     withBase(`/v1/ai/explanations/${encodeURIComponent(predictionId)}`),
   aiFeedbackSubmit: (predictionId: string, feedbackLabel: number, analystId: string, notes?: string) =>
@@ -63,7 +61,7 @@ export const endpoints = {
       analyst_id: analystId,
       notes,
     }),
-  aiFeedback: (limit = 50, offset = 0, analystId?: string) =>
+  aiFeedbackList: (limit = 50, offset = 0, analystId?: string) =>
     withQuery("/v1/ai/feedback", { limit, offset, analyst_id: analystId }),
   economySignals: (limit = 10, offset = 0) => withQuery("/v1/economy/signals", { limit, offset }),
   economyProcurementAnomalies: (limit = 10, offset = 0) =>
@@ -100,10 +98,31 @@ export const endpoints = {
 
   // AI / GNN
   aiTrainingRuns: (limit = 10, offset = 0) => withQuery("/v1/ai/gnn/runs", { limit, offset }),
+  aiGNNTrain: () => withBase("/v1/ai/gnn/train"),
+
+  // Demo data seeding
+  demoIngestCyber: () => withBase("/v1/demo/ingest-synthetic-gnn-data"),
+  demoIngestCorruption: () => withBase("/v1/demo/ingest-corruption-data"),
 
   // Crypto posture
   cryptoPosture: () => withBase("/v1/crypto/posture"),
   cryptoSelfTest: () => withBase("/v1/crypto/posture/self-test"),
+
+  // Real-time SSE stream
+  // Pass ?token=<FRONTEND_API_KEY> — EventSource cannot set custom headers
+  eventStream: (apiKey?: string) =>
+    withBase(apiKey ? `/v1/stream/events?token=${encodeURIComponent(apiKey)}` : "/v1/stream/events"),
+
+  // Auth
+  authLogin: () => withBase("/v1/auth/login"),
+  authRefresh: () => withBase("/v1/auth/refresh"),
+  authLogout: () => withBase("/v1/auth/logout"),
+  authMe: () => withBase("/v1/auth/me"),
+  authUsers: (q: Record<string, string | number | boolean | undefined | null> = {}) => withQuery("/v1/auth/users", q),
+  authUsersCreate: () => withBase("/v1/auth/users"),
+  authUserPasswordReset: (username: string) =>
+    withBase(`/v1/auth/users/${encodeURIComponent(username)}/password/reset`),
+  authPolicies: () => withBase("/v1/auth/policies"),
 };
 
 export type Endpoints = typeof endpoints;

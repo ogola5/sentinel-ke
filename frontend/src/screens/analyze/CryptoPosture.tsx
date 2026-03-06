@@ -102,7 +102,7 @@ export default function CryptoPosture() {
           <div className="state-box">
             <ShieldAlert size={28} color="var(--warning)" />
             <p>No crypto posture snapshot found.</p>
-            <p>POST /v1/crypto/posture to capture the current posture.</p>
+            <p>GET /v1/crypto/posture exposes the current backend posture.</p>
           </div>
         </div>
       ) : (

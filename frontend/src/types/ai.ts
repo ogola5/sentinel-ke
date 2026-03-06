@@ -1,18 +1,48 @@
+export interface FairnessMetrics {
+  fairness_flag: "PASS" | "WARN" | "FAIL";
+  max_positive_rate_disparity: number;
+  max_recall_disparity: number;
+  types_evaluated: number;
+  by_type?: Record<string, {
+    positive_rate: number;
+    actual_positive_rate: number;
+    precision: number;
+    recall: number;
+    count: number;
+    positive_count: number;
+  }>;
+}
+
 export interface GNNTrainingRun {
   id: string;
   model_version: string;
   prediction_type: string;
+  source_backend?: string | null;
   window_key?: string | null;
+  window_end?: string | null;
   auc: number | null;
   precision: number | null;
-  recall?: number | null;
-  f1?: number | null;
+  recall: number | null;
+  f1: number | null;
+  train_loss: number | null;
+  val_loss: number | null;
+  epochs: number | null;
   node_count: number | null;
   edge_count: number | null;
   positive_count: number | null;
   feature_dim: number | null;
   artifact_path: string | null;
-  metrics?: Record<string, unknown> | null;
+  params?: Record<string, unknown> | null;
+  fairness?: FairnessMetrics;
+  fairness_blocked?: boolean;
+  provenance?: Record<string, unknown> | null;
+  real_data_gate?: Record<string, unknown> | null;
+  real_data_gate_passed?: boolean;
+  metrics?: {
+    epoch_train_losses?: number[];
+    epoch_val_losses?: number[];
+    [key: string]: unknown;
+  } | null;
   created_at: string;
 }
 
@@ -31,6 +61,9 @@ export interface AIPrediction {
   kill_chain_stage: string | null;
   decision_source: string | null;
   reason_codes: string[];
+  explanation_method?: string | null;
+  top_feature?: string | null;
+  details?: Record<string, unknown>;
   created_at: string;
 }
 
