@@ -384,6 +384,14 @@ def ingest_traffic_file(
         iter_rows_from_path,
     )
 
+    if input_file is None:
+        raise ValueError(
+            "input_file is None — generate a synthetic file first:\n"
+            "  from seed_realistic_data import generate_cic_csv, generate_caida_csv\n"
+            "  cic_path   = generate_cic_csv('data/kenya_cic_synthetic.csv')\n"
+            "  caida_path = generate_caida_csv('data/kenya_caida_synthetic.csv')\n"
+            "Then pass the returned path as input_file."
+        )
     ds = str(dataset).strip().lower()
     rows = iter_rows_from_path(input_file)
     if ds == "cic":

@@ -19,6 +19,11 @@ export interface GNNTrainingRun {
   prediction_type: string;
   auc: number | null;
   precision: number | null;
+  recall: number | null;
+  f1: number | null;
+  train_loss: number | null;
+  val_loss: number | null;
+  epochs: number | null;
   node_count: number | null;
   edge_count: number | null;
   positive_count: number | null;
@@ -26,6 +31,11 @@ export interface GNNTrainingRun {
   artifact_path: string | null;
   fairness?: FairnessMetrics;
   fairness_blocked?: boolean;
+  metrics?: {
+    epoch_train_losses?: number[];
+    epoch_val_losses?: number[];
+    [key: string]: unknown;
+  };
   created_at: string;
 }
 

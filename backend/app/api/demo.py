@@ -39,13 +39,13 @@ def _demo_enabled() -> bool:
 
 
 def _seed_cyber() -> dict:
-    from app.demo.synthetic_ke_gnn_data import seed
-    return seed()
+    from app.demo.seed_large_scale import seed_cyber
+    return seed_cyber(n_runs=10, benign_per_run=100)
 
 
 def _seed_corruption() -> dict:
-    from app.demo.synthetic_corruption_data import seed
-    return seed()
+    from app.demo.seed_large_scale import seed_corruption
+    return seed_corruption(n_runs=10, benign_per_run=100)
 
 
 @router.post("/ingest-synthetic-gnn-data", status_code=202)
@@ -54,11 +54,11 @@ def ingest_cyber_synthetic(
     _principal=Depends(require_central_access),
 ):
     """
-    Seed the database with synthetic cyber-domain GNN training data.
+    Seed the database with large-scale synthetic cyber-domain GNN training data.
 
-    Inserts ~269 nodes across 7 Kenyan threat families (M-Pesa mule network,
-    SIM-swap, VPN fraud, DDoS botnet, phishing campaign, airtime siphoning,
-    multi-stage chain) into graph_feature_snapshot with window_key="Wmid".
+    Inserts ~4,000 nodes across 50 community batches (mule networks, DDoS botnets,
+    phishing campaigns, SIM swaps, airtime siphoning + benign traffic) into
+    graph_feature_snapshot with window_key="Wmid".
 
     After this returns, trigger training with:
       POST /v1/ai/gnn/train {"domain": "cyber"}
@@ -74,7 +74,7 @@ def ingest_cyber_synthetic(
         "domain": "cyber",
         "window_key": "Wmid",
         "message": (
-            "Seeding ~269 nodes across 7 threat families in background. "
+            "Seeding ~4,000 nodes across 10 community runs (5 threat families each) in background. "
             "Then call POST /v1/ai/gnn/train {\"domain\": \"cyber\"} to retrain."
         ),
     }
@@ -86,11 +86,11 @@ def ingest_corruption_synthetic(
     _principal=Depends(require_central_access),
 ):
     """
-    Seed the database with synthetic corruption-domain GNN training data.
+    Seed the database with large-scale synthetic corruption-domain GNN training data.
 
-    Inserts ~247 nodes across 6 Kenyan corruption patterns (tender cartel,
-    ghost workers, inflated procurement, shell company network, FY-end surge,
-    land fraud) into graph_feature_snapshot with window_key="Wcorruption".
+    Inserts ~3,500 nodes across 10 community runs (tender cartels, ghost workers,
+    shell company networks + benign entities) into graph_feature_snapshot with
+    window_key="Wcorruption".
 
     After this returns, trigger training with:
       POST /v1/ai/gnn/train {"domain": "corruption"}
@@ -106,7 +106,7 @@ def ingest_corruption_synthetic(
         "domain": "corruption",
         "window_key": "Wcorruption",
         "message": (
-            "Seeding ~247 nodes across 6 corruption families in background. "
+            "Seeding ~3,500 nodes across 10 community runs (3 corruption families each) in background. "
             "Then call POST /v1/ai/gnn/train {\"domain\": \"corruption\"} to retrain."
         ),
     }

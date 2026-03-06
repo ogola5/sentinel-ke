@@ -47,6 +47,13 @@ services:
       neo4j:
         condition: service_started
     volumes: *backend-volumes
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     command: >
       uvicorn app.main:app
         --host 0.0.0.0
@@ -77,6 +84,13 @@ services:
     volumes:
       - ./notebooks:/notebooks
       - gnn_artifacts:/app/artifacts
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     command: >
       jupyter lab
         --ip=0.0.0.0
@@ -149,6 +163,13 @@ services:
       postgres:
         condition: service_healthy
     volumes: *backend-volumes
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     restart: unless-stopped
 
   # ── Mule campaign analytics worker ─────────────────────────────────────────
