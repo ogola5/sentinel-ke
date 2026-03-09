@@ -104,11 +104,11 @@
 }
 
 .topbar {
-  display: grid;
-  grid-template-columns: 1.2fr 1fr auto;
-  gap: 24px;
-  align-items: center;
-  padding: 18px 28px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 20px;
+  align-items: flex-end;
+  padding: 14px 28px;
   border-bottom: 1px solid var(--line);
   background: rgba(var(--surface-rgb), 0.72);
   backdrop-filter: blur(10px);
@@ -126,9 +126,303 @@
 
 .content {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 320px;
+  grid-template-columns: minmax(0, 1fr);
   gap: 20px;
   padding: 24px 28px 100px;
+}
+
+/* =============================================================================
+   Sidebar collapsed mode
+   ============================================================================= */
+.nav-collapsed {
+  padding: 16px 10px;
+  width: 56px;
+  min-width: 56px;
+  gap: 12px;
+}
+
+.app:has(.nav-collapsed) {
+  grid-template-columns: 56px 1fr;
+}
+
+.nav-wordmark {
+  font-size: 0.65rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  margin: 0;
+}
+
+.nav-title {
+  font-size: 1.3rem;
+  font-weight: 700;
+  margin: 0;
+}
+
+.nav-agency-badge {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: 8px;
+  font-size: 0.78rem;
+}
+
+.nav-agency-code {
+  font-weight: 700;
+  font-size: 0.8rem;
+}
+
+.nav-agency-sep {
+  color: var(--ink-muted);
+}
+
+.nav-agency-name {
+  color: var(--ink);
+  font-size: 0.78rem;
+}
+
+.nav-status-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.nav-status-label {
+  font-size: 0.75rem;
+  color: var(--ink-muted);
+  margin: 0;
+}
+
+.nav-sync-error {
+  font-size: 0.72rem;
+  color: var(--danger);
+  margin: 0;
+}
+
+.nav-action-status {
+  font-size: 0.72rem;
+  color: var(--ink-muted);
+  margin: 0;
+}
+
+.nav-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.status-badge-sm {
+  padding: 2px 8px;
+  font-size: 0.68rem;
+}
+
+.status-badge-gnn {
+  background: rgba(var(--accent-rgb), 0.14);
+  color: var(--accent);
+  border: 1px solid rgba(var(--accent-rgb), 0.3);
+}
+
+.nav-collapse-btn {
+  position: absolute;
+  right: -14px;
+  top: 24px;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  background: var(--panel-strong);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  z-index: 10;
+  color: var(--ink-muted);
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.nav-collapse-btn:hover {
+  color: var(--ink);
+  border-color: rgba(var(--accent-rgb), 0.5);
+}
+
+.nav {
+  position: relative;
+}
+
+.nav-item-icon-only {
+  grid-template-columns: 1fr;
+  justify-items: center;
+  padding: 10px 6px;
+}
+
+.nav-footer-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.nav-footer-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: transparent;
+  font-size: 0.72rem;
+  color: var(--ink-muted);
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.nav-footer-btn:hover {
+  background: rgba(var(--accent-rgb), 0.1);
+  border-color: rgba(var(--accent-rgb), 0.4);
+  color: var(--ink);
+}
+
+.nav-footer-btn-danger {
+  color: var(--danger);
+}
+
+.nav-footer-btn-danger:hover {
+  background: rgba(255, 45, 85, 0.1);
+  border-color: rgba(255, 45, 85, 0.4);
+  color: var(--danger);
+}
+
+.nav-agency-full {
+  font-size: 0.7rem;
+  color: var(--ink-muted);
+  margin: 0;
+}
+
+.nav-footer-icons {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: center;
+}
+
+/* nav-group label */
+.nav-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.nav-group-label {
+  font-size: 0.6rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  padding: 4px 14px 2px;
+  font-weight: 600;
+}
+
+/* =============================================================================
+   Modal overlay (CredentialsPanel)
+   ============================================================================= */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  backdrop-filter: blur(4px);
+}
+
+.modal-box {
+  background: var(--panel-strong);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 24px;
+  width: min(480px, 92vw);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4);
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 20px;
+}
+
+.modal-header h3 {
+  margin: 0;
+}
+
+/* =============================================================================
+   Inspector toggle
+   ============================================================================= */
+.inspector-close-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 0 8px;
+}
+
+.inspector-user-card {
+  padding: 12px 16px;
+}
+
+.content.inspector-open {
+  grid-template-columns: minmax(0, 1fr) 320px;
+}
+
+/* =============================================================================
+   Topbar new elements
+   ============================================================================= */
+.topbar-label {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--ink-muted);
+  margin: 0 0 4px;
+}
+
+.topbar-search {
+  flex: 1;
+  min-width: 0;
+}
+
+.topbar-end {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-self: end;
+}
+
+/* Status dot */
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.status-dot.live {
+  background: var(--success, #30d158);
+  box-shadow: 0 0 0 2px rgba(48, 209, 88, 0.3);
+}
+
+.status-dot.degraded {
+  background: var(--warning);
+  box-shadow: 0 0 0 2px rgba(255, 159, 10, 0.3);
+}
+
+.status-dot.offline {
+  background: var(--ink-muted);
+}
+
+.icon-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+  border-radius: 6px;
 }
 
 .connection-panel {
@@ -1268,6 +1562,7 @@
 
 /* ── GNN Intelligence ────────────────────────────────────────────────────── */
 .gnn-loss-panel { margin-bottom: 16px; }
+.gnn-metrics-toggle { margin-bottom: 16px; }
 
 /* Domain tab switcher (Cyber / Corruption) */
 .gnn-domain-tabs {

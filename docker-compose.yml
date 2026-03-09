@@ -146,19 +146,46 @@ services:
     volumes: *backend-volumes
     restart: unless-stopped
 
+  # ── Graph feature snapshot worker (feeds both GNN pipelines) ───────────────
+  graph-feature-worker:
+    build: *backend-build
+    <<: *backend-env
+    environment:
+      PYTHONPATH: /app
+    command: /bin/sh -c "while true; do python -m app.analytics.layer3.graph_feature_worker --window-key Wmid; sleep 300; done"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes: *backend-volumes
+    restart: unless-stopped
+
+  # ── Cyber GNN training worker ────────────────────────────────────────────────
+  cyber-train-worker:
+    build: *backend-build
+    <<: *backend-env
+    environment:
+      PYTHONPATH: /app
+    command: /bin/sh -c "while true; do python -m app.analytics.layer3.gnn_train_worker --window-key Wmid --epochs 60; sleep 3600; done"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes: *backend-volumes
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+
   # ── Corruption GNN training worker ─────────────────────────────────────────
   corruption-train-worker:
     build: *backend-build
     <<: *backend-env
     environment:
       PYTHONPATH: /app
-    command: >
-      /bin/sh -c "while true; do
-        python -m app.analytics.corruption.train_worker
-          --window-key Wcorruption
-          --epochs 60;
-        sleep 3600;
-      done"
+    command: /bin/sh -c "while true; do python -m app.analytics.corruption.train_worker --window-key Wcorruption --epochs 60; sleep 3600; done"
     depends_on:
       postgres:
         condition: service_healthy

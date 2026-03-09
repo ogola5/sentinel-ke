@@ -59,10 +59,18 @@ echo "[gnn-worker] Seeding synthetic corruption data..."
 python -m app.demo.synthetic_corruption_data || echo "[gnn-worker] WARN: corruption seed failed (may already exist)"
 
 # ---------------------------------------------------------------------------
-# 4. Initial training run
+# 4. Build initial feature snapshots (required before training)
+# ---------------------------------------------------------------------------
+echo "[gnn-worker] Building cyber feature snapshots (Wmid)..."
+python -m app.analytics.layer3.graph_feature_worker --window-key Wmid \
+  && echo "[gnn-worker] Cyber snapshots OK" \
+  || echo "[gnn-worker] WARN: cyber snapshot build failed"
+
+# ---------------------------------------------------------------------------
+# 5. Initial training run
 # ---------------------------------------------------------------------------
 echo "[gnn-worker] Training cyber GNN (epochs=${GNN_EPOCHS})..."
-python -m app.analytics.train_worker --window-key Wmid --epochs "$GNN_EPOCHS" \
+python -m app.analytics.layer3.gnn_train_worker --window-key Wmid --epochs "$GNN_EPOCHS" \
   && echo "[gnn-worker] Cyber GNN trained OK" \
   || echo "[gnn-worker] WARN: cyber GNN training failed"
 
@@ -72,14 +80,18 @@ python -m app.analytics.corruption.train_worker --window-key Wcorruption --epoch
   || echo "[gnn-worker] WARN: corruption GNN training failed"
 
 # ---------------------------------------------------------------------------
-# 5. Retrain loop — picks up any new data ingested via API
+# 6. Retrain loop — picks up any new data ingested via API
 # ---------------------------------------------------------------------------
 echo "[gnn-worker] Entering retrain loop (interval=${RETRAIN_INTERVAL_SEC}s)..."
 while true; do
   sleep "$RETRAIN_INTERVAL_SEC"
 
+  echo "[gnn-worker] Refreshing cyber feature snapshots..."
+  python -m app.analytics.layer3.graph_feature_worker --window-key Wmid \
+    || echo "[gnn-worker] WARN: cyber snapshot refresh failed"
+
   echo "[gnn-worker] Retraining cyber GNN..."
-  python -m app.analytics.train_worker --window-key Wmid --epochs "$RETRAIN_EPOCHS" \
+  python -m app.analytics.layer3.gnn_train_worker --window-key Wmid --epochs "$RETRAIN_EPOCHS" \
     || echo "[gnn-worker] WARN: cyber retrain failed"
 
   echo "[gnn-worker] Retraining corruption GNN..."

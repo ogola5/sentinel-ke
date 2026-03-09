@@ -184,6 +184,7 @@ export default function GNNIntelligence({
   const [seedBusy, setSeedBusy] = useState(false);
   const [feedbackBusyId, setFeedbackBusyId] = useState<string | null>(null);
   const [feedbackError, setFeedbackError] = useState("");
+  const [showAllMetrics, setShowAllMetrics] = useState(false);
 
   const analystId = useMemo(() => loadAnalystId(), []);
   const activeWindowKey = DOMAIN_OPTIONS.find((option) => option.domain === activeDomain)?.windowKey ?? "Wmid";
@@ -396,50 +397,10 @@ export default function GNNIntelligence({
           <div className="metric-value">{auc != null ? auc.toFixed(3) : "—"}</div>
           <div className="metric-sub">Area under ROC curve</div>
         </div>
-        <div className="metric-card info">
-          <div className="metric-label">Precision</div>
-          <div className="metric-value">{precision != null ? precision.toFixed(3) : "—"}</div>
-          <div className="metric-sub">Positive precision</div>
-        </div>
-        <div className="metric-card info">
-          <div className="metric-label">Recall</div>
-          <div className="metric-value">{recall != null ? recall.toFixed(3) : "—"}</div>
-          <div className="metric-sub">Threat recall</div>
-        </div>
         <div className="metric-card accent">
           <div className="metric-label">F1 Score</div>
           <div className="metric-value">{f1 != null ? f1.toFixed(3) : "—"}</div>
-          <div className="metric-sub">Harmonic mean of precision and recall</div>
-        </div>
-        <div className="metric-card">
-          <div className="metric-label">ECE</div>
-          <div className="metric-value">{ece != null ? ece.toFixed(4) : "—"}</div>
-          <div className="metric-sub">Calibration error</div>
-        </div>
-        <div className="metric-card">
-          <div className="metric-label">Brier Score</div>
-          <div className="metric-value">{brierScore != null ? brierScore.toFixed(4) : "—"}</div>
-          <div className="metric-sub">Probabilistic accuracy</div>
-        </div>
-        <div className="metric-card">
-          <div className="metric-label">Graph nodes</div>
-          <div className="metric-value">{nodeCount ?? "—"}</div>
-          <div className="metric-sub">{predictionType}</div>
-        </div>
-        <div className="metric-card">
-          <div className="metric-label">Edges</div>
-          <div className="metric-value">{edgeCount ?? "—"}</div>
-          <div className="metric-sub">Co-occurrence links</div>
-        </div>
-        <div className="metric-card warn">
-          <div className="metric-label">Positives</div>
-          <div className="metric-value">{positiveCount ?? "—"}</div>
-          <div className="metric-sub">Labelled threat nodes</div>
-        </div>
-        <div className="metric-card">
-          <div className="metric-label">Feature dim</div>
-          <div className="metric-value">{featureDim ?? "—"}</div>
-          <div className="metric-sub">Input vector size</div>
+          <div className="metric-sub">Harmonic mean of precision / recall</div>
         </div>
         <div className="metric-card">
           <div className="metric-label">High-risk</div>
@@ -456,7 +417,62 @@ export default function GNNIntelligence({
           <div className="metric-value">{abstainedCount}</div>
           <div className="metric-sub">High uncertainty skipped</div>
         </div>
-        <FairnessBadge fairness={latestRun?.fairness} blocked={latestRun?.fairness_blocked} />
+
+        {showAllMetrics && (
+          <>
+            <div className="metric-card info">
+              <div className="metric-label">Precision</div>
+              <div className="metric-value">{precision != null ? precision.toFixed(3) : "—"}</div>
+              <div className="metric-sub">Positive precision</div>
+            </div>
+            <div className="metric-card info">
+              <div className="metric-label">Recall</div>
+              <div className="metric-value">{recall != null ? recall.toFixed(3) : "—"}</div>
+              <div className="metric-sub">Threat recall</div>
+            </div>
+            <div className="metric-card">
+              <div className="metric-label">ECE</div>
+              <div className="metric-value">{ece != null ? ece.toFixed(4) : "—"}</div>
+              <div className="metric-sub">Calibration error</div>
+            </div>
+            <div className="metric-card">
+              <div className="metric-label">Brier Score</div>
+              <div className="metric-value">{brierScore != null ? brierScore.toFixed(4) : "—"}</div>
+              <div className="metric-sub">Probabilistic accuracy</div>
+            </div>
+            <div className="metric-card">
+              <div className="metric-label">Graph nodes</div>
+              <div className="metric-value">{nodeCount ?? "—"}</div>
+              <div className="metric-sub">{predictionType}</div>
+            </div>
+            <div className="metric-card">
+              <div className="metric-label">Edges</div>
+              <div className="metric-value">{edgeCount ?? "—"}</div>
+              <div className="metric-sub">Co-occurrence links</div>
+            </div>
+            <div className="metric-card warn">
+              <div className="metric-label">Positives</div>
+              <div className="metric-value">{positiveCount ?? "—"}</div>
+              <div className="metric-sub">Labelled threat nodes</div>
+            </div>
+            <div className="metric-card">
+              <div className="metric-label">Feature dim</div>
+              <div className="metric-value">{featureDim ?? "—"}</div>
+              <div className="metric-sub">Input vector size</div>
+            </div>
+            <FairnessBadge fairness={latestRun?.fairness} blocked={latestRun?.fairness_blocked} />
+          </>
+        )}
+      </div>
+
+      <div className="gnn-metrics-toggle">
+        <button
+          type="button"
+          className="chip ghost"
+          onClick={() => setShowAllMetrics((v) => !v)}
+        >
+          {showAllMetrics ? "Hide extra metrics ↑" : "Show all metrics ↓"}
+        </button>
       </div>
 
       <div className="gnn-charts-grid">

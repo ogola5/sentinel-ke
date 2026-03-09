@@ -1,4 +1,4 @@
-import { LogOut } from "lucide-react";
+import { X } from "lucide-react";
 
 import { agencyColor } from "../types/auth";
 import type { Principal } from "../types/auth";
@@ -8,38 +8,38 @@ import type { ScreenId } from "./navigation";
 
 export default function Inspector({
   principal,
-  central,
   selectedEntity,
   selectedCampaign,
-  healthGnnLoaded,
-  healthModelVersion,
-  healthGnnMetrics,
   onNavigate,
-  onLogout,
+  onClose,
 }: {
   principal: Principal;
-  central: boolean;
   selectedEntity: EntityProfile | null;
   selectedCampaign?: Campaign;
-  healthGnnLoaded: boolean;
-  healthModelVersion: string | null;
-  healthGnnMetrics: Record<string, unknown>;
   onNavigate: (id: ScreenId) => void;
-  onLogout: () => void;
+  onClose: () => void;
 }) {
   return (
     <aside className="inspector">
+      <div className="inspector-close-row">
+        <span className="label" style={{ fontSize: "0.68rem" }}>Inspector</span>
+        <button className="ghost icon-btn" type="button" onClick={onClose} title="Close inspector">
+          <X size={13} />
+        </button>
+      </div>
+
       <div className="panel">
         <div className="panel-header">
           <h3>Entity Profile</h3>
-          <span className="muted">Inspector</span>
+          <span className="muted" style={{ fontSize: "0.73rem" }}>
+            {selectedEntity ? selectedEntity.type : "—"}
+          </span>
         </div>
         {!selectedEntity ? (
-          <p className="muted">No entity selected.</p>
+          <p className="muted" style={{ fontSize: "0.82rem" }}>Select an entity from any screen to inspect it here.</p>
         ) : (
           <div className="profile">
             <h4>{selectedEntity.label}</h4>
-            <p className="muted">{selectedEntity.type}</p>
             <div className="detail-grid">
               <div>
                 <p className="label">Risk</p>
@@ -92,78 +92,24 @@ export default function Inspector({
               {selectedCampaign.type} · {selectedCampaign.status}
             </p>
             <button className="ghost" type="button" style={{ marginTop: 8 }} onClick={() => onNavigate("campaigns")}>
-              View campaign
+              View campaign →
             </button>
           </>
         ) : (
-          <p className="muted">No campaign selected.</p>
+          <p className="muted" style={{ fontSize: "0.82rem" }}>
+            No active campaign selected.
+          </p>
         )}
       </div>
 
-      <div className="panel">
-        <div className="panel-header">
-          <h3>GNN Status</h3>
+      <div className="panel inspector-user-card">
+        <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.78rem" }}>
+          <span className="muted">Agency</span>
+          <span style={{ color: agencyColor(principal.section_code) }}>{principal.section_code ?? "CENTRAL"}</span>
         </div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 7, fontSize: "0.8rem" }}>
-          <div style={{ display: "flex", justifyContent: "space-between" }}>
-            <span className="muted">Model loaded</span>
-            <span style={{ color: healthGnnLoaded ? "var(--accent)" : "var(--danger)" }}>
-              {healthGnnLoaded ? "✓ Yes" : "✗ No"}
-            </span>
-          </div>
-          {healthModelVersion && (
-            <div style={{ display: "flex", justifyContent: "space-between" }}>
-              <span className="muted">Version</span>
-              <span className="mono" style={{ fontSize: "0.73rem" }}>
-                {healthModelVersion}
-              </span>
-            </div>
-          )}
-          {healthGnnMetrics.auc != null && (
-            <div style={{ display: "flex", justifyContent: "space-between" }}>
-              <span className="muted">AUC</span>
-              <span style={{ color: "var(--accent)", fontFamily: "JetBrains Mono, monospace" }}>
-                {Number(healthGnnMetrics.auc).toFixed(3)}
-              </span>
-            </div>
-          )}
-          <button className="ghost" type="button" style={{ marginTop: 4, fontSize: "0.73rem" }} onClick={() => onNavigate("gnn")}>
-            GNN Intelligence →
-          </button>
-        </div>
-      </div>
-
-      <div className="panel">
-        <div className="panel-header">
-          <h3>Session</h3>
-        </div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: "0.78rem" }}>
-          <div style={{ display: "flex", justifyContent: "space-between" }}>
-            <span className="muted">User</span>
-            <span className="mono" style={{ fontSize: "0.72rem" }}>
-              {principal.username}
-            </span>
-          </div>
-          <div style={{ display: "flex", justifyContent: "space-between" }}>
-            <span className="muted">Agency</span>
-            <span style={{ color: agencyColor(principal.section_code) }}>{principal.section_code ?? "CENTRAL"}</span>
-          </div>
-          <div style={{ display: "flex", justifyContent: "space-between" }}>
-            <span className="muted">Role</span>
-            <span>{principal.role}</span>
-          </div>
-          <div style={{ display: "flex", justifyContent: "space-between" }}>
-            <span className="muted">Access</span>
-            <span style={{ color: central ? "var(--accent)" : "var(--info)" }}>{principal.access_level}</span>
-          </div>
-          <button
-            className="ghost"
-            type="button"
-            style={{ marginTop: 4, fontSize: "0.73rem", color: "var(--danger)", display: "flex", alignItems: "center", gap: 4 }}
-            onClick={onLogout}
-          >
-            <LogOut size={11} /> Sign out
-          </button>
+        <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.78rem", marginTop: 6 }}>
+          <span className="muted">Role</span>
+          <span>{principal.role}</span>
         </div>
       </div>
     </aside>
