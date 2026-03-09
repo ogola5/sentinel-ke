@@ -90,35 +90,41 @@ export function NavGroup({
   color,
   items,
   active,
+  collapsed = false,
   onSelect,
 }: {
   label: string;
   color: string;
   items: readonly NavItem[];
   active: string;
+  collapsed?: boolean;
   onSelect: (id: string) => void;
 }) {
   return (
     <div className="nav-group">
-      <div className="nav-group-label" style={{ color }}>
-        {label}
-      </div>
+      {!collapsed && (
+        <div className="nav-group-label" style={{ color }}>
+          {label}
+        </div>
+      )}
       {items.map((item) => {
         const { Icon } = item;
         const isActive = active === item.id;
         return (
           <button
             key={item.id}
-            className={`nav-item ${isActive ? "active" : ""}`}
+            className={`nav-item${isActive ? " active" : ""}${collapsed ? " nav-item-icon-only" : ""}`}
             type="button"
             onClick={() => onSelect(item.id)}
             title={`${item.tag} · ${item.label}`}
           >
             <Icon size={14} style={{ opacity: isActive ? 1 : 0.55 }} color={isActive ? color : undefined} />
-            <div className="nav-copy">
-              <span className="nav-tag">{item.tag}</span>
-              <span className="nav-label">{item.label}</span>
-            </div>
+            {!collapsed && (
+              <div className="nav-copy">
+                <span className="nav-tag">{item.tag}</span>
+                <span className="nav-label">{item.label}</span>
+              </div>
+            )}
           </button>
         );
       })}

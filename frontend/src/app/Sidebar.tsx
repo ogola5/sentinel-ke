@@ -1,4 +1,4 @@
-import { LogOut, RefreshCw, Settings } from "lucide-react";
+import { ChevronLeft, ChevronRight, LogOut, RefreshCw, Settings } from "lucide-react";
 
 import { agencyColor, agencyName, type Principal } from "../types/auth";
 import {
@@ -9,7 +9,6 @@ import {
   NAV_RESPOND,
   NAV_SENSE,
   NavGroup,
-  TIME_WINDOWS,
   type ScreenId,
 } from "./navigation";
 import type { BackendStatus } from "./useDashboardSync";
@@ -20,7 +19,7 @@ export default function Sidebar({
   auditorOnly,
   central,
   execute,
-  timeWindow,
+  collapsed,
   backendStatus,
   backendLabel,
   isSyncing,
@@ -28,7 +27,7 @@ export default function Sidebar({
   actionStatus,
   healthGnnLoaded,
   onNavigate,
-  onSelectTimeWindow,
+  onToggleCollapse,
   onToggleConnectionPanel,
   onTriggerSync,
   onLogout,
@@ -38,7 +37,7 @@ export default function Sidebar({
   auditorOnly: boolean;
   central: boolean;
   execute: boolean;
-  timeWindow: string;
+  collapsed: boolean;
   backendStatus: BackendStatus;
   backendLabel: string;
   isSyncing: boolean;
@@ -46,177 +45,129 @@ export default function Sidebar({
   actionStatus: string;
   healthGnnLoaded: boolean;
   onNavigate: (id: ScreenId) => void;
-  onSelectTimeWindow: (windowId: string) => void;
+  onToggleCollapse: () => void;
   onToggleConnectionPanel: () => void;
   onTriggerSync: () => void;
   onLogout: () => void;
 }) {
   const statusDotClass = backendStatus === "connected" ? "live" : backendStatus === "degraded" ? "degraded" : "offline";
+  const color = agencyColor(principal.section_code);
 
   return (
-    <aside className="nav">
-      <div className="nav-header">
-        <div>
-          <p style={{ fontSize: "0.62rem", letterSpacing: "0.16em", opacity: 0.45, textTransform: "uppercase", margin: 0 }}>
-            Sentinel-KE
-          </p>
-          <h1 style={{ fontSize: "1.05rem", marginTop: 2 }}>National SOC</h1>
-          <div
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 5,
-              marginTop: 6,
-              padding: "2px 8px",
-              borderRadius: 4,
-              border: `1px solid ${agencyColor(principal.section_code)}40`,
-              background: `${agencyColor(principal.section_code)}12`,
-              fontSize: "0.68rem",
-            }}
-          >
-            <span style={{ color: agencyColor(principal.section_code), fontFamily: "JetBrains Mono, monospace", fontWeight: 700 }}>
-              {principal.section_code ?? "CENTRAL"}
-            </span>
-            <span style={{ opacity: 0.55 }}>·</span>
-            <span style={{ opacity: 0.7 }}>{principal.display_name ?? principal.username}</span>
-          </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 8 }}>
-            <span className={`status-dot ${statusDotClass}`} />
-            <p className="muted" style={{ fontSize: "0.73rem" }}>
-              {isSyncing ? "Syncing…" : backendLabel}
-            </p>
-          </div>
-          {syncError && <p style={{ fontSize: "0.7rem", color: "var(--danger)", margin: "2px 0 0" }}>{syncError}</p>}
-          {actionStatus && (
-            <p className="muted" style={{ fontSize: "0.68rem", margin: "2px 0 0", opacity: 0.55 }}>
-              {actionStatus}
-            </p>
-          )}
-        </div>
-        <div style={{ display: "flex", gap: 5, marginTop: 6, flexWrap: "wrap" }}>
-          <span className="status-badge" style={{ fontSize: "0.63rem" }}>
-            {backendStatus === "connected" ? "● Live" : backendStatus === "degraded" ? "◐ Degraded" : "○ Offline"}
-          </span>
-          {healthGnnLoaded && (
-            <span className="status-badge" style={{ background: "rgba(49,255,144,.12)", color: "var(--accent)", fontSize: "0.63rem" }}>
-              GNN ✓
-            </span>
-          )}
-          <span
-            className="status-badge"
-            style={{
-              background: `${agencyColor(principal.section_code)}18`,
-              color: agencyColor(principal.section_code),
-              fontSize: "0.63rem",
-              border: `1px solid ${agencyColor(principal.section_code)}30`,
-            }}
-          >
-            {principal.role}
-          </span>
-        </div>
-      </div>
+    <aside className={collapsed ? "nav nav-collapsed" : "nav"}>
+      {/* Collapse toggle */}
+      <button
+        className="nav-collapse-btn"
+        type="button"
+        onClick={onToggleCollapse}
+        title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+      >
+        {collapsed ? <ChevronRight size={14} /> : <ChevronLeft size={14} />}
+      </button>
 
-      <nav className="nav-list" style={{ gap: 2 }}>
+      {!collapsed && (
+        <div className="nav-header">
+          <p className="nav-wordmark">Sentinel-KE</p>
+          <h1 className="nav-title">National SOC</h1>
+
+          {/* Agency badge — dynamic border/bg from agencyColor */}
+          <div
+            className="nav-agency-badge"
+            style={{ border: `1px solid ${color}40`, background: `${color}12` }}
+          >
+            <span className="nav-agency-code" style={{ color }}>{principal.section_code ?? "CENTRAL"}</span>
+            <span className="nav-agency-sep">·</span>
+            <span className="nav-agency-name">{principal.display_name ?? principal.username}</span>
+          </div>
+
+          <div className="nav-status-row">
+            <span className={`status-dot ${statusDotClass}`} />
+            <p className="nav-status-label">{isSyncing ? "Syncing…" : backendLabel}</p>
+          </div>
+
+          {syncError && <p className="nav-sync-error">{syncError}</p>}
+          {actionStatus && <p className="nav-action-status">{actionStatus}</p>}
+
+          <div className="nav-badges">
+            <span className="status-badge status-badge-sm">
+              {backendStatus === "connected" ? "● Live" : backendStatus === "degraded" ? "◐ Degraded" : "○ Offline"}
+            </span>
+            {healthGnnLoaded && (
+              <span className="status-badge status-badge-sm status-badge-gnn">GNN ✓</span>
+            )}
+            <span
+              className="status-badge status-badge-sm"
+              style={{ background: `${color}18`, color, border: `1px solid ${color}30` }}
+            >
+              {principal.role}
+            </span>
+          </div>
+        </div>
+      )}
+
+      <nav className="nav-list">
         {!auditorOnly && (
-          <NavGroup label="SENSE" color="var(--info)" items={NAV_SENSE} active={activeScreen} onSelect={(id) => onNavigate(id as ScreenId)} />
+          <NavGroup label="SENSE" color="var(--info)" items={NAV_SENSE} active={activeScreen}
+            collapsed={collapsed} onSelect={(id) => onNavigate(id as ScreenId)} />
         )}
         {!auditorOnly && (
-          <NavGroup
-            label="ANALYZE"
-            color="var(--accent)"
-            items={NAV_ANALYZE}
-            active={activeScreen}
-            onSelect={(id) => onNavigate(id as ScreenId)}
-          />
+          <NavGroup label="ANALYZE" color="var(--accent)" items={NAV_ANALYZE} active={activeScreen}
+            collapsed={collapsed} onSelect={(id) => onNavigate(id as ScreenId)} />
         )}
         {!auditorOnly && (
-          <NavGroup
-            label="ATTRIBUTE"
-            color="var(--warning)"
-            items={NAV_ATTRIBUTE}
-            active={activeScreen}
-            onSelect={(id) => onNavigate(id as ScreenId)}
-          />
+          <NavGroup label="ATTRIBUTE" color="var(--warning)" items={NAV_ATTRIBUTE} active={activeScreen}
+            collapsed={collapsed} onSelect={(id) => onNavigate(id as ScreenId)} />
         )}
         {!auditorOnly && execute && (
-          <NavGroup
-            label="RESPOND"
-            color="var(--risk-critical)"
-            items={NAV_RESPOND}
-            active={activeScreen}
-            onSelect={(id) => onNavigate(id as ScreenId)}
-          />
+          <NavGroup label="RESPOND" color="var(--risk-critical)" items={NAV_RESPOND} active={activeScreen}
+            collapsed={collapsed} onSelect={(id) => onNavigate(id as ScreenId)} />
         )}
         {!auditorOnly && !execute && (
-          <NavGroup
-            label="RESPOND"
-            color="var(--risk-critical)"
-            items={[NAV_RESPOND[0]]}
-            active={activeScreen}
-            onSelect={(id) => onNavigate(id as ScreenId)}
-          />
+          <NavGroup label="RESPOND" color="var(--risk-critical)" items={[NAV_RESPOND[0]]} active={activeScreen}
+            collapsed={collapsed} onSelect={(id) => onNavigate(id as ScreenId)} />
         )}
-        <NavGroup
-          label="GOVERN"
-          color="var(--risk-low)"
-          items={NAV_GOVERN}
-          active={activeScreen}
-          onSelect={(id) => onNavigate(id as ScreenId)}
-        />
+        <NavGroup label="GOVERN" color="var(--risk-low)" items={NAV_GOVERN} active={activeScreen}
+          collapsed={collapsed} onSelect={(id) => onNavigate(id as ScreenId)} />
         {central && (
-          <NavGroup
-            label="COMMAND"
-            color="var(--command)"
-            items={NAV_COMMAND}
-            active={activeScreen}
-            onSelect={(id) => onNavigate(id as ScreenId)}
-          />
+          <NavGroup label="COMMAND" color="var(--command)" items={NAV_COMMAND} active={activeScreen}
+            collapsed={collapsed} onSelect={(id) => onNavigate(id as ScreenId)} />
         )}
       </nav>
 
       <div className="nav-footer">
-        <p className="label" style={{ fontSize: "0.65rem" }}>
-          Time window
-        </p>
-        <div className="chip-row">
-          {TIME_WINDOWS.map((window) => (
-            <button
-              key={window.id}
-              className={timeWindow === window.id ? "chip active" : "chip ghost"}
-              type="button"
-              onClick={() => onSelectTimeWindow(window.id)}
-            >
-              {window.label}
+        {!collapsed && (
+          <>
+            <div className="nav-footer-actions">
+              <button className="nav-footer-btn" type="button" onClick={onToggleConnectionPanel} title="Credentials">
+                <Settings size={11} />
+                <span>Creds</span>
+              </button>
+              <button className="nav-footer-btn" type="button" onClick={onTriggerSync} title="Resync data">
+                <RefreshCw size={11} />
+                <span>Resync</span>
+              </button>
+              <button className="nav-footer-btn nav-footer-btn-danger" type="button" onClick={onLogout} title="Sign out">
+                <LogOut size={11} />
+                <span>Logout</span>
+              </button>
+            </div>
+            <p className="nav-agency-full">{agencyName(principal.section_code)}</p>
+          </>
+        )}
+
+        {collapsed && (
+          <div className="nav-footer-icons">
+            <button className="nav-footer-btn" type="button" onClick={onToggleConnectionPanel} title="Credentials">
+              <Settings size={13} />
             </button>
-          ))}
-        </div>
-        <div className="chip-row" style={{ marginTop: 8 }}>
-          <button
-            className="ghost"
-            type="button"
-            style={{ fontSize: "0.73rem", display: "flex", alignItems: "center", gap: 4 }}
-            onClick={onToggleConnectionPanel}
-          >
-            <Settings size={11} /> Creds
-          </button>
-          <button
-            className="ghost"
-            type="button"
-            style={{ fontSize: "0.73rem", display: "flex", alignItems: "center", gap: 4 }}
-            onClick={onTriggerSync}
-          >
-            <RefreshCw size={11} /> Resync
-          </button>
-          <button
-            className="ghost"
-            type="button"
-            style={{ fontSize: "0.73rem", display: "flex", alignItems: "center", gap: 4, color: "var(--danger)" }}
-            onClick={onLogout}
-          >
-            <LogOut size={11} /> Logout
-          </button>
-        </div>
-        <div style={{ marginTop: 8, fontSize: "0.65rem", opacity: 0.4, lineHeight: 1.5 }}>{agencyName(principal.section_code)}</div>
+            <button className="nav-footer-btn" type="button" onClick={onTriggerSync} title="Resync data">
+              <RefreshCw size={13} />
+            </button>
+            <button className="nav-footer-btn nav-footer-btn-danger" type="button" onClick={onLogout} title="Sign out">
+              <LogOut size={13} />
+            </button>
+          </div>
+        )}
       </div>
     </aside>
   );

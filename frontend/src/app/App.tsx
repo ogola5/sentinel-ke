@@ -91,6 +91,8 @@ function AuthenticatedApp({
   const [actionStatus, setActionStatus] = useState("");
   const [leakageActionLabel, setLeakageActionLabel] = useState("Run leakage detector");
   const [casesData, setCasesData] = useState<CasePacket[]>([]);
+  const [navCollapsed, setNavCollapsed] = useState(false);
+  const [inspectorOpen, setInspectorOpen] = useState(false);
 
   const defaultScreen: ScreenId = central ? "command" : "live";
   const [activeScreen, setActiveScreen] = useState<ScreenId>(defaultScreen);
@@ -228,7 +230,7 @@ function AuthenticatedApp({
         auditorOnly={auditorOnly}
         central={central}
         execute={execute}
-        timeWindow={timeWindow}
+        collapsed={navCollapsed}
         backendStatus={backendStatus}
         backendLabel={backendLabel}
         isSyncing={isSyncing}
@@ -236,7 +238,7 @@ function AuthenticatedApp({
         actionStatus={actionStatus}
         healthGnnLoaded={healthGnnLoaded}
         onNavigate={(id) => setActiveScreen(id)}
-        onSelectTimeWindow={setTimeWindow}
+        onToggleCollapse={() => setNavCollapsed((c) => !c)}
         onToggleConnectionPanel={() => setConnectionPanelOpen((open) => !open)}
         onTriggerSync={triggerSync}
         onLogout={onLogout}
@@ -244,12 +246,20 @@ function AuthenticatedApp({
 
       <div className="main">
         <Topbar
+          activeScreen={activeScreen}
           sourceFilters={sourceFilters}
+          timeWindow={timeWindow}
           entityQuery={entityQuery}
           entities={entitiesData}
+          inspectorOpen={inspectorOpen}
           onToggleSource={toggleSource}
+          onSelectTimeWindow={setTimeWindow}
           onEntityQueryChange={setEntityQuery}
-          onSelectEntity={setSelectedEntity}
+          onSelectEntity={(entity) => {
+            setSelectedEntity(entity);
+            setInspectorOpen(true);
+          }}
+          onOpenInspector={() => setInspectorOpen(true)}
         />
 
         {connectionPanelOpen && (
@@ -258,10 +268,11 @@ function AuthenticatedApp({
             onChange={(key, value) => setCredentials((current) => ({ ...current, [key]: value }))}
             onSave={saveCredentialsAndResync}
             onClear={clearCredentialsAndResync}
+            onClose={() => setConnectionPanelOpen(false)}
           />
         )}
 
-        <div className="content">
+        <div className={`content${inspectorOpen ? " inspector-open" : ""}`}>
           <main className="primary">
             <ActiveScreen
               activeScreen={activeScreen}
@@ -289,7 +300,10 @@ function AuthenticatedApp({
               leakageActionLabel={leakageActionLabel}
               onNavigate={(id) => setActiveScreen(id)}
               onSelectEvent={handleSelectEvent}
-              onSelectEntity={setSelectedEntity}
+              onSelectEntity={(entity) => {
+                setSelectedEntity(entity);
+                setInspectorOpen(true);
+              }}
               onSelectCampaignId={setSelectedCampaignId}
               onSelectClusterId={setSelectedClusterId}
               onSelectServiceId={setSelectedServiceId}
@@ -318,17 +332,15 @@ function AuthenticatedApp({
             />
           </main>
 
-          <Inspector
-            principal={principal}
-            central={central}
-            selectedEntity={selectedEntity}
-            selectedCampaign={selectedCampaign}
-            healthGnnLoaded={healthGnnLoaded}
-            healthModelVersion={healthModelVersion}
-            healthGnnMetrics={healthGnnMetrics}
-            onNavigate={(id) => setActiveScreen(id)}
-            onLogout={onLogout}
-          />
+          {inspectorOpen && (
+            <Inspector
+              principal={principal}
+              selectedEntity={selectedEntity}
+              selectedCampaign={selectedCampaign}
+              onNavigate={(id) => setActiveScreen(id)}
+              onClose={() => setInspectorOpen(false)}
+            />
+          )}
         </div>
       </div>
 
