@@ -52,9 +52,11 @@ def _map_auth_error_to_http(detail: str) -> HTTPException:
         "invalid_mfa_code",
     }:
         return HTTPException(status_code=401, detail=detail)
+    if detail == "source_temporarily_blocked":
+        return HTTPException(status_code=429, detail=detail)
     if detail == "account_locked":
         return HTTPException(status_code=423, detail=detail)
-    if detail in {"account_inactive", "client_fingerprint_mismatch"}:
+    if detail in {"account_inactive", "client_fingerprint_mismatch", "mfa_enrollment_required"}:
         return HTTPException(status_code=403, detail=detail)
     if detail == "user_not_found":
         return HTTPException(status_code=404, detail=detail)

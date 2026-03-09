@@ -5,7 +5,7 @@ import uuid
 from datetime import timedelta
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import inspect as sa_inspect
+from sqlalchemy import func, inspect as sa_inspect
 from sqlalchemy.orm import Session
 
 from app.auth.mfa import build_provisioning_uri, generate_totp_secret, verify_totp
@@ -269,6 +269,95 @@ class AuthService:
             )
         )
 
+    def _intrusion_snapshot(
+        self,
+        *,
+        username: str,
+        ip_address: str | None,
+        now,
+    ) -> Dict[str, int]:
+        window_minutes = max(1, int(settings.auth_intrusion_window_minutes))
+        window_start = now - timedelta(minutes=window_minutes)
+        failed_outcomes = ("failed", "locked", "blocked")
+
+        username_failures = (
+            self.db.query(func.count(AuthLoginEvent.event_id))
+            .filter(
+                AuthLoginEvent.created_at >= window_start,
+                AuthLoginEvent.username == username,
+                AuthLoginEvent.outcome.in_(failed_outcomes),
+            )
+            .scalar()
+            or 0
+        )
+
+        ip_failures = 0
+        ip_distinct_users = 0
+        if (ip_address or "").strip():
+            ip_failures = (
+                self.db.query(func.count(AuthLoginEvent.event_id))
+                .filter(
+                    AuthLoginEvent.created_at >= window_start,
+                    AuthLoginEvent.ip_address == ip_address,
+                    AuthLoginEvent.outcome.in_(failed_outcomes),
+                )
+                .scalar()
+                or 0
+            )
+            ip_distinct_users = (
+                self.db.query(func.count(func.distinct(AuthLoginEvent.username)))
+                .filter(
+                    AuthLoginEvent.created_at >= window_start,
+                    AuthLoginEvent.ip_address == ip_address,
+                    AuthLoginEvent.outcome.in_(failed_outcomes),
+                )
+                .scalar()
+                or 0
+            )
+
+        return {
+            "username_failures": int(username_failures),
+            "ip_failures": int(ip_failures),
+            "ip_distinct_users": int(ip_distinct_users),
+            "window_minutes": int(window_minutes),
+        }
+
+    def _intrusion_block_reason(
+        self,
+        *,
+        username: str,
+        ip_address: str | None,
+        now,
+    ) -> str | None:
+        snap = self._intrusion_snapshot(username=username, ip_address=ip_address, now=now)
+        max_user = max(1, int(settings.auth_intrusion_max_failures_per_username))
+        max_ip = max(1, int(settings.auth_intrusion_max_failures_per_ip))
+        min_distinct = max(1, int(settings.auth_intrusion_min_distinct_usernames))
+
+        if snap["username_failures"] >= max_user:
+            log.warning(
+                "auth_intrusion_username_threshold username=%s failures=%s window_minutes=%s",
+                username,
+                snap["username_failures"],
+                snap["window_minutes"],
+            )
+            return "username_bruteforce_detected"
+
+        if (
+            snap["ip_failures"] >= max_ip
+            and snap["ip_distinct_users"] >= min_distinct
+            and (ip_address or "").strip()
+        ):
+            log.warning(
+                "auth_intrusion_ip_threshold ip_address=%s failures=%s distinct_users=%s window_minutes=%s",
+                ip_address,
+                snap["ip_failures"],
+                snap["ip_distinct_users"],
+                snap["window_minutes"],
+            )
+            return "credential_stuffing_detected"
+        return None
+
     def _principal_dict(
         self,
         user: AuthUser,
@@ -444,9 +533,21 @@ class AuthService:
         user_agent: str | None,
     ) -> Dict[str, Any]:
         username = normalize_username(payload.username)
-        user = self.db.query(AuthUser).filter(AuthUser.username == username).first()
-
         now = utcnow()
+        block_reason = self._intrusion_block_reason(username=username, ip_address=ip_address, now=now)
+        if block_reason:
+            self._log_login(
+                user=None,
+                username=username,
+                outcome="blocked",
+                reason=block_reason,
+                ip_address=ip_address,
+                user_agent=user_agent,
+            )
+            self.db.commit()
+            raise ValueError("source_temporarily_blocked")
+
+        user = self.db.query(AuthUser).filter(AuthUser.username == username).first()
         if user is None:
             self._log_login(
                 user=None,
@@ -513,6 +614,23 @@ class AuthService:
 
         mfa_authenticated = False
         mfa_at_iso: str | None = None
+        if (
+            user.access_level == "central"
+            and settings.auth_central_mfa_required
+            and settings.auth_central_mfa_enrollment_required
+            and not bool(user.mfa_enabled)
+        ):
+            self._log_login(
+                user=user,
+                username=username,
+                outcome="failed",
+                reason="mfa_enrollment_required",
+                ip_address=ip_address,
+                user_agent=user_agent,
+            )
+            self.db.commit()
+            raise ValueError("mfa_enrollment_required")
+
         if bool(user.mfa_enabled):
             otp_code = (payload.otp_code or "").strip()
             if not otp_code:

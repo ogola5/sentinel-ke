@@ -141,6 +141,8 @@ class Settings:
     )
     auth_step_up_minutes = int(os.environ.get("AUTH_STEP_UP_MINUTES", "15"))
     auth_central_mfa_required = env_bool("AUTH_CENTRAL_MFA_REQUIRED", True)
+    auth_central_mfa_enrollment_required = env_bool("AUTH_CENTRAL_MFA_ENROLLMENT_REQUIRED", True)
+    auth_service_central_access = env_bool("AUTH_SERVICE_CENTRAL_ACCESS", False)
     auth_bootstrap_admin_enabled = env_bool("AUTH_BOOTSTRAP_ADMIN_ENABLED", False)
     auth_bootstrap_admin_username = os.environ.get("AUTH_BOOTSTRAP_ADMIN_USERNAME", "central-admin").strip()
     auth_bootstrap_admin_password = os.environ.get("AUTH_BOOTSTRAP_ADMIN_PASSWORD", "").strip()
@@ -148,6 +150,20 @@ class Settings:
         "AUTH_BOOTSTRAP_ADMIN_DISPLAY_NAME",
         "Central Admin",
     ).strip()
+    auth_intrusion_window_minutes = int(os.environ.get("AUTH_INTRUSION_WINDOW_MINUTES", "15"))
+    auth_intrusion_max_failures_per_ip = int(os.environ.get("AUTH_INTRUSION_MAX_FAILURES_PER_IP", "20"))
+    auth_intrusion_max_failures_per_username = int(
+        os.environ.get("AUTH_INTRUSION_MAX_FAILURES_PER_USERNAME", "8")
+    )
+    auth_intrusion_min_distinct_usernames = int(
+        os.environ.get("AUTH_INTRUSION_MIN_DISTINCT_USERNAMES", "5")
+    )
+    auth_breakglass_enabled = env_bool("AUTH_BREAKGLASS_ENABLED", False)
+    auth_breakglass_password = os.environ.get("AUTH_BREAKGLASS_PASSWORD", "").strip()
+    auth_breakglass_password_sha3_512 = os.environ.get("AUTH_BREAKGLASS_PASSWORD_SHA3_512", "").strip()
+    auth_breakglass_local_only = env_bool("AUTH_BREAKGLASS_LOCAL_ONLY", True)
+    auth_breakglass_allow_in_production = env_bool("AUTH_BREAKGLASS_ALLOW_IN_PRODUCTION", False)
+    auth_breakglass_username = os.environ.get("AUTH_BREAKGLASS_USERNAME", "dev-breakglass").strip()
 
     # ---------------------------------------------------------
     # Crypto posture (quantum-readiness signaling)

@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi import HTTPException
+from starlette.requests import Request
 
 from app.api.deps import (
     AuthPrincipal,
@@ -14,6 +15,10 @@ from app.api.deps import (
 from app.core.config import settings
 
 
+def _request() -> Request:
+    return Request({"type": "http", "method": "GET", "path": "/v1/test", "headers": []})
+
+
 def test_require_request_principal_accepts_valid_api_key(monkeypatch):
     monkeypatch.setattr(settings, "api_auth_disabled", False)
     monkeypatch.setattr(settings, "api_auth_optional_dev", False)
@@ -21,6 +26,7 @@ def test_require_request_principal_accepts_valid_api_key(monkeypatch):
     monkeypatch.setattr(settings, "ingest_api_key", "")
 
     principal = require_request_principal(
+        request=_request(),
         authorization=None,
         x_api_key="frontend-secret",
         db=object(),
@@ -55,12 +61,72 @@ def test_require_request_principal_accepts_bearer(monkeypatch):
     monkeypatch.setattr("app.api.deps.AuthService", _Svc)
 
     principal = require_request_principal(
+        request=_request(),
         authorization="Bearer token-1",
         x_api_key=None,
         db=object(),
     )
     assert principal.principal_type == "user"
     assert principal.username == "alice"
+
+
+def test_require_request_principal_prefers_bearer_over_api_key(monkeypatch):
+    monkeypatch.setattr(settings, "api_auth_disabled", False)
+    monkeypatch.setattr(settings, "api_auth_optional_dev", False)
+    monkeypatch.setattr(settings, "frontend_api_key", "frontend-secret")
+    monkeypatch.setattr(settings, "ingest_api_key", "")
+
+    class _Svc:
+        def __init__(self, db):
+            self.db = db
+
+        def authenticate_access_token(self, *, access_token: str):
+            return {
+                "principal_type": "user",
+                "actor_id": "u-1",
+                "user_id": "u-1",
+                "username": "alice",
+                "role": "analyst",
+                "access_level": "section",
+                "section_code": "sec-a",
+                "scopes": ["events.read"],
+            }
+
+    monkeypatch.setattr("app.api.deps.AuthService", _Svc)
+
+    principal = require_request_principal(
+        request=_request(),
+        authorization="Bearer token-1",
+        x_api_key="frontend-secret",
+        db=object(),
+    )
+    assert principal.principal_type == "user"
+    assert principal.username == "alice"
+
+
+def test_require_request_principal_accepts_breakglass_when_enabled(monkeypatch):
+    monkeypatch.setattr(settings, "api_auth_disabled", False)
+    monkeypatch.setattr(settings, "auth_enabled", True)
+    monkeypatch.setattr(settings, "frontend_api_key", "frontend-secret")
+    monkeypatch.setattr(settings, "ingest_api_key", "")
+    monkeypatch.setattr(settings, "auth_breakglass_enabled", True)
+    monkeypatch.setattr(settings, "auth_breakglass_allow_in_production", False)
+    monkeypatch.setattr(settings, "app_env", "development")
+    monkeypatch.setattr(settings, "auth_breakglass_local_only", False)
+    monkeypatch.setattr(settings, "auth_breakglass_password", "dev-breakglass-secret")
+    monkeypatch.setattr(settings, "auth_breakglass_password_sha3_512", "")
+    monkeypatch.setattr(settings, "auth_breakglass_username", "developer")
+
+    principal = require_request_principal(
+        request=_request(),
+        authorization=None,
+        x_api_key=None,
+        x_breakglass_password="dev-breakglass-secret",
+        db=object(),
+    )
+    assert principal.principal_type == "breakglass"
+    assert principal.username == "developer"
+    assert principal.access_level == "central"
 
 
 def test_require_central_access_rejects_section_user():
@@ -78,6 +144,21 @@ def test_require_central_access_rejects_section_user():
         require_central_access(principal=principal)
     assert e.value.status_code == 403
     assert e.value.detail == "central_access_required"
+
+
+def test_require_central_access_rejects_service_when_disabled(monkeypatch):
+    monkeypatch.setattr(settings, "auth_service_central_access", False)
+    principal = AuthPrincipal(
+        principal_type="service",
+        actor_id="svc-1",
+        role="service",
+        access_level="central",
+        scopes=["*"],
+    )
+    with pytest.raises(HTTPException) as e:
+        require_central_access(principal=principal)
+    assert e.value.status_code == 403
+    assert e.value.detail == "central_user_session_required"
 
 
 def test_require_step_up_skips_when_disabled(monkeypatch):

@@ -96,6 +96,11 @@ Delivery tracker (5 phases to 90% readiness):
 docs/PHASES_90_TRACKER.md
 ```
 
+Authentication hardening runbook (MFA/RBAC/intrusion/breakglass test commands):
+```
+docs/AUTH_HARDENING_RUNBOOK.md
+```
+
 ## What’s Implemented
 
 - Ingestion with strict validation and pseudonymization

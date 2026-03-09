@@ -48,7 +48,7 @@ def _require_torch():
     except ImportError as exc:
         raise RuntimeError(
             "PyTorch is required for GNN training. "
-            "Install: pip install -r backend/requirements-ml.txt"
+            "Install: pip install -r backend/requirements.txt"
         ) from exc
 
 
@@ -107,9 +107,14 @@ def build_sentinel_gnn(
             if edge_src.numel() == 0:
                 return self.lin_self(feats)
 
+            # Under CUDA AMP, feats can be fp16 while edge_weight is fp32.
+            # Keep all tensors in this aggregation path on the same dtype
+            # to avoid index_add_ dtype mismatch errors.
+            ew = edge_weight.to(dtype=feats.dtype) if edge_weight.dtype != feats.dtype else edge_weight
+
             pair  = torch.cat([feats[edge_src], feats[edge_dst]], dim=1)
-            attn  = torch.sigmoid(self.attn_gate(pair)).squeeze(1)   # [E]
-            eff_w = attn * edge_weight                                # [E]
+            attn  = torch.sigmoid(self.attn_gate(pair)).squeeze(1).to(dtype=feats.dtype)   # [E]
+            eff_w = attn * ew                                                               # [E]
 
             weighted = feats[edge_src] * eff_w.unsqueeze(1)          # [E, in_d]
             neigh = torch.zeros(n_nodes, feats.shape[1],

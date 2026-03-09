@@ -90,9 +90,34 @@ def evaluate_runtime_hardening(settings_obj: Any) -> RuntimeHardeningReport:
         add_issue("HTTP_SECURITY_HEADERS_ENABLED_false")
     if not _as_bool(getattr(settings_obj, "auth_enabled", True)):
         add_issue("AUTH_ENABLED_false")
+    if _as_bool(getattr(settings_obj, "auth_service_central_access", False)):
+        add_issue("AUTH_SERVICE_CENTRAL_ACCESS_true")
 
     if _as_int(getattr(settings_obj, "auth_password_iterations", 0)) < 300_000:
         add_issue("AUTH_PASSWORD_ITERATIONS_low")
+
+    intr_window = _as_int(getattr(settings_obj, "auth_intrusion_window_minutes", 0))
+    intr_ip = _as_int(getattr(settings_obj, "auth_intrusion_max_failures_per_ip", 0))
+    intr_user = _as_int(getattr(settings_obj, "auth_intrusion_max_failures_per_username", 0))
+    intr_distinct = _as_int(getattr(settings_obj, "auth_intrusion_min_distinct_usernames", 0))
+    if intr_window <= 0:
+        add_issue("AUTH_INTRUSION_WINDOW_MINUTES_invalid")
+    if intr_ip <= 0:
+        add_issue("AUTH_INTRUSION_MAX_FAILURES_PER_IP_invalid")
+    if intr_user <= 0:
+        add_issue("AUTH_INTRUSION_MAX_FAILURES_PER_USERNAME_invalid")
+    if intr_distinct <= 0:
+        add_issue("AUTH_INTRUSION_MIN_DISTINCT_USERNAMES_invalid")
+
+    breakglass_enabled = _as_bool(getattr(settings_obj, "auth_breakglass_enabled", False))
+    if breakglass_enabled:
+        add_issue("AUTH_BREAKGLASS_ENABLED_true")
+        raw_breakglass = _as_str(getattr(settings_obj, "auth_breakglass_password", ""))
+        hash_breakglass = _as_str(getattr(settings_obj, "auth_breakglass_password_sha3_512", ""))
+        if not raw_breakglass and not hash_breakglass:
+            add_issue("AUTH_BREAKGLASS_PASSWORD_missing")
+        if hash_breakglass and len(hash_breakglass) < 128:
+            add_issue("AUTH_BREAKGLASS_PASSWORD_SHA3_512_invalid")
 
     cors_allow_origins = getattr(settings_obj, "cors_allow_origins", []) or []
     for origin in cors_allow_origins:

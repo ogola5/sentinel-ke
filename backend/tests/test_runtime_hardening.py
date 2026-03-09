@@ -21,12 +21,20 @@ def _settings(**overrides):
         "http_security_headers_enabled": True,
         "auth_enabled": True,
         "auth_password_iterations": 450000,
+        "auth_service_central_access": False,
+        "auth_intrusion_window_minutes": 15,
+        "auth_intrusion_max_failures_per_ip": 20,
+        "auth_intrusion_max_failures_per_username": 8,
+        "auth_intrusion_min_distinct_usernames": 5,
         "cors_allow_origins": ["https://sentinel.example"],
         "crypto_tls_mode": "tls1.3",
         "crypto_pqc_mode": "hybrid",
         "crypto_kms_provider": "hsm",
         "crypto_key_rotation_days": 90,
         "auth_central_mfa_required": True,
+        "auth_breakglass_enabled": False,
+        "auth_breakglass_password": "",
+        "auth_breakglass_password_sha3_512": "",
     }
     base.update(overrides)
     return SimpleNamespace(**base)
@@ -69,3 +77,14 @@ def test_runtime_hardening_flags_invalid_database_scheme():
         )
     )
     assert "DATABASE_URL_scheme_invalid" in report.errors
+
+
+def test_runtime_hardening_flags_breakglass_enabled_in_production():
+    report = evaluate_runtime_hardening(
+        _settings(
+            app_env="production",
+            auth_breakglass_enabled=True,
+            auth_breakglass_password="dev-only-breakglass",
+        )
+    )
+    assert "AUTH_BREAKGLASS_ENABLED_true" in report.errors

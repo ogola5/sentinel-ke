@@ -15,6 +15,9 @@ set -e
 RETRAIN_INTERVAL_SEC="${RETRAIN_INTERVAL_SEC:-3600}"
 GNN_EPOCHS="${GNN_EPOCHS:-60}"
 RETRAIN_EPOCHS="${RETRAIN_EPOCHS:-30}"
+# Required by PyTorch deterministic algorithms on CUDA >= 10.2.
+CUBLAS_WORKSPACE_CONFIG="${CUBLAS_WORKSPACE_CONFIG:-:4096:8}"
+export CUBLAS_WORKSPACE_CONFIG
 
 # ---------------------------------------------------------------------------
 # 1. Fix Render DATABASE_URL prefix (same as startup script)

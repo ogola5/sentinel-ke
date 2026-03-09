@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from app.api.auth import create_user, login, me
+from app.api.auth import _map_auth_error_to_http, create_user, login, me
 from app.api.deps import AuthPrincipal
 from app.auth.schemas import AuthLoginRequest, AuthUserCreateRequest
 
@@ -82,3 +82,15 @@ def test_me_returns_principal_payload():
     out = me(principal=principal)
     assert out["username"] == "analyst-a"
     assert out["access_level"] == "section"
+
+
+def test_map_auth_error_source_temporarily_blocked():
+    err = _map_auth_error_to_http("source_temporarily_blocked")
+    assert err.status_code == 429
+    assert err.detail == "source_temporarily_blocked"
+
+
+def test_map_auth_error_mfa_enrollment_required():
+    err = _map_auth_error_to_http("mfa_enrollment_required")
+    assert err.status_code == 403
+    assert err.detail == "mfa_enrollment_required"
