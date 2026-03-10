@@ -1,24 +1,13 @@
 import { ChevronLeft, ChevronRight, LogOut, RefreshCw, Settings } from "lucide-react";
 
 import { agencyColor, agencyName, type Principal } from "../types/auth";
-import {
-  NAV_ANALYZE,
-  NAV_ATTRIBUTE,
-  NAV_COMMAND,
-  NAV_GOVERN,
-  NAV_RESPOND,
-  NAV_SENSE,
-  NavGroup,
-  type ScreenId,
-} from "./navigation";
 import type { BackendStatus } from "./useDashboardSync";
+import type { WorkspaceId, WorkspaceItem } from "./navigation";
 
 export default function Sidebar({
   principal,
-  activeScreen,
-  auditorOnly,
-  central,
-  execute,
+  activeWorkspace,
+  workspaces,
   collapsed,
   backendStatus,
   backendLabel,
@@ -26,17 +15,15 @@ export default function Sidebar({
   syncError,
   actionStatus,
   healthGnnLoaded,
-  onNavigate,
+  onSelectWorkspace,
   onToggleCollapse,
   onToggleConnectionPanel,
   onTriggerSync,
   onLogout,
 }: {
   principal: Principal;
-  activeScreen: ScreenId;
-  auditorOnly: boolean;
-  central: boolean;
-  execute: boolean;
+  activeWorkspace: WorkspaceId;
+  workspaces: WorkspaceItem[];
   collapsed: boolean;
   backendStatus: BackendStatus;
   backendLabel: string;
@@ -44,18 +31,17 @@ export default function Sidebar({
   syncError: string;
   actionStatus: string;
   healthGnnLoaded: boolean;
-  onNavigate: (id: ScreenId) => void;
+  onSelectWorkspace: (workspaceId: WorkspaceId) => void;
   onToggleCollapse: () => void;
   onToggleConnectionPanel: () => void;
   onTriggerSync: () => void;
   onLogout: () => void;
 }) {
   const statusDotClass = backendStatus === "connected" ? "live" : backendStatus === "degraded" ? "degraded" : "offline";
-  const color = agencyColor(principal.section_code);
+  const agencyTint = agencyColor(principal.section_code);
 
   return (
     <aside className={collapsed ? "nav nav-collapsed" : "nav"}>
-      {/* Collapse toggle */}
       <button
         className="nav-collapse-btn"
         type="button"
@@ -68,14 +54,13 @@ export default function Sidebar({
       {!collapsed && (
         <div className="nav-header">
           <p className="nav-wordmark">Sentinel-KE</p>
-          <h1 className="nav-title">National SOC</h1>
+          <h1 className="nav-title">Mission Control</h1>
 
-          {/* Agency badge — dynamic border/bg from agencyColor */}
           <div
             className="nav-agency-badge"
-            style={{ border: `1px solid ${color}40`, background: `${color}12` }}
+            style={{ border: `1px solid ${agencyTint}40`, background: `${agencyTint}12` }}
           >
-            <span className="nav-agency-code" style={{ color }}>{principal.section_code ?? "CENTRAL"}</span>
+            <span className="nav-agency-code" style={{ color: agencyTint }}>{principal.section_code ?? "CENTRAL"}</span>
             <span className="nav-agency-sep">·</span>
             <span className="nav-agency-name">{principal.display_name ?? principal.username}</span>
           </div>
@@ -90,48 +75,41 @@ export default function Sidebar({
 
           <div className="nav-badges">
             <span className="status-badge status-badge-sm">
-              {backendStatus === "connected" ? "● Live" : backendStatus === "degraded" ? "◐ Degraded" : "○ Offline"}
+              {backendStatus === "connected" ? "Live" : backendStatus === "degraded" ? "Degraded" : "Offline"}
             </span>
             {healthGnnLoaded && (
-              <span className="status-badge status-badge-sm status-badge-gnn">GNN ✓</span>
+              <span className="status-badge status-badge-sm status-badge-gnn">AI Ready</span>
             )}
-            <span
-              className="status-badge status-badge-sm"
-              style={{ background: `${color}18`, color, border: `1px solid ${color}30` }}
-            >
-              {principal.role}
-            </span>
           </div>
         </div>
       )}
 
-      <nav className="nav-list">
-        {!auditorOnly && (
-          <NavGroup label="SENSE" color="var(--info)" items={NAV_SENSE} active={activeScreen}
-            collapsed={collapsed} onSelect={(id) => onNavigate(id as ScreenId)} />
-        )}
-        {!auditorOnly && (
-          <NavGroup label="ANALYZE" color="var(--accent)" items={NAV_ANALYZE} active={activeScreen}
-            collapsed={collapsed} onSelect={(id) => onNavigate(id as ScreenId)} />
-        )}
-        {!auditorOnly && (
-          <NavGroup label="ATTRIBUTE" color="var(--warning)" items={NAV_ATTRIBUTE} active={activeScreen}
-            collapsed={collapsed} onSelect={(id) => onNavigate(id as ScreenId)} />
-        )}
-        {!auditorOnly && execute && (
-          <NavGroup label="RESPOND" color="var(--risk-critical)" items={NAV_RESPOND} active={activeScreen}
-            collapsed={collapsed} onSelect={(id) => onNavigate(id as ScreenId)} />
-        )}
-        {!auditorOnly && !execute && (
-          <NavGroup label="RESPOND" color="var(--risk-critical)" items={[NAV_RESPOND[0]]} active={activeScreen}
-            collapsed={collapsed} onSelect={(id) => onNavigate(id as ScreenId)} />
-        )}
-        <NavGroup label="GOVERN" color="var(--risk-low)" items={NAV_GOVERN} active={activeScreen}
-          collapsed={collapsed} onSelect={(id) => onNavigate(id as ScreenId)} />
-        {central && (
-          <NavGroup label="COMMAND" color="var(--command)" items={NAV_COMMAND} active={activeScreen}
-            collapsed={collapsed} onSelect={(id) => onNavigate(id as ScreenId)} />
-        )}
+      {!collapsed && <p className="nav-section-label">Workspaces</p>}
+
+      <nav className="workspace-list" aria-label="Primary workspaces">
+        {workspaces.map((workspace) => {
+          const isActive = workspace.id === activeWorkspace;
+          const { Icon } = workspace;
+          return (
+            <button
+              key={workspace.id}
+              type="button"
+              className={`workspace-item${isActive ? " active" : ""}${collapsed ? " workspace-item-collapsed" : ""}`}
+              onClick={() => onSelectWorkspace(workspace.id)}
+              title={`${workspace.label} · ${workspace.description}`}
+            >
+              <span className="workspace-icon-wrap" style={{ color: isActive ? workspace.color : undefined }}>
+                <Icon size={16} />
+              </span>
+              {!collapsed && (
+                <span className="workspace-copy">
+                  <span className="workspace-label">{workspace.label}</span>
+                  <span className="workspace-desc">{workspace.description}</span>
+                </span>
+              )}
+            </button>
+          );
+        })}
       </nav>
 
       <div className="nav-footer">
