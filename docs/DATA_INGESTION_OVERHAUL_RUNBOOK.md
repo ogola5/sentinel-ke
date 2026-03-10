@@ -36,7 +36,10 @@ docker compose exec backend python -m app.integrations.real_data_pipeline \
   --classification PUBLIC \
   --confidence 0.94 \
   urlhaus \
-  --auth-key "$URLHAUS_AUTH_KEY"
+  --auth-key "$URLHAUS_AUTH_KEY" \
+  --max-records 400 \
+  --sleep-every 400 \
+  --sleep-sec 65
 ```
 
 OTX, importing both STIX indicators and DFIR events:
@@ -47,7 +50,10 @@ docker compose exec backend python -m app.integrations.real_data_pipeline \
   --classification PUBLIC \
   --confidence 0.93 \
   otx \
-  --otx-api-key "$OTX_API_KEY"
+  --otx-api-key "$OTX_API_KEY" \
+  --max-records 400 \
+  --sleep-every 400 \
+  --sleep-sec 65
 ```
 
 OTX, STIX only:
@@ -59,6 +65,9 @@ docker compose exec backend python -m app.integrations.real_data_pipeline \
   --confidence 0.93 \
   otx \
   --otx-api-key "$OTX_API_KEY" \
+  --max-records 400 \
+  --sleep-every 400 \
+  --sleep-sec 65 \
   --stix-only
 ```
 
@@ -155,5 +164,8 @@ These poll on loops matching the planned cadence:
 - URLhaus: every 15 minutes
 - OTX: every 30 minutes
 
-`urlhaus-ingest-worker` requires `URLHAUS_AUTH_KEY`.
-`otx-ingest-worker` will no-op until `OTX_API_KEY` is set.
+`urlhaus-ingest-worker` requires `URLHAUS_AUTH_KEY` and caps mirrored DFIR events
+per run with `URLHAUS_EVENT_MAX_RECORDS`.
+`otx-ingest-worker` will no-op until `OTX_API_KEY` is set. The worker also caps
+mirrored DFIR events per run with `OTX_EVENT_MAX_RECORDS` so it stays below the
+backend per-source ingest limiter.

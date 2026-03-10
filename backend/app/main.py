@@ -60,6 +60,13 @@ def _register_lifecycle(app: FastAPI) -> None:
         except Exception:
             log.exception("auth_bootstrap_failed")
 
+        try:
+            from app.ledger.seed_sources import seed as _seed_sources  # noqa: PLC0415
+            _seed_sources()
+            log.info("source_registry_seeded")
+        except Exception:
+            log.exception("source_registry_seed_failed")
+
 
 def _register_operational_routes(app: FastAPI) -> None:
     @app.get("/metrics", tags=["ops"], include_in_schema=False)

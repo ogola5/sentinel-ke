@@ -146,6 +146,9 @@ services:
           urlhaus
           --urlhaus-url ${URLHAUS_FEED_URL:-https://urlhaus.abuse.ch/downloads/csv_online/}
           --auth-key ${URLHAUS_AUTH_KEY:-}
+          --max-records ${URLHAUS_EVENT_MAX_RECORDS:-400}
+          --sleep-every ${URLHAUS_EVENT_SLEEP_EVERY:-400}
+          --sleep-sec ${URLHAUS_EVENT_SLEEP_SEC:-65}
           --timeout-sec ${URLHAUS_TIMEOUT_SEC:-30} || true;
         sleep ${URLHAUS_POLL_SEC:-900};
       done"
@@ -171,6 +174,9 @@ services:
             --otx-url ${OTX_SUBSCRIBED_URL:-https://otx.alienvault.com/api/v1/pulses/subscribed}
             --threat-source otx
             --limit ${OTX_LIMIT:-100}
+            --max-records ${OTX_EVENT_MAX_RECORDS:-400}
+            --sleep-every ${OTX_EVENT_SLEEP_EVERY:-400}
+            --sleep-sec ${OTX_EVENT_SLEEP_SEC:-65}
             --timeout-sec ${OTX_TIMEOUT_SEC:-30} || true;
         else
           echo 'OTX_API_KEY not set; skipping OTX poll';

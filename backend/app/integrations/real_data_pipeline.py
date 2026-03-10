@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import re
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -818,11 +819,18 @@ def ingest_records_via_connectors(
     records: Iterable[NormalizedConnectorRecord],
     source_api_key: str,
     classification: Optional[str] = "RESTRICTED",
+    max_records: Optional[int] = None,
+    sleep_every: Optional[int] = None,
+    sleep_sec: float = 65.0,
+    retry_on_rate_limit: bool = False,
 ) -> IngestionJobStats:
     svc = IngestionService(db, pseudonym_salt=settings.pseudonym_salt or None)
     total = accepted = duplicates = skipped = errors = 0
+    processed_since_sleep = 0
 
     for record in records:
+        if max_records is not None and total >= max(0, int(max_records)):
+            break
         total += 1
         try:
             event = map_external_event(
@@ -838,6 +846,47 @@ def ingest_records_via_connectors(
                 duplicates += 1
             else:
                 skipped += 1
+            processed_since_sleep += 1
+            if sleep_every and processed_since_sleep >= max(1, int(sleep_every)):
+                log.info("real_data_ingest_pause sleep_sec=%s processed=%s", sleep_sec, processed_since_sleep)
+                time.sleep(max(0.0, float(sleep_sec)))
+                processed_since_sleep = 0
+        except PermissionError as exc:
+            if retry_on_rate_limit and "Rate limit exceeded" in str(exc):
+                log.warning("real_data_rate_limit_pause connector=%s sleep_sec=%s", record.connector_key, sleep_sec)
+                time.sleep(max(0.0, float(sleep_sec)))
+                try:
+                    event = map_external_event(
+                        connector_key=record.connector_key,
+                        payload=record.payload,
+                        confidence=record.confidence,
+                        classification=classification,
+                    )
+                    result = svc.ingest_event(event=event, source_api_key=source_api_key)
+                    if result.status == "accepted":
+                        accepted += 1
+                    elif result.status == "duplicate":
+                        duplicates += 1
+                    else:
+                        skipped += 1
+                    processed_since_sleep = 0
+                    continue
+                except Exception as retry_exc:
+                    errors += 1
+                    log.exception(
+                        "real_data_ingest_retry_failed connector=%s err=%s payload=%s",
+                        record.connector_key,
+                        retry_exc,
+                        record.payload,
+                    )
+                    continue
+            errors += 1
+            log.exception(
+                "real_data_ingest_failed connector=%s err=%s payload=%s",
+                record.connector_key,
+                exc,
+                record.payload,
+            )
         except Exception as exc:
             errors += 1
             log.exception(
@@ -878,6 +927,9 @@ def _run_kev_epss_job(args: argparse.Namespace) -> IngestionJobStats:
             records=records,
             source_api_key=args.source_api_key,
             classification=args.classification,
+            max_records=args.max_records if hasattr(args, "max_records") else None,
+            sleep_every=args.sleep_every if hasattr(args, "sleep_every") else None,
+            sleep_sec=args.sleep_sec if hasattr(args, "sleep_sec") else 65.0,
         )
     finally:
         db.close()
@@ -929,6 +981,9 @@ def _run_traffic_job(args: argparse.Namespace) -> IngestionJobStats:
             records=records,
             source_api_key=args.source_api_key,
             classification=args.classification,
+            max_records=args.max_records if hasattr(args, "max_records") else None,
+            sleep_every=args.sleep_every if hasattr(args, "sleep_every") else None,
+            sleep_sec=args.sleep_sec if hasattr(args, "sleep_sec") else 65.0,
         )
     finally:
         db.close()
@@ -948,6 +1003,9 @@ def _run_feodo_job(args: argparse.Namespace) -> IngestionJobStats:
             records=records,
             source_api_key=args.source_api_key,
             classification=args.classification,
+            max_records=args.max_records if hasattr(args, "max_records") else None,
+            sleep_every=args.sleep_every if hasattr(args, "sleep_every") else None,
+            sleep_sec=args.sleep_sec if hasattr(args, "sleep_sec") else 65.0,
         )
     finally:
         db.close()
@@ -968,6 +1026,10 @@ def _run_urlhaus_job(args: argparse.Namespace) -> IngestionJobStats:
             records=records,
             source_api_key=args.source_api_key,
             classification=args.classification,
+            max_records=args.max_records,
+            sleep_every=args.sleep_every,
+            sleep_sec=args.sleep_sec,
+            retry_on_rate_limit=True,
         )
     finally:
         db.close()
@@ -999,6 +1061,10 @@ def _run_otx_job(args: argparse.Namespace) -> IngestionJobStats:
             records=records,
             source_api_key=args.source_api_key,
             classification=args.classification,
+            max_records=args.max_records,
+            sleep_every=args.sleep_every,
+            sleep_sec=args.sleep_sec,
+            retry_on_rate_limit=True,
         )
     finally:
         db.close()
@@ -1021,6 +1087,8 @@ def build_cli() -> argparse.ArgumentParser:
     p_kev.add_argument("--epss-url", default=DEFAULT_EPSS_API_URL, help="FIRST EPSS API URL.")
     p_kev.add_argument("--timeout-sec", type=int, default=30, help="HTTP timeout for remote feed calls.")
     p_kev.add_argument("--skip-epss", action="store_true", help="Skip EPSS enrichment lookup.")
+    p_kev.add_argument("--sleep-every", type=int, default=450, dest="sleep_every", help="Sleep after every N records to avoid rate limits (default 450).")
+    p_kev.add_argument("--sleep-sec", type=float, default=65.0, dest="sleep_sec", help="Seconds to sleep between batches (default 65).")
 
     p_traffic = sub.add_parser("traffic", help="Normalize CIC/CAIDA traffic rows into DDoS/Web events.")
     p_traffic.add_argument("--dataset", choices=("cic", "caida"), required=True, help="Traffic dataset family.")
@@ -1037,6 +1105,9 @@ def build_cli() -> argparse.ArgumentParser:
     p_urlhaus.add_argument("--urlhaus-file", default=None, help="Local URLhaus CSV/JSON file. If omitted, the online CSV feed is used.")
     p_urlhaus.add_argument("--urlhaus-url", default=DEFAULT_URLHAUS_CSV_URL, help="URLhaus CSV feed URL.")
     p_urlhaus.add_argument("--auth-key", default=None, help="URLhaus auth-key. Falls back to URLHAUS_AUTH_KEY env var.")
+    p_urlhaus.add_argument("--max-records", type=int, default=400, help="Maximum URLhaus DFIR events to emit per run.")
+    p_urlhaus.add_argument("--sleep-every", type=int, default=400, help="Pause after this many URLhaus DFIR events.")
+    p_urlhaus.add_argument("--sleep-sec", type=float, default=65.0, help="Pause duration used to avoid per-source ingest rate limits.")
     p_urlhaus.add_argument("--timeout-sec", type=int, default=30, help="HTTP timeout for remote feed calls.")
 
     p_otx = sub.add_parser("otx", help="Import AlienVault OTX indicators into STIX and DFIR events.")
@@ -1046,6 +1117,9 @@ def build_cli() -> argparse.ArgumentParser:
     p_otx.add_argument("--threat-source", default="otx", help="Source label written to threat_intel_sync_log.")
     p_otx.add_argument("--modified-since", default=None, help="Optional OTX modified_since cursor.")
     p_otx.add_argument("--limit", type=int, default=100, help="Maximum subscribed pulses to fetch.")
+    p_otx.add_argument("--max-records", type=int, default=400, help="Maximum mirrored DFIR events to emit per run.")
+    p_otx.add_argument("--sleep-every", type=int, default=400, help="Pause after this many mirrored DFIR events.")
+    p_otx.add_argument("--sleep-sec", type=float, default=65.0, help="Pause duration used to avoid per-source ingest rate limits.")
     p_otx.add_argument("--timeout-sec", type=int, default=30, help="HTTP timeout for remote feed calls.")
     p_otx.add_argument("--skip-stix-import", action="store_true", help="Skip STIX import and only emit DFIR events.")
     p_otx.add_argument("--stix-only", action="store_true", help="Import STIX indicators only and skip DFIR event creation.")
@@ -1055,17 +1129,23 @@ def build_cli() -> argparse.ArgumentParser:
     p_paysim.add_argument("--input-file", required=True, help="Path to paysim CSV (e.g. PS_20174392719_1491204439457_log.csv).")
     p_paysim.add_argument("--include-benign", action="store_true", help="Also include non-fraud transactions (sampled).")
     p_paysim.add_argument("--max-benign", type=int, default=5000, help="Max benign rows to include when --include-benign is set.")
+    p_paysim.add_argument("--sleep-every", type=int, default=450, dest="sleep_every", help="Sleep after every N records to avoid rate limits.")
+    p_paysim.add_argument("--sleep-sec", type=float, default=65.0, dest="sleep_sec", help="Seconds to sleep between batches.")
 
     # ---- PPRA Kenya OCDS ----
     p_ppra = sub.add_parser("ppra", help="Ingest Kenya PPRA Open Contracting (OCDS) procurement CSV.")
     p_ppra.add_argument("--input-file", required=True, help="Path to PPRA OCDS flattened CSV.")
     p_ppra.add_argument("--anomalies-only", action="store_true", help="Only ingest rows that have at least one anomaly flag.")
+    p_ppra.add_argument("--sleep-every", type=int, default=450, dest="sleep_every", help="Sleep after every N records to avoid rate limits.")
+    p_ppra.add_argument("--sleep-sec", type=float, default=65.0, dest="sleep_sec", help="Seconds to sleep between batches.")
 
     # ---- UNSW-NB15 ----
     p_unsw = sub.add_parser("unsw", help="Ingest UNSW-NB15 network intrusion CSV.")
     p_unsw.add_argument("--input-file", required=True, help="Path to UNSW-NB15 CSV file.")
     p_unsw.add_argument("--service-id-prefix", default="unsw", help="Prefix for derived service_id (e.g. 'ke-noc').")
     p_unsw.add_argument("--dataset-name", default="unsw_nb15", help="Dataset tag written into payload.")
+    p_unsw.add_argument("--sleep-every", type=int, default=450, dest="sleep_every", help="Sleep after every N records to avoid rate limits.")
+    p_unsw.add_argument("--sleep-sec", type=float, default=65.0, dest="sleep_sec", help="Seconds to sleep between batches.")
 
     return p
 
@@ -1460,6 +1540,9 @@ def _run_paysim_job(args: argparse.Namespace) -> IngestionJobStats:
             records=records,
             source_api_key=args.source_api_key,
             classification=args.classification,
+            sleep_every=getattr(args, "sleep_every", 450),
+            sleep_sec=getattr(args, "sleep_sec", 65.0),
+            retry_on_rate_limit=True,
         )
     finally:
         db.close()
@@ -1479,6 +1562,9 @@ def _run_ppra_job(args: argparse.Namespace) -> IngestionJobStats:
             records=records,
             source_api_key=args.source_api_key,
             classification=args.classification,
+            sleep_every=getattr(args, "sleep_every", 450),
+            sleep_sec=getattr(args, "sleep_sec", 65.0),
+            retry_on_rate_limit=True,
         )
     finally:
         db.close()
@@ -1499,6 +1585,9 @@ def _run_unsw_job(args: argparse.Namespace) -> IngestionJobStats:
             records=iter(list(records)),
             source_api_key=args.source_api_key,
             classification=args.classification,
+            sleep_every=getattr(args, "sleep_every", 450),
+            sleep_sec=getattr(args, "sleep_sec", 65.0),
+            retry_on_rate_limit=True,
         )
     finally:
         db.close()

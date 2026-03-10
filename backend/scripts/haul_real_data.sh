@@ -26,10 +26,20 @@
 set -euo pipefail
 
 # ── Config ──────────────────────────────────────────────────────────────────
-INGEST_API_KEY="${INGEST_API_KEY:?ERROR: Set INGEST_API_KEY environment variable}"
+# Each source has its own registered API key in the source_registry table.
+# These must match what seed_sources.py writes to Postgres (read from .env).
+# Fallback to INGEST_API_KEY if a specific key is not set.
+INGEST_API_KEY="${INGEST_API_KEY:-a488444a8f1f676715b503a9326a307b36ec575d483c33ce}"
+FEODO_SOURCE_API_KEY="${FEODO_SOURCE_API_KEY:-d6c42c36bfe70bc8aff1113e544dff11e96b9d521c64c719}"
+URLHAUS_SOURCE_API_KEY="${URLHAUS_SOURCE_API_KEY:-2ce8ef011178e0850d7eb3aa9d4b058c3c842a230c76f6c1}"
+OTX_SOURCE_API_KEY="${OTX_SOURCE_API_KEY:-${OTX_API_KEY:-766244cbed3884485db14c711bcfc933bf3e916373a18f9d6c04cc55c7c7eb52}}"
+PPRA_SOURCE_API_KEY="${PPRA_SOURCE_API_KEY:-cf2bc3a7d0656a4b8037ad1b2dbc704b234326f8adfcffad}"
+PAYSIM_SOURCE_API_KEY="${PAYSIM_SOURCE_API_KEY:-f80e6fb8df01f07cb810099b8b7ecbe22c7d44ba8fb13c83}"
+UNSW_SOURCE_API_KEY="${UNSW_SOURCE_API_KEY:-30b7fa8e9c7646ab34e4a061ebc24ab79cb7b3e04a182bed}"
+
 DATA_DIR="${DATA_DIR:-/tmp/sentinel_haul}"
 CLASSIFICATION="RESTRICTED"
-PIPELINE="python -m app.integrations.real_data_pipeline --source-api-key ${INGEST_API_KEY} --classification ${CLASSIFICATION}"
+BASE_PIPELINE="python -m app.integrations.real_data_pipeline --classification ${CLASSIFICATION}"
 
 # ── Colours ─────────────────────────────────────────────────────────────────
 G="\033[0;32m"; Y="\033[0;33m"; R="\033[0;31m"; B="\033[0;34m"; NC="\033[0m"
@@ -46,19 +56,24 @@ TOTAL_ACCEPTED=0
 TOTAL_ERRORS=0
 
 run_job() {
-    # run_job <label> <pipeline-args...>
+    # run_job <label> <source-api-key> <pipeline-args...>
     local label="$1"; shift
+    local key="$1"; shift
     info "Running: ${label}"
-    local result
-    if result=$($PIPELINE "$@" 2>&1); then
-        local accepted errors
-        accepted=$(echo "$result" | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); print(d.get('accepted',0))" 2>/dev/null || echo 0)
-        errors=$(echo "$result"   | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); print(d.get('errors',0))"   2>/dev/null || echo 0)
-        TOTAL_ACCEPTED=$((TOTAL_ACCEPTED + accepted))
-        TOTAL_ERRORS=$((TOTAL_ERRORS + errors))
+    local result exit_code
+    result=$(${BASE_PIPELINE} --source-api-key "${key}" "$@" 2>&1)
+    exit_code=$?
+    # Extract JSON summary from last line of output (pipeline always ends with JSON)
+    local json_line accepted errors
+    json_line=$(echo "$result" | grep -o '{.*"job".*}' | tail -1)
+    accepted=$(echo "$json_line" | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); print(d.get('accepted',0))" 2>/dev/null || echo 0)
+    errors=$(echo "$json_line"   | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); print(d.get('errors',0))"   2>/dev/null || echo 0)
+    TOTAL_ACCEPTED=$((TOTAL_ACCEPTED + accepted))
+    TOTAL_ERRORS=$((TOTAL_ERRORS + errors))
+    if [[ "${exit_code}" -eq 0 ]]; then
         ok "${label}: accepted=${accepted} errors=${errors}"
     else
-        fail "${label} failed — output:"
+        fail "${label} finished with errors — output:"
         echo "$result" | tail -20
         TOTAL_ERRORS=$((TOTAL_ERRORS + 1))
     fi
@@ -72,10 +87,21 @@ if [[ "${SKIP_FEODO:-0}" == "1" ]]; then
     warn "SKIP_FEODO=1, skipping"
 else
     FEODO_FILE="${DATA_DIR}/feodo_ipblocklist.json"
-    info "Downloading Feodo blocklist…"
-    curl -sSfL "https://feodotracker.abuse.ch/downloads/ipblocklist_recommended.json" \
-        -o "${FEODO_FILE}" && ok "Downloaded ${FEODO_FILE}"
-    run_job "feodo" feodo --feodo-file "${FEODO_FILE}"
+    # Try curl first; if unavailable (e.g. inside Docker) let Python pipeline fetch directly
+    if command -v curl &>/dev/null; then
+        info "Downloading Feodo blocklist via curl…"
+        curl -sSfL "https://feodotracker.abuse.ch/downloads/ipblocklist_recommended.json" \
+            -o "${FEODO_FILE}" && ok "Downloaded ${FEODO_FILE}"
+        run_job "feodo" "${FEODO_SOURCE_API_KEY}" feodo --feodo-file "${FEODO_FILE}"
+    elif command -v wget &>/dev/null; then
+        info "Downloading Feodo blocklist via wget…"
+        wget -q "https://feodotracker.abuse.ch/downloads/ipblocklist_recommended.json" \
+            -O "${FEODO_FILE}" && ok "Downloaded ${FEODO_FILE}"
+        run_job "feodo" "${FEODO_SOURCE_API_KEY}" feodo --feodo-file "${FEODO_FILE}"
+    else
+        info "curl/wget not found — Python pipeline will fetch Feodo live via requests"
+        run_job "feodo" "${FEODO_SOURCE_API_KEY}" feodo
+    fi
 fi
 
 # =============================================================================
@@ -86,7 +112,9 @@ if [[ "${SKIP_KEV:-0}" == "1" ]]; then
     warn "SKIP_KEV=1, skipping"
 else
     # ke-gov-infra is our symbolic asset representing national infrastructure
-    run_job "kev-epss" kev-epss --asset-id "ke-gov-infra"
+    # KEV is an OSINT source — use the feodo_live source key (same OSINT category)
+    run_job "kev-epss" "${FEODO_SOURCE_API_KEY}" kev-epss --asset-id "ke-gov-infra" \
+        --sleep-every 450 --sleep-sec 65
 fi
 
 # =============================================================================
@@ -104,7 +132,7 @@ else
     curl -sSfL "https://urlhaus.abuse.ch/downloads/csv_online/" \
         --data "auth-key=${URLHAUS_AUTH_KEY}" \
         -o "${URLHAUS_FILE}" && ok "Downloaded ${URLHAUS_FILE}"
-    run_job "urlhaus" urlhaus --urlhaus-file "${URLHAUS_FILE}"
+    run_job "urlhaus" "${URLHAUS_SOURCE_API_KEY}" urlhaus --urlhaus-file "${URLHAUS_FILE}"
 fi
 
 # =============================================================================
@@ -117,7 +145,7 @@ elif [[ -z "${OTX_API_KEY:-}" ]]; then
     warn "OTX_API_KEY not set — skipping OTX"
     warn "  Get free key at https://otx.alienvault.com and set OTX_API_KEY=<key>"
 else
-    run_job "otx" otx \
+    run_job "otx" "${OTX_SOURCE_API_KEY}" otx \
         --otx-api-key "${OTX_API_KEY}" \
         --limit 200 \
         --threat-source "alienvault_otx"
@@ -138,27 +166,38 @@ else
     else
         PPRA_FILE="${DATA_DIR}/ppra_ke_contracts.csv"
         info "Downloading Kenya PPRA OCDS CSV (~51 MB)…"
-        if curl -sSfL \
-            "https://data.open-contracting.org/en/publication/147/download?format=csv" \
-            -o "${PPRA_FILE}"; then
-            ok "Downloaded ${PPRA_FILE} ($(du -sh "${PPRA_FILE}" | cut -f1))"
-        else
-            warn "PPRA direct download failed — trying alternate URL"
-            # The portal may require a browser session; fall back to tenders.go.ke
+        _ppra_download_ok=0
+        if command -v curl &>/dev/null; then
             curl -sSfL \
-                "https://tenders.go.ke/ocds/download?format=csv" \
-                -o "${PPRA_FILE}" || {
-                    fail "PPRA download failed. Download manually from:"
-                    fail "  https://data.open-contracting.org/en/publication/147/download"
-                    fail "  and set PPRA_CSV=/path/to/file.csv"
-                    PPRA_FILE=""
-                }
+                "https://data.open-contracting.org/en/publication/147/download?format=csv" \
+                -o "${PPRA_FILE}" && _ppra_download_ok=1
+        elif command -v wget &>/dev/null; then
+            wget -q "https://data.open-contracting.org/en/publication/147/download?format=csv" \
+                -O "${PPRA_FILE}" && _ppra_download_ok=1
+        else
+            # Use Python requests as fallback
+            python3 -c "
+import requests, sys
+url='https://data.open-contracting.org/en/publication/147/download?format=csv'
+r=requests.get(url, timeout=120, stream=True)
+r.raise_for_status()
+with open('${PPRA_FILE}','wb') as f:
+    for chunk in r.iter_content(65536): f.write(chunk)
+" && _ppra_download_ok=1
+        fi
+        if [[ "${_ppra_download_ok}" == "1" ]]; then
+            ok "Downloaded ${PPRA_FILE}"
+        else
+            fail "PPRA download failed. Download manually from:"
+            fail "  https://data.open-contracting.org/en/publication/147/download"
+            fail "  and set PPRA_CSV=/path/to/file.csv"
+            PPRA_FILE=""
         fi
     fi
 
     if [[ -n "${PPRA_FILE:-}" && -f "${PPRA_FILE}" ]]; then
         # Ingest all contracts; anomaly flags raised automatically for sole-source / single-bidder
-        run_job "ppra" ppra --input-file "${PPRA_FILE}"
+        run_job "ppra" "${PPRA_SOURCE_API_KEY}" ppra --input-file "${PPRA_FILE}"
     fi
 fi
 
@@ -193,7 +232,7 @@ else
 
     if [[ -n "${PAYSIM_FILE:-}" && -f "${PAYSIM_FILE}" ]]; then
         # Import fraud transactions + 5000 benign for contrast
-        run_job "paysim" paysim \
+        run_job "paysim" "${PAYSIM_SOURCE_API_KEY}" paysim \
             --input-file "${PAYSIM_FILE}" \
             --include-benign \
             --max-benign 5000
@@ -232,7 +271,7 @@ else
     fi
 
     if [[ -n "${UNSW_FILE:-}" && -f "${UNSW_FILE}" ]]; then
-        run_job "unsw" unsw \
+        run_job "unsw" "${UNSW_SOURCE_API_KEY}" unsw \
             --input-file "${UNSW_FILE}" \
             --service-id-prefix "ke-noc" \
             --dataset-name "unsw_nb15"
@@ -271,7 +310,7 @@ else
         for csv_file in "${CIC_DIR}"/*.csv; do
             fname=$(basename "${csv_file}")
             info "Ingesting CIC file: ${fname}"
-            run_job "cic:${fname}" traffic \
+            run_job "cic:${fname}" "${INGEST_API_KEY}" traffic \
                 --dataset cic \
                 --input-file "${csv_file}" \
                 --service-id-prefix "ke-noc" \
