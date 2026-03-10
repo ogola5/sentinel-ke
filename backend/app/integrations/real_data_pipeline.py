@@ -4,15 +4,19 @@ import argparse
 import csv
 import json
 import logging
+import os
 import re
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, Iterator, List, Mapping, Optional, Sequence
+from urllib.parse import urlsplit
 
 import requests
 from sqlalchemy.orm import Session
 
+from app.analytics.layer3.threat_intel_worker import import_stix_bundle
 from app.core.config import settings
 from app.ingestion.service import IngestionService
 from app.integrations.connectors import map_external_event
@@ -23,6 +27,9 @@ log = logging.getLogger("sentinel.integrations.real_data")
 
 DEFAULT_KEV_FEED_URL = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
 DEFAULT_EPSS_API_URL = "https://api.first.org/data/v1/epss"
+DEFAULT_FEODO_URL = "https://feodotracker.abuse.ch/downloads/ipblocklist_recommended.json"
+DEFAULT_URLHAUS_CSV_URL = "https://urlhaus.abuse.ch/downloads/csv_online/"
+DEFAULT_OTX_SUBSCRIBED_URL = "https://otx.alienvault.com/api/v1/pulses/subscribed"
 
 
 @dataclass(frozen=True)
@@ -142,14 +149,71 @@ def _http_get_json(
     *,
     timeout_sec: int = 30,
     params: Optional[Mapping[str, str]] = None,
+    headers: Optional[Mapping[str, str]] = None,
     getter: Callable[..., Any] = requests.get,
 ) -> Dict[str, Any]:
-    response = getter(url, params=params, timeout=timeout_sec)
+    kwargs: Dict[str, Any] = {"params": params, "timeout": timeout_sec}
+    if headers:
+        kwargs["headers"] = headers
+    response = getter(url, **kwargs)
     response.raise_for_status()
     payload = response.json()
     if not isinstance(payload, dict):
         raise ValueError(f"expected JSON object from {url}")
     return payload
+
+
+def _http_get_any_json(
+    url: str,
+    *,
+    timeout_sec: int = 30,
+    params: Optional[Mapping[str, str]] = None,
+    headers: Optional[Mapping[str, str]] = None,
+    getter: Callable[..., Any] = requests.get,
+) -> Any:
+    kwargs: Dict[str, Any] = {"params": params, "timeout": timeout_sec}
+    if headers:
+        kwargs["headers"] = headers
+    response = getter(url, **kwargs)
+    response.raise_for_status()
+    return response.json()
+
+
+def _http_get_text(
+    url: str,
+    *,
+    timeout_sec: int = 30,
+    params: Optional[Mapping[str, str]] = None,
+    headers: Optional[Mapping[str, str]] = None,
+    getter: Callable[..., Any] = requests.get,
+) -> str:
+    kwargs: Dict[str, Any] = {"params": params, "timeout": timeout_sec}
+    if headers:
+        kwargs["headers"] = headers
+    response = getter(url, **kwargs)
+    response.raise_for_status()
+    return str(getattr(response, "text", ""))
+
+
+def _iter_csv_rows_from_text(raw: str) -> Iterator[Dict[str, Any]]:
+    lines = [line for line in str(raw or "").splitlines() if line and not line.startswith("#")]
+    if not lines:
+        return
+    reader = csv.DictReader(lines)
+    for row in reader:
+        if row:
+            yield dict(row)
+
+
+def _extract_domain(value: Optional[str]) -> Optional[str]:
+    if not value:
+        return None
+    try:
+        parsed = urlsplit(str(value).strip())
+    except Exception:
+        return None
+    host = (parsed.hostname or "").strip().lower()
+    return host or None
 
 
 def load_kev_rows(*, kev_file: Optional[str] = None, kev_url: str = DEFAULT_KEV_FEED_URL) -> List[Dict[str, Any]]:
@@ -242,6 +306,279 @@ def build_kev_epss_records(
             )
         )
     return out
+
+
+def load_feodo_rows(
+    *,
+    feodo_file: Optional[str] = None,
+    feodo_url: str = DEFAULT_FEODO_URL,
+    timeout_sec: int = 30,
+    getter: Callable[..., Any] = requests.get,
+) -> List[Dict[str, Any]]:
+    if feodo_file:
+        path = Path(feodo_file)
+        if path.suffix.lower() == ".csv":
+            return list(iter_rows_from_path(str(path)))
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    else:
+        payload = _http_get_any_json(feodo_url, timeout_sec=timeout_sec, getter=getter)
+
+    if isinstance(payload, list):
+        return [row for row in payload if isinstance(row, dict)]
+    if isinstance(payload, dict):
+        rows = payload.get("data") or payload.get("items") or payload.get("rows")
+        if isinstance(rows, list):
+            return [row for row in rows if isinstance(row, dict)]
+    raise ValueError("Feodo payload missing row list")
+
+
+def build_feodo_records(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    confidence: float = 0.96,
+) -> List[NormalizedConnectorRecord]:
+    out: List[NormalizedConnectorRecord] = []
+    for row in rows:
+        idx = _row_index(row)
+        ip = str(_pick(idx, "ip_address", "ip", "host") or "").strip()
+        if not ip:
+            continue
+        payload: Dict[str, Any] = {
+            "timestamp": _utcnow_iso(),
+            "first_seen_utc": _to_iso_utc(
+                _pick(idx, "first_seen_utc", "first_seen", "first_seen_at", "last_online"),
+                fallback_now=True,
+            ),
+            "ip_address": ip,
+            "malware": _pick(idx, "malware", "malware_family", "family"),
+            "status": _pick(idx, "status", "online_status"),
+            "port": _as_int(_pick(idx, "port", "dst_port", "c2_port")),
+            "reporter": _pick(idx, "reporter", "reporter_name"),
+        }
+        out.append(
+            NormalizedConnectorRecord(
+                connector_key="feodo_c2_v1",
+                payload={k: v for k, v in payload.items() if v is not None},
+                confidence=confidence,
+            )
+        )
+    return out
+
+
+def load_urlhaus_rows(
+    *,
+    urlhaus_file: Optional[str] = None,
+    urlhaus_url: str = DEFAULT_URLHAUS_CSV_URL,
+    auth_key: Optional[str] = None,
+    timeout_sec: int = 30,
+    getter: Callable[..., Any] = requests.get,
+) -> List[Dict[str, Any]]:
+    if urlhaus_file:
+        path = Path(urlhaus_file)
+        if path.suffix.lower() == ".csv":
+            return list(_iter_csv_rows_from_text(path.read_text(encoding="utf-8")))
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(payload, list):
+            return [row for row in payload if isinstance(row, dict)]
+        if isinstance(payload, dict):
+            rows = payload.get("urls") or payload.get("data") or payload.get("items")
+            if isinstance(rows, list):
+                return [row for row in rows if isinstance(row, dict)]
+        raise ValueError("URLhaus file payload missing row list")
+
+    key = (auth_key or os.environ.get("URLHAUS_AUTH_KEY") or "").strip()
+    if not key:
+        raise ValueError("URLhaus auth key required for live URLhaus downloads")
+    text = _http_get_text(
+        urlhaus_url,
+        timeout_sec=timeout_sec,
+        params={"auth-key": key},
+        getter=getter,
+    )
+    return list(_iter_csv_rows_from_text(text))
+
+
+def build_urlhaus_records(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    confidence: float = 0.94,
+) -> List[NormalizedConnectorRecord]:
+    out: List[NormalizedConnectorRecord] = []
+    for row in rows:
+        idx = _row_index(row)
+        url = str(_pick(idx, "url", "indicator", "ioc") or "").strip()
+        if not url:
+            continue
+        host = str(_pick(idx, "host", "domain", "hostname") or "").strip() or _extract_domain(url)
+        payload: Dict[str, Any] = {
+            "timestamp": _utcnow_iso(),
+            "date_added": _to_iso_utc(
+                _pick(idx, "dateadded", "date_added", "timestamp", "firstseen"),
+                fallback_now=True,
+            ),
+            "url": url,
+            "host": host,
+            "host_ip": _pick(idx, "host_ip", "ip", "ip_address"),
+            "threat": _pick(idx, "threat", "threat_type", "classification"),
+            "url_status": _pick(idx, "url_status", "status"),
+            "tags": _pick(idx, "tags", "tag"),
+            "reporter": _pick(idx, "reporter", "reporter_name"),
+            "id": _pick(idx, "id", "urlhaus_id"),
+        }
+        out.append(
+            NormalizedConnectorRecord(
+                connector_key="urlhaus_ioc_v1",
+                payload={k: v for k, v in payload.items() if v is not None},
+                confidence=confidence,
+            )
+        )
+    return out
+
+
+def load_otx_pulses(
+    *,
+    otx_file: Optional[str] = None,
+    api_key: Optional[str] = None,
+    otx_url: str = DEFAULT_OTX_SUBSCRIBED_URL,
+    timeout_sec: int = 30,
+    limit: int = 100,
+    modified_since: Optional[str] = None,
+    getter: Callable[..., Any] = requests.get,
+) -> List[Dict[str, Any]]:
+    if otx_file:
+        payload = json.loads(Path(otx_file).read_text(encoding="utf-8"))
+    else:
+        key = (api_key or os.environ.get("OTX_API_KEY") or "").strip()
+        if not key:
+            raise ValueError("OTX API key required for live OTX fetch")
+        headers = {"X-OTX-API-KEY": key}
+        params: Dict[str, str] = {"limit": str(max(1, int(limit)))}
+        if modified_since:
+            params["modified_since"] = modified_since
+        payload = _http_get_any_json(
+            otx_url,
+            timeout_sec=timeout_sec,
+            params=params,
+            headers=headers,
+            getter=getter,
+        )
+
+    if isinstance(payload, list):
+        return [row for row in payload if isinstance(row, dict)]
+    if isinstance(payload, dict):
+        rows = payload.get("results") or payload.get("pulses") or payload.get("items")
+        if isinstance(rows, list):
+            return [row for row in rows if isinstance(row, dict)]
+    raise ValueError("OTX payload missing pulses/results list")
+
+
+def _otx_indicator_kind(indicator_type: str) -> Optional[str]:
+    x = (indicator_type or "").strip().lower()
+    if x in {"ipv4", "ipv4-addr", "ip", "ipv6", "ipv6-addr"}:
+        return "ip"
+    if x in {"domain", "hostname"}:
+        return "domain"
+    if x == "url":
+        return "url"
+    return None
+
+
+def build_otx_indicator_records(
+    pulses: Sequence[Mapping[str, Any]],
+    *,
+    confidence: float = 0.93,
+) -> List[NormalizedConnectorRecord]:
+    out: List[NormalizedConnectorRecord] = []
+    for pulse in pulses:
+        pulse_name = str(pulse.get("name") or pulse.get("title") or "alienvault_otx").strip()
+        pulse_id = str(pulse.get("id") or pulse.get("pulse_id") or "").strip() or None
+        tags = pulse.get("tags") or []
+        indicators = pulse.get("indicators") if isinstance(pulse.get("indicators"), list) else []
+        for ind in indicators:
+            if not isinstance(ind, dict):
+                continue
+            kind = _otx_indicator_kind(str(ind.get("type") or ""))
+            value = str(ind.get("indicator") or ind.get("value") or "").strip()
+            if not kind or not value:
+                continue
+            payload: Dict[str, Any] = {
+                "timestamp": _utcnow_iso(),
+                "indicator": value,
+                "indicator_type": kind,
+                "pulse_name": pulse_name,
+                "pulse_id": pulse_id,
+                "indicator_id": ind.get("id"),
+                "first_seen": _to_iso_utc(ind.get("created") or pulse.get("modified") or pulse.get("created")),
+                "status": ind.get("is_active") if ind.get("is_active") is not None else "active",
+                "tags": tags,
+                "severity": "high",
+            }
+            out.append(
+                NormalizedConnectorRecord(
+                    connector_key="otx_indicator_v1",
+                    payload={k: v for k, v in payload.items() if v is not None},
+                    confidence=confidence,
+                )
+            )
+    return out
+
+
+def build_otx_stix_bundle(
+    pulses: Sequence[Mapping[str, Any]],
+    *,
+    default_confidence: int = 80,
+) -> Dict[str, Any]:
+    objects: List[Dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+
+    for pulse in pulses:
+        tags = [str(tag).strip() for tag in list(pulse.get("tags") or []) if str(tag).strip()]
+        indicators = pulse.get("indicators") if isinstance(pulse.get("indicators"), list) else []
+        created = _to_iso_utc(pulse.get("created") or pulse.get("modified"), fallback_now=True)
+        modified = _to_iso_utc(pulse.get("modified") or pulse.get("created"), fallback_now=True)
+        for ind in indicators:
+            if not isinstance(ind, dict):
+                continue
+            raw_type = str(ind.get("type") or "").strip().lower()
+            value = str(ind.get("indicator") or ind.get("value") or "").strip()
+            if not value:
+                continue
+            if raw_type in {"ipv4", "ip", "ipv4-addr"}:
+                pattern = f"[ipv4-addr:value = '{value}']"
+            elif raw_type in {"ipv6", "ipv6-addr"}:
+                pattern = f"[ipv6-addr:value = '{value}']"
+            elif raw_type in {"domain", "hostname"}:
+                pattern = f"[domain-name:value = '{value.lower()}']"
+            elif raw_type == "url":
+                pattern = f"[url:value = '{value}']"
+            else:
+                continue
+
+            key = (raw_type, value.lower())
+            if key in seen:
+                continue
+            seen.add(key)
+
+            objects.append(
+                {
+                    "type": "indicator",
+                    "spec_version": "2.1",
+                    "id": f"indicator--{uuid.uuid4()}",
+                    "created": _to_iso_utc(ind.get("created") or created, fallback_now=True),
+                    "modified": _to_iso_utc(ind.get("modified") or modified, fallback_now=True),
+                    "pattern_type": "stix",
+                    "pattern": pattern,
+                    "valid_from": _to_iso_utc(ind.get("created") or created, fallback_now=True),
+                    "labels": tags or ["otx"],
+                    "confidence": int(ind.get("confidence") or default_confidence),
+                }
+            )
+
+    return {
+        "type": "bundle",
+        "id": f"bundle--{uuid.uuid4()}",
+        "objects": objects,
+    }
 
 
 _CIC_DDOS_KEYWORDS = (
@@ -597,6 +934,76 @@ def _run_traffic_job(args: argparse.Namespace) -> IngestionJobStats:
         db.close()
 
 
+def _run_feodo_job(args: argparse.Namespace) -> IngestionJobStats:
+    rows = load_feodo_rows(
+        feodo_file=args.feodo_file,
+        feodo_url=args.feodo_url,
+        timeout_sec=args.timeout_sec,
+    )
+    records = build_feodo_records(rows, confidence=args.confidence)
+    db = SessionLocal()
+    try:
+        return ingest_records_via_connectors(
+            db=db,
+            records=records,
+            source_api_key=args.source_api_key,
+            classification=args.classification,
+        )
+    finally:
+        db.close()
+
+
+def _run_urlhaus_job(args: argparse.Namespace) -> IngestionJobStats:
+    rows = load_urlhaus_rows(
+        urlhaus_file=args.urlhaus_file,
+        urlhaus_url=args.urlhaus_url,
+        auth_key=args.auth_key,
+        timeout_sec=args.timeout_sec,
+    )
+    records = build_urlhaus_records(rows, confidence=args.confidence)
+    db = SessionLocal()
+    try:
+        return ingest_records_via_connectors(
+            db=db,
+            records=records,
+            source_api_key=args.source_api_key,
+            classification=args.classification,
+        )
+    finally:
+        db.close()
+
+
+def _run_otx_job(args: argparse.Namespace) -> IngestionJobStats:
+    pulses = load_otx_pulses(
+        otx_file=args.otx_file,
+        api_key=args.otx_api_key,
+        otx_url=args.otx_url,
+        timeout_sec=args.timeout_sec,
+        limit=args.limit,
+        modified_since=args.modified_since,
+    )
+
+    db = SessionLocal()
+    try:
+        if not args.skip_stix_import:
+            bundle = build_otx_stix_bundle(pulses)
+            imported = import_stix_bundle(db=db, bundle=bundle, source=args.threat_source)
+            log.info("otx_stix_imported imported=%s source=%s", imported.get("imported"), args.threat_source)
+
+        if args.stix_only:
+            return IngestionJobStats(total_records=0, accepted=0, duplicates=0, skipped=0, errors=0)
+
+        records = build_otx_indicator_records(pulses, confidence=args.confidence)
+        return ingest_records_via_connectors(
+            db=db,
+            records=records,
+            source_api_key=args.source_api_key,
+            classification=args.classification,
+        )
+    finally:
+        db.close()
+
+
 def build_cli() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description="Ingest real-world cyber datasets via existing Sentinel connector flow.",
@@ -621,6 +1028,45 @@ def build_cli() -> argparse.ArgumentParser:
     p_traffic.add_argument("--service-id-prefix", default="external", help="Service id prefix for mapped rows.")
     p_traffic.add_argument("--dataset-name", default=None, help="Optional dataset tag written into payload.")
 
+    p_feodo = sub.add_parser("feodo", help="Import Feodo Tracker C2 indicators into DFIR events.")
+    p_feodo.add_argument("--feodo-file", default=None, help="Local Feodo JSON/CSV file. If omitted, the live feed URL is used.")
+    p_feodo.add_argument("--feodo-url", default=DEFAULT_FEODO_URL, help="Feodo feed URL.")
+    p_feodo.add_argument("--timeout-sec", type=int, default=30, help="HTTP timeout for remote feed calls.")
+
+    p_urlhaus = sub.add_parser("urlhaus", help="Import URLhaus malware URLs into DFIR events.")
+    p_urlhaus.add_argument("--urlhaus-file", default=None, help="Local URLhaus CSV/JSON file. If omitted, the online CSV feed is used.")
+    p_urlhaus.add_argument("--urlhaus-url", default=DEFAULT_URLHAUS_CSV_URL, help="URLhaus CSV feed URL.")
+    p_urlhaus.add_argument("--auth-key", default=None, help="URLhaus auth-key. Falls back to URLHAUS_AUTH_KEY env var.")
+    p_urlhaus.add_argument("--timeout-sec", type=int, default=30, help="HTTP timeout for remote feed calls.")
+
+    p_otx = sub.add_parser("otx", help="Import AlienVault OTX indicators into STIX and DFIR events.")
+    p_otx.add_argument("--otx-file", default=None, help="Local OTX pulse export JSON file.")
+    p_otx.add_argument("--otx-api-key", default=None, help="OTX API key. Required when --otx-file is not used.")
+    p_otx.add_argument("--otx-url", default=DEFAULT_OTX_SUBSCRIBED_URL, help="OTX subscribed pulses endpoint.")
+    p_otx.add_argument("--threat-source", default="otx", help="Source label written to threat_intel_sync_log.")
+    p_otx.add_argument("--modified-since", default=None, help="Optional OTX modified_since cursor.")
+    p_otx.add_argument("--limit", type=int, default=100, help="Maximum subscribed pulses to fetch.")
+    p_otx.add_argument("--timeout-sec", type=int, default=30, help="HTTP timeout for remote feed calls.")
+    p_otx.add_argument("--skip-stix-import", action="store_true", help="Skip STIX import and only emit DFIR events.")
+    p_otx.add_argument("--stix-only", action="store_true", help="Import STIX indicators only and skip DFIR event creation.")
+
+    # ---- PaySim ----
+    p_paysim = sub.add_parser("paysim", help="Ingest PaySim Africa mobile-money fraud CSV.")
+    p_paysim.add_argument("--input-file", required=True, help="Path to paysim CSV (e.g. PS_20174392719_1491204439457_log.csv).")
+    p_paysim.add_argument("--include-benign", action="store_true", help="Also include non-fraud transactions (sampled).")
+    p_paysim.add_argument("--max-benign", type=int, default=5000, help="Max benign rows to include when --include-benign is set.")
+
+    # ---- PPRA Kenya OCDS ----
+    p_ppra = sub.add_parser("ppra", help="Ingest Kenya PPRA Open Contracting (OCDS) procurement CSV.")
+    p_ppra.add_argument("--input-file", required=True, help="Path to PPRA OCDS flattened CSV.")
+    p_ppra.add_argument("--anomalies-only", action="store_true", help="Only ingest rows that have at least one anomaly flag.")
+
+    # ---- UNSW-NB15 ----
+    p_unsw = sub.add_parser("unsw", help="Ingest UNSW-NB15 network intrusion CSV.")
+    p_unsw.add_argument("--input-file", required=True, help="Path to UNSW-NB15 CSV file.")
+    p_unsw.add_argument("--service-id-prefix", default="unsw", help="Prefix for derived service_id (e.g. 'ke-noc').")
+    p_unsw.add_argument("--dataset-name", default="unsw_nb15", help="Dataset tag written into payload.")
+
     return p
 
 
@@ -631,8 +1077,20 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     if args.job == "kev-epss":
         stats = _run_kev_epss_job(args)
-    else:
+    elif args.job == "traffic":
         stats = _run_traffic_job(args)
+    elif args.job == "feodo":
+        stats = _run_feodo_job(args)
+    elif args.job == "urlhaus":
+        stats = _run_urlhaus_job(args)
+    elif args.job == "paysim":
+        stats = _run_paysim_job(args)
+    elif args.job == "ppra":
+        stats = _run_ppra_job(args)
+    elif args.job == "unsw":
+        stats = _run_unsw_job(args)
+    else:
+        stats = _run_otx_job(args)
 
     print(
         json.dumps(
@@ -647,6 +1105,403 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         )
     )
     return 0 if stats.errors == 0 else 2
+
+
+# =============================================================================
+# PaySim — Africa synthetic mobile-money fraud (Kaggle ealaxi/paysim1)
+# CSV columns: step,type,amount,nameOrig,oldbalanceOrg,newbalanceOrig,
+#              nameDest,oldbalanceDest,newbalanceDest,isFraud,isFlaggedFraud
+# =============================================================================
+
+_PAYSIM_BASE_TS = 1_700_000_000.0  # 2023-11-14 as sim epoch (arbitrary but realistic)
+_PAYSIM_STEP_SECS = 3600.0  # each step == 1 hour
+
+_PAYSIM_FRAUD_CHANNELS = {
+    "CASH_OUT": "mobile_cash_out",
+    "TRANSFER": "mobile_transfer",
+    "CASH_IN": "mobile_cash_in",
+    "PAYMENT": "mobile_payment",
+    "DEBIT": "mobile_debit",
+}
+
+
+def normalize_paysim_row(
+    row: Mapping[str, Any],
+    *,
+    confidence: float = 0.91,
+    fraud_only: bool = True,
+) -> Optional[NormalizedConnectorRecord]:
+    idx = _row_index(row)
+
+    is_fraud = _as_int(_pick(idx, "isfraud", "fraud", "label")) or 0
+    is_flagged = _as_int(_pick(idx, "isflaggedfraud", "flaggedfraud")) or 0
+    if fraud_only and not is_fraud and not is_flagged:
+        return None
+
+    step = _as_float(_pick(idx, "step")) or 0.0
+    ts = _to_iso_utc(_PAYSIM_BASE_TS + step * _PAYSIM_STEP_SECS)
+
+    txn_type = str(_pick(idx, "type", "transactiontype") or "TRANSFER").strip().upper()
+    amount = _as_float(_pick(idx, "amount", "amt")) or 0.0
+
+    name_orig = str(_pick(idx, "nameorig", "orig", "sender") or "").strip()
+    name_dest = str(_pick(idx, "namedest", "dest", "receiver") or "").strip()
+
+    payload: Dict[str, Any] = {
+        "timestamp": ts,
+        "account_from": name_orig or None,
+        "account_to": name_dest or None,
+        "amount": amount,
+        "currency": "KES",
+        "channel": _PAYSIM_FRAUD_CHANNELS.get(txn_type, "mobile_money"),
+        "transaction_type": txn_type,
+        "is_fraud": bool(is_fraud),
+        "is_flagged": bool(is_flagged),
+        "old_balance_orig": _as_float(_pick(idx, "oldbalanceorg", "oldbalanceorig")),
+        "new_balance_orig": _as_float(_pick(idx, "newbalanceorig", "newbalanceoriginal")),
+        "old_balance_dest": _as_float(_pick(idx, "oldbalancedest")),
+        "new_balance_dest": _as_float(_pick(idx, "newbalancedest")),
+        "dataset": "paysim",
+    }
+
+    return NormalizedConnectorRecord(
+        connector_key="core_banking_tx_v1",
+        payload={k: v for k, v in payload.items() if v is not None},
+        confidence=confidence if is_fraud else max(0.3, confidence - 0.4),
+    )
+
+
+def build_paysim_records(
+    rows: Iterable[Mapping[str, Any]],
+    *,
+    confidence: float = 0.91,
+    fraud_only: bool = True,
+    max_benign: int = 5000,
+) -> List[NormalizedConnectorRecord]:
+    out: List[NormalizedConnectorRecord] = []
+    benign_count = 0
+    for row in rows:
+        idx = _row_index(row)
+        is_fraud = _as_int(_pick(idx, "isfraud", "fraud", "label")) or 0
+        is_flagged = _as_int(_pick(idx, "isflaggedfraud", "flaggedfraud")) or 0
+        if not is_fraud and not is_flagged:
+            if fraud_only:
+                continue
+            if benign_count >= max_benign:
+                continue
+            benign_count += 1
+        rec = normalize_paysim_row(row, confidence=confidence, fraud_only=False)
+        if rec is not None:
+            out.append(rec)
+    return out
+
+
+# =============================================================================
+# PPRA Kenya — Open Contracting Data Standard (OCDS) procurement releases
+# Source: https://data.open-contracting.org/en/publication/147/download
+# Supports flattened CSV export from the OCDS portal.
+# Maps procurement contracts → TRANSACTION_EVENT for anomaly detection.
+# =============================================================================
+
+_PPRA_DIRECT_METHODS = {"direct", "directcontract", "singlesource", "restricted", "emergency"}
+
+
+def _ppra_anomaly_flags(idx: Mapping[str, Any]) -> List[str]:
+    flags: List[str] = []
+    method = str(_pick(idx, "tenderprocurementmethod", "procurementmethod", "method") or "").strip().lower()
+    method_norm = re.sub(r"[^a-z]", "", method)
+    if method_norm in _PPRA_DIRECT_METHODS:
+        flags.append("sole_source_procurement")
+
+    n_tenderers = _as_int(_pick(idx, "tendernumberoftenderers", "numberoftenderers", "bidders"))
+    if n_tenderers is not None and n_tenderers <= 1:
+        flags.append("single_bidder")
+
+    tender_val = _as_float(_pick(idx, "tendervalueamount", "tenderamount", "estimatedvalue"))
+    contract_val = _as_float(_pick(idx, "contractvalueamount", "contractamount", "awardedvalue"))
+    if tender_val and contract_val and tender_val > 0:
+        variance = (contract_val - tender_val) / tender_val
+        if variance > 0.15:
+            flags.append("contract_overrun_15pct")
+        elif variance < -0.15:
+            flags.append("contract_underrun_15pct")
+
+    return flags
+
+
+def normalize_ppra_row(
+    row: Mapping[str, Any],
+    *,
+    confidence: float = 0.82,
+) -> Optional[NormalizedConnectorRecord]:
+    idx = _row_index(row)
+
+    ocid = str(_pick(idx, "ocid", "id", "releaseid") or "").strip()
+    if not ocid:
+        return None
+
+    date_str = _pick(idx, "date", "releasedate", "contractdatesigned", "tenderdatesubmissionuntil")
+    ts = _to_iso_utc(date_str, fallback_now=True)
+
+    buyer_id = str(_pick(idx, "buyeridentifierid", "buyerid", "procuringentityid", "buyername") or "").strip()
+    supplier_id = str(
+        _pick(idx, "suppliersidentifierid", "supplierid", "awardedcompanyid", "contractorsid") or ""
+    ).strip()
+
+    amount = _as_float(
+        _pick(idx, "contractvalueamount", "contractamount", "awardedvalue", "tendervalueamount")
+    )
+    currency = str(_pick(idx, "contractvaluecurrency", "currency", "tendervaluecurrency") or "KES").strip()
+
+    title = str(_pick(idx, "tendertitle", "title", "procurementtitle", "description") or "").strip()
+    method = str(_pick(idx, "tenderprocurementmethod", "procurementmethod") or "").strip()
+    n_tenderers = _as_int(_pick(idx, "tendernumberoftenderers", "numberoftenderers"))
+
+    flags = _ppra_anomaly_flags(idx)
+    anomaly_score = min(1.0, 0.4 + len(flags) * 0.2)
+
+    payload: Dict[str, Any] = {
+        "timestamp": ts,
+        "account_from": buyer_id or None,
+        "account_to": supplier_id or None,
+        "amount": amount,
+        "currency": currency,
+        "channel": "procurement",
+        "transaction_ref": ocid,
+        "procurement_method": method or None,
+        "n_tenderers": n_tenderers,
+        "title": title[:200] if title else None,
+        "anomaly_flags": flags if flags else None,
+        "dataset": "ppra_ke",
+    }
+
+    effective_confidence = confidence if not flags else min(0.97, confidence + anomaly_score * 0.15)
+
+    return NormalizedConnectorRecord(
+        connector_key="core_banking_tx_v1",
+        payload={k: v for k, v in payload.items() if v is not None},
+        confidence=effective_confidence,
+    )
+
+
+def build_ppra_records(
+    rows: Iterable[Mapping[str, Any]],
+    *,
+    confidence: float = 0.82,
+    anomalies_only: bool = False,
+) -> List[NormalizedConnectorRecord]:
+    out: List[NormalizedConnectorRecord] = []
+    for row in rows:
+        rec = normalize_ppra_row(row, confidence=confidence)
+        if rec is None:
+            continue
+        if anomalies_only:
+            idx = _row_index(row)
+            if not _ppra_anomaly_flags(idx):
+                continue
+        out.append(rec)
+    return out
+
+
+# =============================================================================
+# UNSW-NB15 — Network intrusion dataset (UNSW Canberra)
+# Source: kaggle.com/datasets/dhoogla/unswnb15 or research.unsw.edu.au
+# CSV columns include: srcip, sport, dstip, dsport, proto, state, dur, sbytes,
+#   dbytes, Stime, Ltime, attack_cat, Label
+# Maps: DoS → DDOS_SIGNAL_EVENT; Backdoor/Exploit/Worm/Shellcode → DFIR_FINDING_EVENT;
+#       Fuzzer/Generic/Recon/Analysis → WEB_ATTACK_EVENT
+# =============================================================================
+
+_UNSW_DFIR_CATS = {"backdoor", "backdoors", "exploit", "exploits", "shellcode", "worms", "worm"}
+_UNSW_WEB_CATS = {"fuzzers", "fuzzer", "generic", "reconnaissance", "analysis"}
+_UNSW_DOS_CATS = {"dos"}
+
+
+def _unsw_attack_type(cat: str) -> str:
+    c = cat.strip().lower()
+    if "sql" in c:
+        return "sql_injection"
+    if "xss" in c:
+        return "xss"
+    if "fuzz" in c:
+        return "fuzzing"
+    if "recon" in c:
+        return "reconnaissance"
+    if "analysis" in c:
+        return "traffic_analysis"
+    return "generic_attack"
+
+
+def normalize_unsw_row(
+    row: Mapping[str, Any],
+    *,
+    service_id_prefix: str = "unsw",
+    dataset_name: str = "unsw_nb15",
+    confidence: float = 0.89,
+) -> Optional[NormalizedConnectorRecord]:
+    idx = _row_index(row)
+
+    label = _as_int(_pick(idx, "label")) or 0
+    attack_cat = str(_pick(idx, "attackcat", "attack_cat", "category") or "").strip().lower()
+
+    if not label and not attack_cat:
+        return None
+
+    ts_raw = _pick(idx, "stime", "starttime", "timestamp", "time")
+    ts = _to_iso_utc(ts_raw, fallback_now=True)
+
+    src_ip = str(_pick(idx, "srcip", "src_ip", "source") or "").strip() or None
+    dst_ip = str(_pick(idx, "dstip", "dst_ip", "destination") or "").strip() or None
+    dst_port = _as_int(_pick(idx, "dsport", "dport", "dst_port", "destination_port"))
+    proto = str(_pick(idx, "proto", "protocol") or "").strip() or None
+
+    service_id = f"{service_id_prefix}:{dst_ip}" if dst_ip else f"{service_id_prefix}:unknown"
+    endpoint = f"port:{dst_port}" if dst_port is not None else None
+
+    sbytes = _as_int(_pick(idx, "sbytes", "source_bytes"))
+    dbytes = _as_int(_pick(idx, "dbytes", "destination_bytes"))
+    dur = _as_float(_pick(idx, "dur", "duration"))
+
+    # DoS
+    if attack_cat in _UNSW_DOS_CATS or (label and not attack_cat):
+        payload: Dict[str, Any] = {
+            "timestamp": ts,
+            "service_id": service_id,
+            "endpoint": endpoint,
+            "method": proto,
+            "request_rate": (sbytes / max(0.001, dur)) if sbytes and dur else None,
+            "unique_ips_count": 1 if src_ip else None,
+            "dataset": dataset_name,
+            "attack_label": attack_cat or "dos",
+        }
+        return NormalizedConnectorRecord(
+            connector_key="cloudflare_ddos_v1",
+            payload={k: v for k, v in payload.items() if v is not None},
+            confidence=confidence,
+        )
+
+    # DFIR (Backdoor, Exploit, Shellcode, Worm)
+    if attack_cat in _UNSW_DFIR_CATS:
+        payload = {
+            "timestamp": ts,
+            "source": "unsw_nb15",
+            "host": dst_ip or "unknown",
+            "artifact_name": f"UNSW-NB15:{attack_cat}",
+            "finding_type": attack_cat,
+            "severity": "high" if attack_cat in {"exploit", "exploits", "shellcode"} else "medium",
+            "client_ip": src_ip,
+            "dataset": dataset_name,
+            "attack_label": attack_cat,
+            "src_bytes": sbytes,
+            "dst_bytes": dbytes,
+        }
+        return NormalizedConnectorRecord(
+            connector_key="velociraptor_artifact_v1",
+            payload={k: v for k, v in payload.items() if v is not None},
+            confidence=confidence,
+        )
+
+    # Web / Fuzzer / Recon / Generic
+    if attack_cat in _UNSW_WEB_CATS or attack_cat:
+        payload = {
+            "timestamp": ts,
+            "service_id": service_id,
+            "endpoint": endpoint,
+            "attack_type": _unsw_attack_type(attack_cat),
+            "status": "detected",
+            "src_ip": src_ip,
+            "method": proto,
+            "dataset": dataset_name,
+            "attack_label": attack_cat,
+        }
+        return NormalizedConnectorRecord(
+            connector_key="waf_api_attack_v1",
+            payload={k: v for k, v in payload.items() if v is not None},
+            confidence=confidence,
+        )
+
+    return None
+
+
+def build_unsw_records(
+    rows: Iterable[Mapping[str, Any]],
+    *,
+    service_id_prefix: str = "unsw",
+    dataset_name: str = "unsw_nb15",
+    confidence: float = 0.89,
+) -> Iterator[NormalizedConnectorRecord]:
+    for row in rows:
+        rec = normalize_unsw_row(
+            row,
+            service_id_prefix=service_id_prefix,
+            dataset_name=dataset_name,
+            confidence=confidence,
+        )
+        if rec is not None:
+            yield rec
+
+
+# =============================================================================
+# Job runners for new datasets
+# =============================================================================
+
+def _run_paysim_job(args: argparse.Namespace) -> IngestionJobStats:
+    rows = iter_rows_from_path(args.input_file)
+    records = build_paysim_records(
+        rows,
+        confidence=args.confidence,
+        fraud_only=not args.include_benign,
+        max_benign=args.max_benign,
+    )
+    db = SessionLocal()
+    try:
+        return ingest_records_via_connectors(
+            db=db,
+            records=records,
+            source_api_key=args.source_api_key,
+            classification=args.classification,
+        )
+    finally:
+        db.close()
+
+
+def _run_ppra_job(args: argparse.Namespace) -> IngestionJobStats:
+    rows = iter_rows_from_path(args.input_file)
+    records = build_ppra_records(
+        rows,
+        confidence=args.confidence,
+        anomalies_only=args.anomalies_only,
+    )
+    db = SessionLocal()
+    try:
+        return ingest_records_via_connectors(
+            db=db,
+            records=records,
+            source_api_key=args.source_api_key,
+            classification=args.classification,
+        )
+    finally:
+        db.close()
+
+
+def _run_unsw_job(args: argparse.Namespace) -> IngestionJobStats:
+    rows = iter_rows_from_path(args.input_file)
+    records = build_unsw_records(
+        rows,
+        service_id_prefix=args.service_id_prefix,
+        dataset_name=args.dataset_name or "unsw_nb15",
+        confidence=args.confidence,
+    )
+    db = SessionLocal()
+    try:
+        return ingest_records_via_connectors(
+            db=db,
+            records=iter(list(records)),
+            source_api_key=args.source_api_key,
+            classification=args.classification,
+        )
+    finally:
+        db.close()
 
 
 if __name__ == "__main__":
