@@ -14,6 +14,9 @@ def test_list_connectors_includes_expected_keys():
     assert "local_network_probe_v1" in keys
     assert "pgaudit_event_v1" in keys
     assert "wazuh_fim_v1" in keys
+    assert "feodo_c2_v1" in keys
+    assert "urlhaus_ioc_v1" in keys
+    assert "otx_indicator_v1" in keys
     assert "velociraptor_artifact_v1" in keys
     assert "m365_bec_mail_v1" in keys
     assert "waf_api_attack_v1" in keys
@@ -159,6 +162,66 @@ def test_map_velociraptor_artifact_to_dfir_finding_event():
     assert ev.payload["severity"] == "high"
     assert "log_tamper_signal" in ev.payload["reason_codes"]
     assert ev.anchors["service_id"] == "endpoint:gov-mail-01"
+
+
+def test_map_feodo_c2_to_dfir_finding_event():
+    ev = map_external_event(
+        connector_key="feodo_c2_v1",
+        payload={
+            "first_seen_utc": "2026-03-09T12:00:00Z",
+            "ip_address": "198.51.100.10",
+            "malware": "qakbot",
+            "status": "online",
+            "port": 443,
+        },
+        confidence=0.95,
+    )
+
+    assert ev.event_type == "DFIR_FINDING_EVENT"
+    assert ev.anchors["ip"] == "198.51.100.10"
+    assert ev.payload["source"] == "feodo_tracker"
+    assert ev.payload["finding_type"] == "botnet_c2_indicator"
+    assert "botnet_c2_indicator" in ev.payload["reason_codes"]
+
+
+def test_map_urlhaus_ioc_to_dfir_finding_event():
+    ev = map_external_event(
+        connector_key="urlhaus_ioc_v1",
+        payload={
+            "date_added": "2026-03-09T12:05:00Z",
+            "url": "http://mal.example/payload.exe",
+            "host": "mal.example",
+            "host_ip": "203.0.113.55",
+            "threat": "malware_url",
+            "url_status": "online",
+        },
+        confidence=0.91,
+    )
+
+    assert ev.event_type == "DFIR_FINDING_EVENT"
+    assert ev.anchors["url"] == "http://mal.example/payload.exe"
+    assert ev.anchors["domain"] == "mal.example"
+    assert ev.anchors["ip"] == "203.0.113.55"
+    assert ev.payload["source"] == "urlhaus"
+
+
+def test_map_otx_indicator_to_dfir_finding_event():
+    ev = map_external_event(
+        connector_key="otx_indicator_v1",
+        payload={
+            "first_seen": "2026-03-09T12:10:00Z",
+            "indicator": "bad.example",
+            "indicator_type": "domain",
+            "pulse_name": "Kenya-targeted phishing",
+            "tags": ["phishing", "otx"],
+        },
+        confidence=0.9,
+    )
+
+    assert ev.event_type == "DFIR_FINDING_EVENT"
+    assert ev.anchors["domain"] == "bad.example"
+    assert ev.payload["artifact_name"] == "Kenya-targeted phishing"
+    assert ev.payload["finding_type"] == "otx_domain"
 
 
 def test_map_waf_api_attack_to_web_attack_event():

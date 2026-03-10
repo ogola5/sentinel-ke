@@ -126,6 +126,83 @@ services:
     volumes: *backend-volumes
     restart: unless-stopped
 
+  # ── Live OSINT feeder: Feodo Tracker ──────────────────────────────────────
+  feodo-ingest-worker:
+    build: *backend-build
+    <<: *backend-env
+    command: >
+      /bin/sh -c "while true; do
+        python -m app.integrations.real_data_pipeline
+          --source-api-key ${FEODO_SOURCE_API_KEY:-feodo-live-secret-key}
+          --classification PUBLIC
+          --confidence 0.96
+          feodo
+          --feodo-url ${FEODO_FEED_URL:-https://feodotracker.abuse.ch/downloads/ipblocklist_recommended.json}
+          --timeout-sec ${FEODO_TIMEOUT_SEC:-30} || true;
+        sleep ${FEODO_POLL_SEC:-300};
+      done"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes: *backend-volumes
+    restart: unless-stopped
+
+  # ── Live OSINT feeder: URLhaus ────────────────────────────────────────────
+  urlhaus-ingest-worker:
+    build: *backend-build
+    <<: *backend-env
+    command: >
+      /bin/sh -c "while true; do
+        python -m app.integrations.real_data_pipeline
+          --source-api-key ${URLHAUS_SOURCE_API_KEY:-urlhaus-live-secret-key}
+          --classification PUBLIC
+          --confidence 0.94
+          urlhaus
+          --urlhaus-url ${URLHAUS_FEED_URL:-https://urlhaus.abuse.ch/downloads/csv_online/}
+          --auth-key ${URLHAUS_AUTH_KEY:-}
+          --max-records ${URLHAUS_EVENT_MAX_RECORDS:-400}
+          --sleep-every ${URLHAUS_EVENT_SLEEP_EVERY:-400}
+          --sleep-sec ${URLHAUS_EVENT_SLEEP_SEC:-65}
+          --timeout-sec ${URLHAUS_TIMEOUT_SEC:-30} || true;
+        sleep ${URLHAUS_POLL_SEC:-900};
+      done"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes: *backend-volumes
+    restart: unless-stopped
+
+  # ── Live OSINT feeder: AlienVault OTX ─────────────────────────────────────
+  otx-ingest-worker:
+    build: *backend-build
+    <<: *backend-env
+    command: >
+      /bin/sh -c "while true; do
+        if [ -n \"${OTX_API_KEY:-}\" ]; then
+          python -m app.integrations.real_data_pipeline
+            --source-api-key ${OTX_SOURCE_API_KEY:-otx-live-secret-key}
+            --classification PUBLIC
+            --confidence 0.93
+            otx
+            --otx-api-key ${OTX_API_KEY}
+            --otx-url ${OTX_SUBSCRIBED_URL:-https://otx.alienvault.com/api/v1/pulses/subscribed}
+            --threat-source otx
+            --limit ${OTX_LIMIT:-100}
+            --max-records ${OTX_EVENT_MAX_RECORDS:-400}
+            --sleep-every ${OTX_EVENT_SLEEP_EVERY:-400}
+            --sleep-sec ${OTX_EVENT_SLEEP_SEC:-65}
+            --timeout-sec ${OTX_TIMEOUT_SEC:-30} || true;
+        else
+          echo 'OTX_API_KEY not set; skipping OTX poll';
+        fi;
+        sleep ${OTX_POLL_SEC:-1800};
+      done"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes: *backend-volumes
+    restart: unless-stopped
+
   # ── AI inference consumer (Kafka → GNN scoring) ────────────────────────────
   inference-consumer:
     build: *backend-build

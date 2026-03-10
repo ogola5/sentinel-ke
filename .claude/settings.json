@@ -7,7 +7,23 @@
       "Bash(git add -u render-backend.env test1.txt test3.txt)",
       "Bash(git push -u origin cleanup/production-ready)",
       "Bash(gh auth status)",
-      "Bash(git remote set-url origin git@github.com:ogola5/sentinel-ke.git)"
+      "Bash(git remote set-url origin git@github.com:ogola5/sentinel-ke.git)",
+      "Bash(pip install:*)",
+      "Bash(kaggle --version)",
+      "Bash(chmod 600 ~/.kaggle/kaggle.json)",
+      "Bash(mkdir -p /tmp/sentinel_haul)",
+      "Bash(~/.local/bin/kaggle --version)",
+      "Bash(python3 -c \":*)",
+      "Read(//tmp/sentinel_haul/**)",
+      "Bash(~/.local/bin/kaggle datasets:*)",
+      "Bash(docker run:*)",
+      "Bash(docker ps:*)",
+      "Bash(docker cp:*)",
+      "Bash(docker compose:*)",
+      "Bash(grep -v \"^$\")",
+      "Bash(docker top:*)",
+      "Bash(docker exec:*)",
+      "Bash(ls -lh /tmp/sentinel_haul/*.zip /tmp/sentinel_haul/*.csv)"
     ]
   }
 }

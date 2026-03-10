@@ -5,10 +5,15 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from app.integrations.real_data_pipeline import (
+    build_feodo_records,
     build_kev_epss_records,
+    build_otx_indicator_records,
+    build_otx_stix_bundle,
+    build_urlhaus_records,
     fetch_epss_lookup,
     ingest_records_via_connectors,
     iter_rows_from_path,
+    load_feodo_rows,
     normalize_caida_row,
     normalize_cic_row,
     NormalizedConnectorRecord,
@@ -16,8 +21,9 @@ from app.integrations.real_data_pipeline import (
 
 
 class _FakeResponse:
-    def __init__(self, payload):
+    def __init__(self, payload, *, text: str = ""):
         self._payload = payload
+        self.text = text
 
     def raise_for_status(self):
         return None
@@ -68,6 +74,81 @@ def test_build_kev_epss_records_maps_required_connector_fields():
     assert item.payload["kev"] is True
     assert item.payload["severity"] == "critical"
     assert item.payload["epss"] == 0.83
+
+
+def test_load_feodo_rows_accepts_json_list_from_api():
+    def _fake_get(url, params=None, timeout=30):
+        del url, params, timeout
+        return _FakeResponse(
+            [
+                {
+                    "first_seen_utc": "2026-03-09T00:00:00Z",
+                    "ip_address": "198.51.100.10",
+                    "malware": "qakbot",
+                }
+            ]
+        )
+
+    rows = load_feodo_rows(getter=_fake_get)
+    assert rows[0]["ip_address"] == "198.51.100.10"
+
+
+def test_build_feodo_records_maps_required_connector_fields():
+    rows = [
+        {
+            "first_seen_utc": "2026-03-09T00:00:00Z",
+            "ip_address": "198.51.100.10",
+            "malware": "qakbot",
+            "status": "online",
+        }
+    ]
+    records = build_feodo_records(rows)
+    assert len(records) == 1
+    item = records[0]
+    assert item.connector_key == "feodo_c2_v1"
+    assert item.payload["ip_address"] == "198.51.100.10"
+    assert item.payload["malware"] == "qakbot"
+
+
+def test_build_urlhaus_records_extracts_url_and_host():
+    rows = [
+        {
+            "dateadded": "2026-03-09 12:00:00",
+            "url": "http://bad.example/dropper.exe",
+            "host": "bad.example",
+            "host_ip": "203.0.113.55",
+            "threat": "malware_download",
+        }
+    ]
+    records = build_urlhaus_records(rows)
+    assert len(records) == 1
+    item = records[0]
+    assert item.connector_key == "urlhaus_ioc_v1"
+    assert item.payload["url"] == "http://bad.example/dropper.exe"
+    assert item.payload["host"] == "bad.example"
+
+
+def test_build_otx_indicator_records_and_stix_bundle():
+    pulses = [
+        {
+            "id": "pulse-1",
+            "name": "OTX pulse",
+            "created": "2026-03-09T12:00:00Z",
+            "modified": "2026-03-09T12:05:00Z",
+            "tags": ["phishing"],
+            "indicators": [
+                {"type": "domain", "indicator": "bad.example"},
+                {"type": "IPv4", "indicator": "203.0.113.10"},
+            ],
+        }
+    ]
+    records = build_otx_indicator_records(pulses)
+    bundle = build_otx_stix_bundle(pulses)
+
+    assert len(records) == 2
+    assert {r.connector_key for r in records} == {"otx_indicator_v1"}
+    assert len(bundle["objects"]) == 2
+    assert any("domain-name:value" in obj["pattern"] for obj in bundle["objects"])
 
 
 def test_normalize_cic_row_ddos_maps_to_ddos_connector():

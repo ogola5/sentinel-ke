@@ -5,6 +5,7 @@ uvicorn[standard]>=0.29.0
 httpx>=0.27.0
 pydantic>=2.7.0
 pydantic-settings>=2.2.0
+pytest
 
 # PyTorch GNN stack (remove if running heuristic-only / lightweight mode)
 torch>=2.2.0

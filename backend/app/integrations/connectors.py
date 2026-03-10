@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Tuple
+from urllib.parse import urlsplit
 
 from app.core.security import pseudonymize
 from app.ingestion.schemas import CanonicalEvent
@@ -200,6 +201,30 @@ def _normalize_web_attack_status(v: Optional[str]) -> str:
     if x in {"allow", "allowed", "pass"}:
         return "allowed"
     return "detected"
+
+
+def _normalize_ioc_severity(v: Optional[str], *, default: str = "high") -> str:
+    if not v:
+        return default
+    x = v.strip().lower()
+    if x in {"critical", "high", "medium", "low", "info"}:
+        return x
+    if x in {"online", "active", "malicious"}:
+        return "high"
+    if x in {"offline", "disabled", "inactive"}:
+        return "medium"
+    return default
+
+
+def _extract_domain_from_url(v: Optional[str]) -> Optional[str]:
+    if not v:
+        return None
+    try:
+        parsed = urlsplit(str(v).strip())
+    except Exception:
+        return None
+    host = (parsed.hostname or "").strip().lower()
+    return host or None
 
 
 def _map_splunk_login(payload: Dict[str, Any], confidence: float, classification: Optional[str]) -> CanonicalEvent:
@@ -577,6 +602,156 @@ def _map_velociraptor_artifact(payload: Dict[str, Any], confidence: float, class
     )
 
 
+def _map_feodo_c2(payload: Dict[str, Any], confidence: float, classification: Optional[str]) -> CanonicalEvent:
+    occurred_at = _as_datetime(
+        payload,
+        ("timestamp", "first_seen_utc", "first_seen", "first_seen_at", "last_online", "date_added"),
+    )
+    ip = _as_str(payload, ("ip_address", "ip", "host"), required=True)
+    malware = _as_str(payload, ("malware", "malware_family", "family"))
+    status = _as_str(payload, ("status", "online_status", "host_status")) or "online"
+    port = _as_int(payload, ("port", "dst_port", "c2_port"))
+    host = _as_str(payload, ("host", "hostname")) or ip
+
+    reason_codes = ["botnet_c2_indicator", "osint_feed", "feed:feodo"]
+    if str(status).strip().lower() in {"online", "active"}:
+        reason_codes.append("ioc_online")
+    if malware:
+        reason_codes.append(f"malware_family:{malware.strip().lower()}")
+
+    model_payload: Dict[str, Any] = {
+        "source": "feodo_tracker",
+        "host": host,
+        "artifact_name": "feodo_tracker",
+        "finding_type": "botnet_c2_indicator",
+        "severity": _normalize_ioc_severity(status, default="high"),
+        "status": status,
+        "client_ip": ip,
+        "command_line": f"c2_port={port}" if port is not None else None,
+        "hunt_id": _as_str(payload, ("id", "ioc_id", "feodo_id")),
+        "case_id": _as_str(payload, ("reporter", "reporter_name")),
+        "reason_codes": sorted(set(reason_codes)),
+    }
+    model_payload = {k: v for k, v in model_payload.items() if v is not None}
+
+    return CanonicalEvent(
+        event_type="DFIR_FINDING_EVENT",
+        occurred_at=occurred_at,
+        confidence=_coerce_confidence(confidence),
+        payload=model_payload,
+        anchors={"ip": ip},
+        classification=classification,
+    )
+
+
+def _map_urlhaus_ioc(payload: Dict[str, Any], confidence: float, classification: Optional[str]) -> CanonicalEvent:
+    occurred_at = _as_datetime(
+        payload,
+        ("timestamp", "date_added", "dateadded", "first_seen", "urlhaus_reference_date"),
+    )
+    url = _as_str(payload, ("url", "indicator", "ioc"), required=True)
+    domain = (
+        _as_str(payload, ("host", "domain", "hostname", "urlhost"))
+        or _extract_domain_from_url(url)
+    )
+    ip = _as_str(payload, ("host_ip", "ip_address", "ip"))
+    threat = _as_str(payload, ("threat", "threat_type", "classification")) or "malware_url"
+    status = _as_str(payload, ("url_status", "status")) or "online"
+    tags = _as_str_list(payload, ("tags", "tag"))
+
+    reason_codes = ["malware_url_indicator", "osint_feed", "feed:urlhaus"]
+    if status:
+        reason_codes.append(f"url_status:{status.strip().lower()}")
+    for tag in tags[:5]:
+        reason_codes.append(f"tag:{tag.strip().lower()}")
+
+    anchors: Dict[str, str] = {"url": url}
+    if domain:
+        anchors["domain"] = domain
+    if ip:
+        anchors["ip"] = ip
+
+    model_payload: Dict[str, Any] = {
+        "source": "urlhaus",
+        "host": domain or ip or url,
+        "artifact_name": "urlhaus",
+        "finding_type": threat,
+        "severity": _normalize_ioc_severity(status, default="high"),
+        "status": status,
+        "client_ip": ip,
+        "file_path": url,
+        "case_id": _as_str(payload, ("reporter", "reporter_name")),
+        "hunt_id": _as_str(payload, ("id", "urlhaus_id")),
+        "reason_codes": sorted(set(reason_codes)),
+    }
+    model_payload = {k: v for k, v in model_payload.items() if v is not None}
+
+    return CanonicalEvent(
+        event_type="DFIR_FINDING_EVENT",
+        occurred_at=occurred_at,
+        confidence=_coerce_confidence(confidence),
+        payload=model_payload,
+        anchors=anchors,
+        classification=classification,
+    )
+
+
+def _map_otx_indicator(payload: Dict[str, Any], confidence: float, classification: Optional[str]) -> CanonicalEvent:
+    occurred_at = _as_datetime(
+        payload,
+        ("timestamp", "first_seen", "modified", "created", "pulse_created"),
+    )
+    indicator = _as_str(payload, ("indicator", "value", "ioc"), required=True)
+    indicator_type = (_as_str(payload, ("indicator_type", "type", "ioc_type")) or "").strip().lower()
+    pulse_name = _as_str(payload, ("pulse_name", "pulse", "artifact_name")) or "alienvault_otx"
+    status = _as_str(payload, ("status", "activity")) or "active"
+    tags = _as_str_list(payload, ("tags", "labels"))
+
+    anchors: Dict[str, str] = {}
+    host = indicator
+    if indicator_type in {"ipv4", "ipv4-addr", "ip", "ipv6", "ipv6-addr"}:
+        anchors["ip"] = indicator
+    elif indicator_type in {"domain", "hostname"}:
+        anchors["domain"] = indicator.lower()
+        host = indicator.lower()
+    elif indicator_type == "url":
+        anchors["url"] = indicator
+        domain = _extract_domain_from_url(indicator)
+        if domain:
+            anchors["domain"] = domain
+            host = domain
+    else:
+        raise ValueError(f"unsupported otx indicator_type '{indicator_type}'")
+
+    reason_codes = ["otx_indicator", "osint_feed", "feed:otx"]
+    for tag in tags[:5]:
+        reason_codes.append(f"tag:{tag.strip().lower()}")
+
+    model_payload: Dict[str, Any] = {
+        "source": "alienvault_otx",
+        "host": host,
+        "artifact_name": pulse_name,
+        "finding_type": f"otx_{indicator_type or 'indicator'}",
+        "severity": _normalize_ioc_severity(_as_str(payload, ("severity", "priority")), default="high"),
+        "status": status,
+        "file_path": indicator if indicator_type == "url" else None,
+        "client_ip": indicator if "ip" in anchors else None,
+        "case_id": _as_str(payload, ("pulse_id", "id")),
+        "hunt_id": _as_str(payload, ("indicator_id",)),
+        "reason_codes": sorted(set(reason_codes)),
+    }
+    model_payload = {k: v for k, v in model_payload.items() if v is not None}
+
+    return CanonicalEvent(
+        event_type="DFIR_FINDING_EVENT",
+        occurred_at=occurred_at,
+        confidence=_coerce_confidence(confidence),
+        payload=model_payload,
+        anchors=anchors,
+        classification=classification,
+    )
+
+
 def _map_m365_bec_mail(payload: Dict[str, Any], confidence: float, classification: Optional[str]) -> CanonicalEvent:
     occurred_at = _as_datetime(payload, ("timestamp", "time", "occurred_at", "received_at"))
     sender = _as_str(payload, ("sender", "from", "from_address"), required=True)
@@ -770,6 +945,24 @@ _CONNECTORS: Dict[str, ConnectorDefinition] = {
         description="Wazuh file integrity monitoring records to FILE_INTEGRITY_EVENT",
         required_fields=("timestamp", "host|hostname|agent_name", "file_path|path", "action|event_type"),
         mapper=_map_wazuh_fim,
+    ),
+    "feodo_c2_v1": ConnectorDefinition(
+        key="feodo_c2_v1",
+        description="Feodo Tracker botnet C2 IP feed to DFIR_FINDING_EVENT",
+        required_fields=("ip_address|ip|host",),
+        mapper=_map_feodo_c2,
+    ),
+    "urlhaus_ioc_v1": ConnectorDefinition(
+        key="urlhaus_ioc_v1",
+        description="URLhaus malware URL intelligence to DFIR_FINDING_EVENT",
+        required_fields=("url",),
+        mapper=_map_urlhaus_ioc,
+    ),
+    "otx_indicator_v1": ConnectorDefinition(
+        key="otx_indicator_v1",
+        description="AlienVault OTX indicators to DFIR_FINDING_EVENT",
+        required_fields=("indicator|value", "indicator_type|type"),
+        mapper=_map_otx_indicator,
     ),
     "velociraptor_artifact_v1": ConnectorDefinition(
         key="velociraptor_artifact_v1",
