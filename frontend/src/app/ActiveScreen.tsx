@@ -185,6 +185,7 @@ export default function ActiveScreen({
           healthGnnLoaded={healthGnnLoaded}
           healthModelVersion={healthModelVersion}
           healthGnnMetrics={healthGnnMetrics}
+          showAdminControls={central || manageUsers}
         />
       )}
       {activeScreen === "crypto" && <CryptoPosture />}

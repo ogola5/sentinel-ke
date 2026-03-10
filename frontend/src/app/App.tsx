@@ -28,7 +28,16 @@ import EvidenceDrawer from "./EvidenceDrawer";
 import Inspector from "./Inspector";
 import Sidebar from "./Sidebar";
 import Topbar from "./Topbar";
-import { SOURCE_OPTIONS, type ScreenId } from "./navigation";
+import {
+  SOURCE_OPTIONS,
+  getDefaultScreenForWorkspace,
+  getVisibleScreensForWorkspace,
+  getVisibleWorkspaces,
+  getWorkspaceForScreen,
+  WORKSPACES,
+  type ScreenId,
+  type WorkspaceId,
+} from "./navigation";
 import { useDashboardSync } from "./useDashboardSync";
 
 type EvidenceState = {
@@ -94,7 +103,13 @@ function AuthenticatedApp({
   const [navCollapsed, setNavCollapsed] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(false);
 
-  const defaultScreen: ScreenId = central ? "command" : "live";
+  const navContext = useMemo(
+    () => ({ central, execute, manageUsers, auditorOnly }),
+    [auditorOnly, central, execute, manageUsers],
+  );
+  const visibleWorkspaces = useMemo(() => getVisibleWorkspaces(navContext), [navContext]);
+
+  const defaultScreen: ScreenId = central ? "exec" : auditorOnly ? "ops" : "live";
   const [activeScreen, setActiveScreen] = useState<ScreenId>(defaultScreen);
   const [timeWindow, setTimeWindow] = useState("1h");
   const [sourceFilters, setSourceFilters] = useState<Record<SourceType, boolean>>(() =>
@@ -152,6 +167,24 @@ function AuthenticatedApp({
       ).slice(0, 12),
     [eventsData, selectedServiceId],
   );
+
+  const activeWorkspace = getWorkspaceForScreen(activeScreen);
+  const activeWorkspaceItem = WORKSPACES[activeWorkspace];
+  const workspaceScreens = useMemo(
+    () => getVisibleScreensForWorkspace(activeWorkspace, navContext),
+    [activeWorkspace, navContext],
+  );
+
+  useEffect(() => {
+    const allowedScreenIds = new Set(
+      visibleWorkspaces.flatMap((workspace) => getVisibleScreensForWorkspace(workspace.id, navContext).map((screen) => screen.id)),
+    );
+    if (!allowedScreenIds.has(activeScreen)) {
+      if (visibleWorkspaces.length > 0) {
+        setActiveScreen(getDefaultScreenForWorkspace(visibleWorkspaces[0].id, navContext));
+      }
+    }
+  }, [activeScreen, navContext, visibleWorkspaces]);
 
   const toggleSource = (source: SourceType) => {
     setSourceFilters((current) => ({ ...current, [source]: !current[source] }));
@@ -226,10 +259,8 @@ function AuthenticatedApp({
     <div className="app">
       <Sidebar
         principal={principal}
-        activeScreen={activeScreen}
-        auditorOnly={auditorOnly}
-        central={central}
-        execute={execute}
+        activeWorkspace={activeWorkspace}
+        workspaces={visibleWorkspaces}
         collapsed={navCollapsed}
         backendStatus={backendStatus}
         backendLabel={backendLabel}
@@ -237,7 +268,7 @@ function AuthenticatedApp({
         syncError={syncError}
         actionStatus={actionStatus}
         healthGnnLoaded={healthGnnLoaded}
-        onNavigate={(id) => setActiveScreen(id)}
+        onSelectWorkspace={(workspaceId: WorkspaceId) => setActiveScreen(getDefaultScreenForWorkspace(workspaceId, navContext))}
         onToggleCollapse={() => setNavCollapsed((c) => !c)}
         onToggleConnectionPanel={() => setConnectionPanelOpen((open) => !open)}
         onTriggerSync={triggerSync}
@@ -247,11 +278,14 @@ function AuthenticatedApp({
       <div className="main">
         <Topbar
           activeScreen={activeScreen}
+          activeWorkspace={activeWorkspaceItem}
+          workspaceScreens={workspaceScreens}
           sourceFilters={sourceFilters}
           timeWindow={timeWindow}
           entityQuery={entityQuery}
           entities={entitiesData}
           inspectorOpen={inspectorOpen}
+          onSelectScreen={(screenId) => setActiveScreen(screenId)}
           onToggleSource={toggleSource}
           onSelectTimeWindow={setTimeWindow}
           onEntityQueryChange={setEntityQuery}
