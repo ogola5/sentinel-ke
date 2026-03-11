@@ -40,6 +40,16 @@ type EvidenceState = {
 export default function App() {
   const [principal, setPrincipal] = useState<Principal | null>(() => loadPrincipal());
 
+  useEffect(() => {
+    const handleAuthExpired = () => {
+      clearSession();
+      setPrincipal(null);
+    };
+
+    window.addEventListener("sentinel:auth-expired", handleAuthExpired);
+    return () => window.removeEventListener("sentinel:auth-expired", handleAuthExpired);
+  }, []);
+
   const handleLogout = async () => {
     const refreshToken = getRefreshToken();
     if (refreshToken) {
@@ -79,6 +89,7 @@ function AuthenticatedApp({
     eventsData,
     timelineData,
     indicatorsData,
+    threatSummaryData,
     campaignsData,
     infraClustersData,
     entitiesData,
@@ -285,6 +296,7 @@ function AuthenticatedApp({
               eventsData={eventsData}
               timelineData={timelineData}
               indicatorsData={indicatorsData}
+              threatSummaryData={threatSummaryData}
               infraClustersData={infraClustersData}
               entitiesData={entitiesData}
               graphData={graphData}

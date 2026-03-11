@@ -952,3 +952,188 @@ def export_threat_intel(source: str = Query(default="sentinel"), limit: int = Qu
         return export_stix_bundle(db=db, source=source, limit=limit)
     except Exception as e:
         raise HTTPException(status_code=422, detail=f"threat_intel_export_failed:{e}")
+
+
+# ── /v1/ai/indicators/summary ─────────────────────────────────────────────────
+# Unified threat-indicator summary for the S2 Timeline / Indicators screen.
+# Sources: event_log (all event types) + ai_prediction (risk_gnn) +
+#          ai_campaign_risk_indicator.  No OpenSearch dependency.
+@router.get("/indicators/summary")
+def threat_indicators_summary(
+    days: int = Query(default=7, ge=1, le=30),
+    db: Session = Depends(get_db),
+):
+    from sqlalchemy import text as _text
+    from datetime import timezone
+
+    # ── 1. Event volume by day + category ───────────────────────────────────
+    vol_sql = _text("""
+        SELECT
+            date_trunc('day', occurred_at AT TIME ZONE 'UTC')::date AS day,
+            CASE
+                WHEN event_type IN (
+                    'TRANSACTION_EVENT','AIRTIME_TRANSFER_EVENT',
+                    'PAYMENT_DISBURSEMENT','SIM_SWAP_EVENT'
+                ) THEN 'fraud'
+                WHEN event_type = 'DDOS_SIGNAL_EVENT'         THEN 'ddos'
+                WHEN event_type IN ('DFIR_FINDING_EVENT','DNS_RESOLUTION_EVENT',
+                                    'NETWORK_ANOMALY_EVENT')  THEN 'network'
+                WHEN event_type = 'VULNERABILITY_EVENT'        THEN 'vulnerability'
+                WHEN event_type = 'PHISHING_MESSAGE_EVENT'     THEN 'phishing'
+                WHEN event_type IN ('THREAT_INTEL_EVENT','INDICATOR_EVENT') THEN 'threat_intel'
+                ELSE 'other'
+            END AS category,
+            COUNT(*) AS cnt
+        FROM event_log
+        WHERE occurred_at >= NOW() - INTERVAL '1 day' * :days
+        GROUP BY 1, 2
+        ORDER BY 1
+    """)
+    vol_rows = db.execute(vol_sql, {"days": days}).fetchall()
+
+    # Pivot into day → {category: count}
+    from collections import defaultdict
+    day_vol: dict = defaultdict(lambda: {"fraud": 0, "ddos": 0, "network": 0,
+                                          "vulnerability": 0, "phishing": 0,
+                                          "threat_intel": 0, "other": 0, "total": 0})
+    for row in vol_rows:
+        d = str(row[0])
+        cat = row[1]
+        cnt = int(row[2])
+        day_vol[d][cat] = cnt
+        day_vol[d]["total"] += cnt
+
+    event_volume_series = [
+        {"date": d, **v} for d, v in sorted(day_vol.items())
+    ]
+
+    # ── 2. GNN risk trajectory by day ───────────────────────────────────────
+    gnn_sql = _text("""
+        SELECT
+            date_trunc('day', window_end AT TIME ZONE 'UTC')::date AS day,
+            COUNT(*)                                                AS prediction_count,
+            AVG(score)                                              AS avg_score,
+            MAX(score)                                              AS max_score,
+            PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY score)     AS p90_score
+        FROM ai_prediction
+        WHERE prediction_type = 'risk_gnn'
+          AND window_end >= NOW() - INTERVAL '1 day' * :days
+        GROUP BY 1
+        ORDER BY 1
+    """)
+    gnn_rows = db.execute(gnn_sql, {"days": days}).fetchall()
+    gnn_risk_series = [
+        {
+            "date":             str(r[0]),
+            "prediction_count": int(r[1]),
+            "avg_score":        round(float(r[2]), 1),
+            "max_score":        round(float(r[3]), 1),
+            "p90_score":        round(float(r[4]), 1),
+        }
+        for r in gnn_rows
+    ]
+
+    # ── 3. Campaign risk severity breakdown ──────────────────────────────────
+    sev_sql = _text("""
+        SELECT severity, COUNT(*) AS cnt
+        FROM ai_campaign_risk_indicator
+        GROUP BY severity
+    """)
+    sev_rows = db.execute(sev_sql).fetchall()
+    campaign_risk: dict = {"critical": 0, "high": 0, "medium": 0, "low": 0, "total": 0}
+    for r in sev_rows:
+        sev = str(r[0]).lower()
+        cnt = int(r[1])
+        if sev in campaign_risk:
+            campaign_risk[sev] = cnt
+        campaign_risk["total"] += cnt
+
+    # ── 4. Top at-risk entities (latest GNN window) ──────────────────────────
+    top_sql = _text("""
+        SELECT DISTINCT ON (entity_key)
+            entity_key,
+            entity_type,
+            score,
+            kill_chain_stage,
+            reason_codes,
+            window_end
+        FROM ai_prediction
+        WHERE prediction_type = 'risk_gnn'
+        ORDER BY entity_key, window_end DESC, score DESC
+    """)
+    top_all = db.execute(top_sql).fetchall()
+    top_all_sorted = sorted(top_all, key=lambda r: float(r[2]), reverse=True)[:10]
+    top_threats = [
+        {
+            "entity_key":       r[0],
+            "entity_type":      r[1],
+            "score":            round(float(r[2]), 1),
+            "kill_chain_stage": r[3],
+            "reason_codes":     r[4] if isinstance(r[4], list) else [],
+            "severity":         _severity_from_score(float(r[2])),
+        }
+        for r in top_all_sorted
+    ]
+
+    # ── 5. Kill-chain stage distribution ────────────────────────────────────
+    kc_sql = _text("""
+        SELECT kill_chain_stage, COUNT(*) AS cnt
+        FROM ai_prediction
+        WHERE prediction_type = 'risk_gnn'
+          AND kill_chain_stage IS NOT NULL
+        GROUP BY kill_chain_stage
+        ORDER BY cnt DESC
+    """)
+    kc_rows = db.execute(kc_sql).fetchall()
+    kill_chain_distribution = {str(r[0]): int(r[1]) for r in kc_rows}
+
+    # ── 6. Quick event-type totals (for summary cards) ───────────────────────
+    totals_sql = _text("""
+        SELECT
+            SUM(CASE WHEN event_type IN ('TRANSACTION_EVENT','AIRTIME_TRANSFER_EVENT',
+                'PAYMENT_DISBURSEMENT','SIM_SWAP_EVENT') THEN 1 ELSE 0 END) AS fraud,
+            SUM(CASE WHEN event_type = 'DDOS_SIGNAL_EVENT' THEN 1 ELSE 0 END) AS ddos,
+            SUM(CASE WHEN event_type IN ('DFIR_FINDING_EVENT','DNS_RESOLUTION_EVENT',
+                'NETWORK_ANOMALY_EVENT') THEN 1 ELSE 0 END)                  AS network,
+            SUM(CASE WHEN event_type = 'VULNERABILITY_EVENT' THEN 1 ELSE 0 END)     AS vulnerability,
+            SUM(CASE WHEN event_type = 'PHISHING_MESSAGE_EVENT' THEN 1 ELSE 0 END)  AS phishing,
+            COUNT(*)                                                                 AS total
+        FROM event_log
+    """)
+    tot = db.execute(totals_sql).fetchone()
+    event_totals = {
+        "fraud":         int(tot[0] or 0),
+        "ddos":          int(tot[1] or 0),
+        "network":       int(tot[2] or 0),
+        "vulnerability": int(tot[3] or 0),
+        "phishing":      int(tot[4] or 0),
+        "total":         int(tot[5] or 0),
+    }
+
+    # ── 7. Simple forecast: linear trend on GNN avg scores ──────────────────
+    forecast = {"trend": "stable", "forecast_score": None, "confidence": 0.0}
+    if len(gnn_risk_series) >= 2:
+        scores = [s["avg_score"] for s in gnn_risk_series[-4:]]
+        if len(scores) >= 2:
+            slope = (scores[-1] - scores[0]) / max(1, len(scores) - 1)
+            last  = scores[-1]
+            forecast["forecast_score"] = round(min(100, max(0, last + slope * 3)), 1)
+            forecast["confidence"]      = round(min(0.9, 0.5 + abs(slope) / 20), 2)
+            if slope > 1.0:
+                forecast["trend"] = "rising"
+            elif slope < -1.0:
+                forecast["trend"] = "falling"
+            else:
+                forecast["trend"] = "stable"
+
+    return {
+        "generated_at":          datetime.now(timezone.utc).isoformat(),
+        "window_days":           days,
+        "event_volume_series":   event_volume_series,
+        "gnn_risk_series":       gnn_risk_series,
+        "campaign_risk":         campaign_risk,
+        "top_threats":           top_threats,
+        "kill_chain_distribution": kill_chain_distribution,
+        "event_totals":          event_totals,
+        "forecast":              forecast,
+    }

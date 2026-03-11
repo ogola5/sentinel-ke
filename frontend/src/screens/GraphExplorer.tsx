@@ -1,25 +1,99 @@
 /**
  * GraphExplorer — S3: Threat Graph Explorer
  *
- * SVG threat graph with real-time node pulsing via SSE stream.
- * Nodes whose service_id matches a recently-seen SSE event get an
- * animated ring ("live node") — no graph re-layout needed.
+ * Redesigned for clarity. Any operator, judge, or first-time viewer
+ * should understand what they're looking at without explanation.
  *
- * Click a node → DetailPanel with node details.
- * Click an edge → edge evidence shown in bottom-left panel.
+ * Layout:
+ *  - Stats bar (4 numbers at a glance)
+ *  - SVG canvas with labeled zone columns + directed edges
+ *  - Edge Intelligence panel (human-readable evidence)
+ *  - Node Investigation panel (selected node's neighbourhood)
+ *  - Collapsible "How to read this" guide
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { GraphData, GraphEdge, GraphNode } from "../types/domain";
 import DetailPanel from "../components/DetailPanel";
 import { useEventStream } from "../hooks/useEventStream";
 
-const LIVE_WINDOW_MS = 12_000;   // node stays "live" for 12 s after an SSE event
+const LIVE_WINDOW_MS = 12_000;
 
-const COMMUNITY_COLORS: Record<string, string> = {
+// CSS variable names — used directly in SVG (inline SVG inherits the stylesheet)
+const COMMUNITY_COLOR: Record<string, string> = {
   target:   "var(--accent)",
   infra:    "var(--accent-2)",
   campaign: "var(--warning)",
   support:  "var(--ink-muted)",
+};
+
+// Hex fallbacks for non-SVG elements (span backgrounds, etc.)
+const COMMUNITY_HEX: Record<string, string> = {
+  target:   "#2fd67d",
+  infra:    "#bbf7d2",
+  campaign: "#f0bf4c",
+  support:  "#abc7b6",
+};
+
+const COMMUNITY_LABEL: Record<string, string> = {
+  target:   "TARGET SERVICES",
+  infra:    "ATTACK INFRA",
+  campaign: "CAMPAIGNS",
+  support:  "SUPPORT",
+};
+
+const COMMUNITY_DESC: Record<string, string> = {
+  target:   "Govt portals & financial services under attack",
+  infra:    "C2 servers, malicious IPs & botnet clusters",
+  campaign: "Coordinated threat operations (named actors)",
+  support:  "Enabler nodes — proxies, registrars, relays",
+};
+
+const NODE_ICON: Record<string, string> = {
+  service:  "⊞",
+  endpoint: "⊞",
+  cluster:  "⊛",
+  ip:       "⊛",
+  asn:      "⊛",
+  provider: "⊛",
+  campaign: "⚠",
+};
+
+// Column X positions match buildGraphFromSnapshot in backend.ts
+const ZONE_X: Record<string, number> = {
+  target:   130,
+  infra:    360,
+  campaign: 590,
+};
+
+function shortLabel(label: string, max = 13): string {
+  return label.length > max ? label.slice(0, max - 1) + "…" : label;
+}
+
+function fmtTs(ts: string): string {
+  try {
+    return new Date(ts).toLocaleString("en-KE", {
+      month: "short", day: "numeric",
+      hour: "2-digit", minute: "2-digit",
+    });
+  } catch { return ts; }
+}
+
+function timeAgo(ts: string): string {
+  try {
+    const diff = Date.now() - new Date(ts).getTime();
+    if (diff < 60_000)      return "just now";
+    if (diff < 3_600_000)   return `${Math.floor(diff / 60_000)}m ago`;
+    if (diff < 86_400_000)  return `${Math.floor(diff / 3_600_000)}h ago`;
+    return `${Math.floor(diff / 86_400_000)}d ago`;
+  } catch { return ts; }
+}
+
+const SOURCE_LABEL: Record<string, string> = {
+  telco: "📡 Telco",
+  bank:  "🏦 Banking",
+  gov:   "🏛️ Gov",
+  osint: "🌐 OSINT",
+  infra: "🖥️ Infra",
 };
 
 type GraphExplorerProps = {
@@ -29,40 +103,35 @@ type GraphExplorerProps = {
 };
 
 export default function GraphExplorer({ graph, onSelectNode, onSelectEdge }: GraphExplorerProps) {
-  const [pinned,       setPinned]       = useState<GraphNode[]>([]);
   const [selectedEdge, setSelectedEdge] = useState<GraphEdge | null>(null);
   const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null);
+  const [pinned,       setPinned]       = useState<GraphNode[]>([]);
   const [showPath,     setShowPath]     = useState(false);
   const [nodePanel,    setNodePanel]    = useState(false);
+  const [showGuide,    setShowGuide]    = useState(false);
 
-  // Track service_ids that had recent SSE events → pulse their graph node
   const [liveServiceIds, setLiveServiceIds] = useState<Set<string>>(new Set());
   const liveTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
   const { liveEvents, streamStatus } = useEventStream();
 
-  // When new SSE events arrive, mark matching nodes as "live" for LIVE_WINDOW_MS
   useEffect(() => {
     if (liveEvents.length === 0) return;
     const newest = liveEvents[0];
     const svcId  = newest.service_id;
     if (!svcId) return;
 
-    // Check if any graph node matches this service_id
     const matchingNode = graph.nodes.find(
       (n) => n.id === svcId || n.label.toLowerCase().includes(svcId.toLowerCase()),
     );
     if (!matchingNode) return;
 
     const key = matchingNode.id;
-
     setLiveServiceIds((prev) => new Set([...prev, key]));
 
-    // Clear existing timer for this node
     const existing = liveTimers.current.get(key);
     if (existing) clearTimeout(existing);
 
-    // Remove from live set after window expires
     const timer = setTimeout(() => {
       setLiveServiceIds((prev) => {
         const next = new Set(prev);
@@ -85,8 +154,31 @@ export default function GraphExplorer({ graph, onSelectNode, onSelectEdge }: Gra
     [graph.nodes],
   );
 
+  const nodeDegree = useMemo(() => {
+    const deg = new Map<string, number>();
+    for (const e of graph.edges) {
+      deg.set(e.source, (deg.get(e.source) ?? 0) + 1);
+      deg.set(e.target, (deg.get(e.target) ?? 0) + 1);
+    }
+    return deg;
+  }, [graph.edges]);
+
+  const neighborEdges = useMemo(() => {
+    if (!selectedNode) return [];
+    return graph.edges.filter(
+      (e) => e.source === selectedNode.id || e.target === selectedNode.id,
+    );
+  }, [selectedNode, graph.edges]);
+
   const isLive = streamStatus === "live";
 
+  const counts = useMemo(() => ({
+    target:   graph.nodes.filter(n => n.community === "target").length,
+    infra:    graph.nodes.filter(n => n.community === "infra").length,
+    campaign: graph.nodes.filter(n => n.community === "campaign").length,
+  }), [graph.nodes]);
+
+  // ── Empty state ──────────────────────────────────────────────────────────
   if (graph.nodes.length === 0) {
     return (
       <section className="screen">
@@ -94,24 +186,35 @@ export default function GraphExplorer({ graph, onSelectNode, onSelectEdge }: Gra
           <div>
             <p className="eyebrow">S3</p>
             <h2>Threat Graph Explorer</h2>
-            <p className="subtle">Entity relationships with evidence-grade edges.</p>
+            <p className="subtle">Kenya's live cyber-threat relationship map.</p>
           </div>
         </div>
-        <div className="panel">
-          <p className="muted">No graph data available yet. Seed data or wait for the backend sync.</p>
+        <div className="panel" style={{ textAlign: "center", padding: "56px 24px" }}>
+          <p style={{ fontSize: "2.4rem", marginBottom: 8 }}>🕸️</p>
+          <p style={{ fontWeight: 700, fontSize: "1.05rem", marginBottom: 6 }}>No threat graph data yet</p>
+          <p className="muted" style={{ maxWidth: 440, margin: "0 auto", lineHeight: 1.6 }}>
+            Once events are ingested, SentinelKE automatically builds a live relationship map
+            connecting attacked services, attack infrastructure, and threat campaign actors.
+          </p>
         </div>
       </section>
     );
   }
 
+  // ── Main view ─────────────────────────────────────────────────────────────
   return (
     <section className="screen">
-      {/* ── Header ─────────────────────────────────────────────────────── */}
+
+      {/* ── Header ─────────────────────────────────────────────────────────── */}
       <div className="screen-header">
         <div>
           <p className="eyebrow">S3</p>
           <h2>Threat Graph Explorer</h2>
-          <p className="subtle">Entity relationships · evidence-grade edges · real-time node activity</p>
+          <p className="subtle">
+            Who is attacking whom — and how they're linked.
+            Each <strong>node</strong> is an entity; each <strong>line</strong> is an
+            evidence-backed connection. Thicker lines = more observed events.
+          </p>
         </div>
         <div className="chip-row">
           <span className={`stream-badge ${isLive ? "stream-live" : "stream-poll"}`}>
@@ -119,164 +222,578 @@ export default function GraphExplorer({ graph, onSelectNode, onSelectEdge }: Gra
             {isLive ? "LIVE" : "POLL"}
           </span>
           {liveServiceIds.size > 0 && (
-            <span className="chip chip-active">
-              {liveServiceIds.size} active node{liveServiceIds.size > 1 ? "s" : ""}
+            <span className="chip chip-active" title="Nodes with a threat event in the last 12 seconds">
+              ⚡ {liveServiceIds.size} active node{liveServiceIds.size !== 1 ? "s" : ""}
             </span>
           )}
-          <button className="ghost" type="button" onClick={() => setShowPath((p) => !p)}>
-            {showPath ? "Hide top links" : "Highlight top links"}
+          <button className="ghost" type="button" onClick={() => setShowPath(p => !p)}>
+            {showPath ? "Hide hottest links" : "Show hottest links"}
+          </button>
+          <button className="ghost" type="button" onClick={() => setShowGuide(g => !g)}>
+            {showGuide ? "Hide guide" : "❓ How to read this"}
           </button>
         </div>
       </div>
 
-      {/* ── Graph canvas ───────────────────────────────────────────────── */}
+      {/* ── Explainer guide (collapsible) ──────────────────────────────────── */}
+      {showGuide && (
+        <div className="panel" style={{
+          background: "rgba(47,214,125,0.05)",
+          border: "1px solid rgba(47,214,125,0.18)",
+          marginBottom: 0,
+        }}>
+          <p style={{ fontWeight: 700, marginBottom: 12, fontSize: "0.9rem" }}>
+            How to read the Threat Graph
+          </p>
+          <div style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))",
+            gap: 16,
+          }}>
+            {[
+              { icon: "🟢", title: "Target Services", body: "Kenyan government portals, financial institutions, and telecoms that are actively targeted by detected attacks." },
+              { icon: "🔵", title: "Attack Infrastructure", body: "Command & Control (C2) servers, malicious IP clusters, and botnets used to carry out the attacks — often hosted abroad." },
+              { icon: "🟡", title: "Campaigns", body: "Named threat operations. One campaign can target multiple services using multiple infra nodes simultaneously." },
+              { icon: "↔", title: "Lines (Edges)", body: "A confirmed relationship backed by real observed events. Click any line to see evidence: sources, timestamps, and event count." },
+              { icon: "⚡", title: "Live Pulse Ring", body: "A glowing ring around a node means a real threat event was detected on it within the last 12 seconds." },
+              { icon: "🔍", title: "Click to Investigate", body: "Click any node to see its connections. Click any line to see who is talking to whom and the evidence behind it." },
+            ].map(item => (
+              <div key={item.title}>
+                <p style={{ fontWeight: 600, marginBottom: 3, fontSize: "0.85rem" }}>
+                  {item.icon} {item.title}
+                </p>
+                <p className="muted" style={{ fontSize: "0.78rem", lineHeight: 1.5 }}>{item.body}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ── Stats bar ──────────────────────────────────────────────────────── */}
+      <div style={{
+        display: "grid",
+        gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
+        gap: "0.5rem",
+      }}>
+        {[
+          { label: "Target Services",      value: counts.target,       sub: "under attack",        color: "#2fd67d" },
+          { label: "Attack Infrastructure", value: counts.infra,        sub: "C2 / botnet nodes",   color: "#bbf7d2" },
+          { label: "Campaigns",             value: counts.campaign,     sub: "threat operations",   color: "#f0bf4c" },
+          { label: "Relationships",         value: graph.edges.length,  sub: "evidence-backed links", color: "var(--success)" },
+        ].map(stat => (
+          <div key={stat.label} className="panel" style={{ padding: "10px 14px" }}>
+            <p className="label" style={{ marginBottom: 2 }}>{stat.label}</p>
+            <p style={{ fontSize: "1.6rem", fontWeight: 700, color: stat.color, margin: "0 0 2px" }}>
+              {stat.value}
+            </p>
+            <p className="muted" style={{ fontSize: "0.72rem" }}>{stat.sub}</p>
+          </div>
+        ))}
+      </div>
+
+      {/* ── Graph canvas ───────────────────────────────────────────────────── */}
       <div className="panel graph-panel">
-        <svg className="graph-canvas" viewBox="0 0 720 420" role="img" aria-label="Threat graph">
-          {/* Edges */}
+        <svg
+          className="graph-canvas"
+          viewBox="0 0 760 460"
+          role="img"
+          aria-label="Threat relationship graph showing connections between attacked services, attack infrastructure, and campaigns"
+          style={{ height: 460 }}
+        >
+          <defs>
+            {/* Arrowhead markers */}
+            <marker id="gr-arrow" markerWidth="7" markerHeight="7" refX="19" refY="3.5" orient="auto">
+              <path d="M0,0 L0,7 L7,3.5 z" fill="rgba(171,199,182,0.45)" />
+            </marker>
+            <marker id="gr-arrow-hot" markerWidth="7" markerHeight="7" refX="19" refY="3.5" orient="auto">
+              <path d="M0,0 L0,7 L7,3.5 z" fill="#2fd67d" />
+            </marker>
+            <marker id="gr-arrow-sel" markerWidth="7" markerHeight="7" refX="19" refY="3.5" orient="auto">
+              <path d="M0,0 L0,7 L7,3.5 z" fill="#f0bf4c" />
+            </marker>
+            {/* Glow filter for live nodes */}
+            <filter id="gr-glow" x="-40%" y="-40%" width="180%" height="180%">
+              <feGaussianBlur stdDeviation="4" result="blur" />
+              <feMerge>
+                <feMergeNode in="blur" />
+                <feMergeNode in="SourceGraphic" />
+              </feMerge>
+            </filter>
+          </defs>
+
+          {/* ── Zone background bands ─────────────────────────────────────── */}
+          {(["target", "infra", "campaign"] as const).map(zone => {
+            const cx = ZONE_X[zone];
+            const color = COMMUNITY_HEX[zone];
+            return (
+              <g key={zone}>
+                <rect
+                  x={cx - 65} y={26} width={130} height={418}
+                  rx={10} ry={10}
+                  fill={color} fillOpacity={0.045}
+                  stroke={color} strokeOpacity={0.14} strokeWidth={1}
+                />
+                <text
+                  x={cx} y={18}
+                  textAnchor="middle"
+                  fontSize={8.5}
+                  fill={color}
+                  opacity={0.75}
+                  fontWeight={700}
+                  letterSpacing={0.8}
+                >
+                  {COMMUNITY_LABEL[zone]}
+                </text>
+              </g>
+            );
+          })}
+
+          {/* ── Edges ─────────────────────────────────────────────────────── */}
           {graph.edges.map((edge) => {
             const src = nodeById.get(edge.source);
             const tgt = nodeById.get(edge.target);
             if (!src || !tgt) return null;
-            const isPath = showPath && pathEdges.has(edge.id);
+
+            const isHot      = showPath && pathEdges.has(edge.id);
+            const isSelected = selectedEdge?.id === edge.id;
+            const weight     = Math.min(5, 1 + Math.log2(edge.count + 1));
+            const mx         = (src.x + tgt.x) / 2;
+            const my         = (src.y + tgt.y) / 2;
+
+            const stroke     = isSelected ? "#f0bf4c" : isHot ? "#2fd67d" : "rgba(171,199,182,0.32)";
+            const strokeW    = isSelected ? 3.5 : isHot ? weight : 1.5;
+            const markerEnd  = isSelected ? "url(#gr-arrow-sel)" : isHot ? "url(#gr-arrow-hot)" : "url(#gr-arrow)";
+
             return (
-              <line
-                key={edge.id}
-                x1={src.x} y1={src.y}
-                x2={tgt.x} y2={tgt.y}
-                className={isPath ? "graph-edge path" : "graph-edge"}
+              <g key={edge.id} style={{ cursor: "pointer" }}
                 onClick={() => { setSelectedEdge(edge); onSelectEdge(edge); }}
-              />
+              >
+                <title>{`${nodeById.get(edge.source)?.label ?? edge.source} → ${nodeById.get(edge.target)?.label ?? edge.target}\n${edge.count} event${edge.count !== 1 ? "s" : ""} · sources: ${edge.sources.join(", ")}`}</title>
+                <line
+                  x1={src.x} y1={src.y}
+                  x2={tgt.x} y2={tgt.y}
+                  stroke={stroke}
+                  strokeWidth={strokeW}
+                  markerEnd={markerEnd}
+                />
+                {/* Wider invisible hit area */}
+                <line
+                  x1={src.x} y1={src.y}
+                  x2={tgt.x} y2={tgt.y}
+                  stroke="transparent"
+                  strokeWidth={14}
+                />
+                {/* Event count badge on edge midpoint */}
+                {edge.count > 1 && (
+                  <text
+                    x={mx} y={my - 4}
+                    textAnchor="middle"
+                    fontSize={8.5}
+                    fill={isSelected ? "#f0bf4c" : isHot ? "#2fd67d" : "rgba(171,199,182,0.55)"}
+                    style={{ pointerEvents: "none", fontFamily: "monospace" }}
+                  >
+                    ×{edge.count}
+                  </text>
+                )}
+              </g>
             );
           })}
 
-          {/* Nodes */}
+          {/* ── Nodes ─────────────────────────────────────────────────────── */}
           {graph.nodes.map((node) => {
-            const color  = COMMUNITY_COLORS[node.community] ?? "var(--ink)";
-            const isLiveNode = liveServiceIds.has(node.id);
+            const color       = COMMUNITY_COLOR[node.community] ?? "var(--ink-muted)";
+            const hex         = COMMUNITY_HEX[node.community]   ?? "#abc7b6";
+            const isLiveNode  = liveServiceIds.has(node.id);
+            const isSelected  = selectedNode?.id === node.id;
+            const degree      = nodeDegree.get(node.id) ?? 0;
+            const r           = Math.min(23, 14 + degree * 1.4);
+            const icon        = NODE_ICON[node.type] ?? "◆";
+
             return (
               <g
                 key={node.id}
                 className={`graph-node${isLiveNode ? " graph-node-live" : ""}`}
+                style={{ filter: isLiveNode ? "url(#gr-glow)" : undefined }}
                 onClick={() => {
                   setSelectedNode(node);
                   setNodePanel(true);
                   onSelectNode(node);
                 }}
               >
-                {/* Pulsing ring for live nodes */}
-                {isLiveNode && (
-                  <circle
-                    cx={node.x} cy={node.y} r="26"
-                    className="graph-node-ring"
-                    fill="none"
-                    stroke={color}
-                  />
+                <title>{`${node.label}\nRole: ${COMMUNITY_DESC[node.community] ?? node.community}\nType: ${node.type}\nConnections: ${degree}${isLiveNode ? "\n⚡ LIVE — threat event in last 12s" : ""}`}</title>
+
+                {/* White selection ring */}
+                {isSelected && (
+                  <circle cx={node.x} cy={node.y} r={r + 7}
+                    fill="none" stroke="rgba(255,255,255,0.75)" strokeWidth={2} />
                 )}
-                <circle cx={node.x} cy={node.y} r="18" fill={color} />
-                <text x={node.x} y={node.y + 34} textAnchor="middle">
-                  {node.label}
-                </text>
+                {/* Animated live ring */}
                 {isLiveNode && (
-                  <text x={node.x + 14} y={node.y - 14} className="graph-node-live-dot">●</text>
+                  <circle cx={node.x} cy={node.y} r={r + 4}
+                    className="graph-node-ring" fill="none" stroke={color} />
+                )}
+                {/* Main circle */}
+                <circle cx={node.x} cy={node.y} r={r} fill={hex} fillOpacity={0.88} />
+                {/* Type icon */}
+                <text
+                  x={node.x} y={node.y + 4}
+                  textAnchor="middle"
+                  fontSize={11} fill="rgba(10,30,18,0.85)" fontWeight={700}
+                  style={{ pointerEvents: "none" }}
+                >
+                  {icon}
+                </text>
+                {/* Label */}
+                <text
+                  x={node.x} y={node.y + r + 14}
+                  textAnchor="middle"
+                  style={{ pointerEvents: "none", fontSize: "0.68rem" }}
+                >
+                  {shortLabel(node.label)}
+                </text>
+                {/* Live indicator dot */}
+                {isLiveNode && (
+                  <text x={node.x + r - 2} y={node.y - r + 5}
+                    className="graph-node-live-dot">●</text>
+                )}
+                {/* Degree badge for hubs (≥3 connections) */}
+                {degree >= 3 && (
+                  <g>
+                    <circle cx={node.x - r + 4} cy={node.y - r + 4} r={7}
+                      fill="rgba(0,0,0,0.55)" />
+                    <text
+                      x={node.x - r + 4} y={node.y - r + 7}
+                      textAnchor="middle"
+                      fontSize={8} fill="white" fontWeight={700}
+                      style={{ pointerEvents: "none" }}
+                    >
+                      {degree}
+                    </text>
+                  </g>
                 )}
               </g>
             );
           })}
         </svg>
+
+        {/* Graph footer: legend strip */}
+        <div style={{
+          display: "flex",
+          gap: 16,
+          padding: "8px 16px",
+          borderTop: "1px solid var(--line)",
+          flexWrap: "wrap",
+          alignItems: "center",
+        }}>
+          <span style={{ fontSize: "0.72rem", color: "var(--ink-muted)", marginRight: 4 }}>
+            Node types:
+          </span>
+          {[
+            { cls: "dot-target",   label: "Target service",   title: "Attacked system" },
+            { cls: "dot-infra",    label: "Attack infra",     title: "C2 / botnet node" },
+            { cls: "dot-campaign", label: "Campaign",         title: "Threat operation" },
+            { cls: "dot-live",     label: "⚡ Live activity", title: "Event in last 12s" },
+          ].map(l => (
+            <span key={l.cls} className="legend-item" title={l.title}>
+              <i className={`dot ${l.cls}`} /> {l.label}
+            </span>
+          ))}
+          <span className="muted" style={{ fontSize: "0.72rem", marginLeft: "auto" }}>
+            Hover nodes/lines for details · click to investigate · ①badge = connection count
+          </span>
+        </div>
       </div>
 
-      {/* ── Legend + edge evidence ────────────────────────────────────── */}
+      {/* ── Bottom panels ──────────────────────────────────────────────────── */}
       <div className="grid-two">
+
+        {/* Left: Edge Intelligence */}
         <div className="panel">
           <div className="panel-header">
-            <h3>Edge evidence</h3>
-            <span className="muted">Click edges to view evidence refs</span>
+            <h3>Edge Intelligence</h3>
+            <span className="muted">
+              {selectedEdge ? "Click another line to switch" : "Click any line in the graph above"}
+            </span>
           </div>
-          <div className="legend">
-            <span className="legend-item"><i className="dot dot-target" /> Target service</span>
-            <span className="legend-item"><i className="dot dot-infra" />  Infra cluster</span>
-            <span className="legend-item"><i className="dot dot-campaign" /> Campaign</span>
-            <span className="legend-item"><i className="dot dot-live" /> Live (SSE event)</span>
-          </div>
+
           {selectedEdge ? (
             <div className="edge-detail">
-              <div className="detail-grid">
-                <div><p className="label">First seen</p><p className="stat">{selectedEdge.first_seen}</p></div>
-                <div><p className="label">Last seen</p><p className="stat">{selectedEdge.last_seen}</p></div>
-                <div><p className="label">Count</p><p className="stat">{selectedEdge.count}</p></div>
+              {/* Relationship headline */}
+              <div style={{
+                background: "rgba(47,214,125,0.07)",
+                border: "1px solid rgba(47,214,125,0.2)",
+                borderRadius: 8,
+                padding: "10px 12px",
+                marginBottom: 12,
+              }}>
+                <p className="label" style={{ marginBottom: 4 }}>Relationship</p>
+                <p style={{ fontWeight: 700, fontSize: "0.88rem" }}>
+                  {nodeById.get(selectedEdge.source)?.label ?? selectedEdge.source}
+                  <span style={{ color: "var(--ink-muted)", margin: "0 8px", fontSize: "1rem" }}>→</span>
+                  {nodeById.get(selectedEdge.target)?.label ?? selectedEdge.target}
+                </p>
+                <p className="muted" style={{ fontSize: "0.76rem", marginTop: 3 }}>
+                  {COMMUNITY_DESC[nodeById.get(selectedEdge.source)?.community ?? ""] ?? ""}
+                  {" connects to "}
+                  {COMMUNITY_DESC[nodeById.get(selectedEdge.target)?.community ?? ""] ?? ""}
+                </p>
+              </div>
+
+              <div className="detail-grid" style={{ marginBottom: 12 }}>
                 <div>
-                  <p className="label">Sources</p>
-                  <p className="stat">{selectedEdge.sources.map((s) => s.toUpperCase()).join(" / ")}</p>
+                  <p className="label">Observed events</p>
+                  <p className="stat" style={{ color: "var(--accent)" }}>{selectedEdge.count}</p>
+                </div>
+                <div>
+                  <p className="label">First detected</p>
+                  <p className="stat" style={{ fontSize: "0.8rem" }}>{fmtTs(selectedEdge.first_seen)}</p>
+                </div>
+                <div>
+                  <p className="label">Last seen</p>
+                  <p className="stat">{timeAgo(selectedEdge.last_seen)}</p>
+                </div>
+                <div>
+                  <p className="label">Data sources</p>
+                  <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 3 }}>
+                    {selectedEdge.sources.map(s => (
+                      <span key={s} className="chip" style={{ fontSize: "0.7rem", padding: "1px 6px" }}>
+                        {SOURCE_LABEL[s] ?? s.toUpperCase()}
+                      </span>
+                    ))}
+                  </div>
                 </div>
               </div>
-              <div className="list">
-                {selectedEdge.evidence.map((item) => (
-                  <div key={item.event_hash} className="list-item mono">{item.event_hash}</div>
-                ))}
-              </div>
+
+              {selectedEdge.evidence.length > 0 && (
+                <div>
+                  <p className="label" style={{ marginBottom: 6 }}>
+                    Forensic trail — {selectedEdge.evidence.length} event hash{selectedEdge.evidence.length !== 1 ? "es" : ""}
+                  </p>
+                  <div className="list" style={{ maxHeight: 110, overflowY: "auto" }}>
+                    {selectedEdge.evidence.slice(0, 6).map((item) => (
+                      <div key={item.event_hash} className="list-item mono"
+                        style={{ fontSize: "0.66rem", opacity: 0.65, padding: "4px 8px" }}>
+                        {item.event_hash.slice(0, 40)}…
+                      </div>
+                    ))}
+                    {selectedEdge.evidence.length > 6 && (
+                      <p className="muted" style={{ fontSize: "0.72rem", padding: "2px 8px" }}>
+                        +{selectedEdge.evidence.length - 6} more hashes
+                      </p>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
           ) : (
-            <p className="muted">Click an edge to view evidence.</p>
+            <div style={{ textAlign: "center", padding: "28px 0", color: "var(--ink-muted)" }}>
+              <p style={{ fontSize: "1.8rem", marginBottom: 8 }}>↔</p>
+              <p style={{ fontSize: "0.83rem", lineHeight: 1.6 }}>
+                Select a connection line in the graph<br />
+                to see who is linked and the evidence behind it.
+              </p>
+            </div>
           )}
         </div>
 
+        {/* Right: Node Investigation */}
         <div className="panel">
           <div className="panel-header">
-            <h3>Pinned nodes</h3>
-            <span className="muted">Pin entities for comparison</span>
+            <h3>Node Investigation</h3>
+            <span className="muted">
+              {selectedNode
+                ? `${COMMUNITY_LABEL[selectedNode.community] ?? selectedNode.community}`
+                : "Click any node to investigate"}
+            </span>
           </div>
-          <div className="pinned">
-            {pinned.length === 0 ? (
-              <p className="muted">No nodes pinned yet.</p>
-            ) : (
-              pinned.map((node) => (
-                <span key={node.id} className="chip">{node.label}</span>
-              ))
-            )}
-          </div>
-          <button
-            className="ghost"
-            type="button"
-            onClick={() => {
-              const node = selectedNode ?? graph.nodes[0];
-              if (!node) return;
-              setPinned((prev) =>
-                prev.find((n) => n.id === node.id) ? prev : [...prev, node],
-              );
-            }}
-          >
-            Pin selected node
-          </button>
+
+          {selectedNode ? (
+            <div>
+              {/* Node identity card */}
+              <div style={{ display: "flex", alignItems: "flex-start", gap: 10, marginBottom: 12 }}>
+                <span style={{
+                  width: 36, height: 36, borderRadius: "50%",
+                  background: COMMUNITY_HEX[selectedNode.community] ?? "#abc7b6",
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  fontSize: "1.1rem", flexShrink: 0, color: "rgba(10,30,18,0.85)",
+                  fontWeight: 700,
+                }}>
+                  {NODE_ICON[selectedNode.type] ?? "◆"}
+                </span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <p style={{ fontWeight: 700, marginBottom: 2, wordBreak: "break-all" }}>
+                    {selectedNode.label}
+                  </p>
+                  <p className="muted" style={{ fontSize: "0.76rem", lineHeight: 1.4 }}>
+                    {COMMUNITY_DESC[selectedNode.community] ?? selectedNode.community}
+                  </p>
+                </div>
+                {liveServiceIds.has(selectedNode.id) && (
+                  <span className="chip chip-active" style={{ fontSize: "0.7rem", flexShrink: 0 }}>
+                    ⚡ LIVE
+                  </span>
+                )}
+              </div>
+
+              <div className="detail-grid" style={{ marginBottom: 12 }}>
+                <div>
+                  <p className="label">Role</p>
+                  <p>{selectedNode.community}</p>
+                </div>
+                <div>
+                  <p className="label">Node type</p>
+                  <p>{selectedNode.type}</p>
+                </div>
+                <div>
+                  <p className="label">Connections</p>
+                  <p style={{ fontWeight: 700, color: "var(--accent)", fontSize: "1.1rem" }}>
+                    {nodeDegree.get(selectedNode.id) ?? 0}
+                  </p>
+                </div>
+                <div>
+                  <p className="label">Threat status</p>
+                  <p>{liveServiceIds.has(selectedNode.id) ? "🔴 Active threat" : "⚪ No recent activity"}</p>
+                </div>
+              </div>
+
+              {/* Connected entities list */}
+              {neighborEdges.length > 0 && (
+                <div style={{ marginBottom: 12 }}>
+                  <p className="label" style={{ marginBottom: 6 }}>
+                    Connected entities — click to inspect the link
+                  </p>
+                  <div className="list" style={{ maxHeight: 160, overflowY: "auto" }}>
+                    {neighborEdges.map(edge => {
+                      const isOutbound = edge.source === selectedNode.id;
+                      const otherId    = isOutbound ? edge.target : edge.source;
+                      const other      = nodeById.get(otherId);
+                      return (
+                        <div
+                          key={edge.id}
+                          className="list-item"
+                          style={{
+                            display: "flex", justifyContent: "space-between",
+                            alignItems: "center", cursor: "pointer", padding: "6px 10px",
+                          }}
+                          onClick={() => { setSelectedEdge(edge); onSelectEdge(edge); }}
+                        >
+                          <span style={{ fontSize: "0.8rem", display: "flex", alignItems: "center", gap: 6 }}>
+                            <span style={{
+                              color: isOutbound ? "var(--accent)" : "var(--warning)",
+                              fontWeight: 700, fontSize: "0.9rem",
+                            }}>
+                              {isOutbound ? "→" : "←"}
+                            </span>
+                            <span style={{
+                              display: "inline-block", width: 8, height: 8,
+                              borderRadius: "50%",
+                              background: COMMUNITY_HEX[other?.community ?? "support"] ?? "#abc7b6",
+                              flexShrink: 0,
+                            }} />
+                            {other?.label ?? otherId}
+                          </span>
+                          <span className="muted" style={{ fontSize: "0.72rem" }}>
+                            ×{edge.count}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Pin / compare */}
+              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                <button
+                  className="ghost"
+                  type="button"
+                  onClick={() => setPinned(prev =>
+                    prev.find(n => n.id === selectedNode.id)
+                      ? prev.filter(n => n.id !== selectedNode.id)
+                      : [...prev, selectedNode]
+                  )}
+                >
+                  {pinned.find(n => n.id === selectedNode.id) ? "Unpin" : "📌 Pin for comparison"}
+                </button>
+              </div>
+
+              {pinned.length > 0 && (
+                <div style={{ marginTop: 10 }}>
+                  <p className="label" style={{ marginBottom: 5 }}>Pinned for comparison</p>
+                  <div className="pinned">
+                    {pinned.map(node => (
+                      <span
+                        key={node.id}
+                        className="chip"
+                        style={{
+                          background: COMMUNITY_HEX[node.community] + "1a",
+                          borderColor: COMMUNITY_HEX[node.community] + "55",
+                          cursor: "pointer",
+                        }}
+                        title={COMMUNITY_DESC[node.community]}
+                        onClick={() => { setSelectedNode(node); onSelectNode(node); }}
+                      >
+                        {node.label}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div style={{ textAlign: "center", padding: "28px 0", color: "var(--ink-muted)" }}>
+              <p style={{ fontSize: "1.8rem", marginBottom: 8 }}>🔍</p>
+              <p style={{ fontSize: "0.83rem", lineHeight: 1.6 }}>
+                Click any node in the graph to inspect<br />
+                its role, connections, and live status.
+              </p>
+            </div>
+          )}
         </div>
       </div>
 
-      {/* ── Node detail panel ─────────────────────────────────────────── */}
+      {/* ── Node detail slide-in panel ─────────────────────────────────────── */}
       <DetailPanel
         open={nodePanel && !!selectedNode}
         title={selectedNode?.label ?? "Node"}
-        subtitle={selectedNode ? `${selectedNode.community} · ${selectedNode.type}` : undefined}
+        subtitle={selectedNode
+          ? `${COMMUNITY_LABEL[selectedNode.community] ?? selectedNode.community} · ${selectedNode.type}`
+          : undefined}
         onClose={() => setNodePanel(false)}
       >
         {selectedNode && (
           <div className="dp-field-grid">
-            <div><p className="label">ID</p><p className="mono">{selectedNode.id}</p></div>
-            <div><p className="label">Type</p><p>{selectedNode.type}</p></div>
-            <div><p className="label">Community</p><p>{selectedNode.community}</p></div>
             <div>
-              <p className="label">Live activity</p>
-              <p>{liveServiceIds.has(selectedNode.id) ? "● Active (SSE event)" : "No recent activity"}</p>
+              <p className="label">What is this?</p>
+              <p>{COMMUNITY_DESC[selectedNode.community] ?? selectedNode.community}</p>
             </div>
             <div>
-              <p className="label">Edge count</p>
-              <p>
-                {graph.edges.filter(
-                  (e) => e.source === selectedNode.id || e.target === selectedNode.id,
-                ).length}
+              <p className="label">Node type</p>
+              <p>{selectedNode.type}</p>
+            </div>
+            <div>
+              <p className="label">Connections</p>
+              <p style={{ fontWeight: 700, color: "var(--accent)" }}>
+                {nodeDegree.get(selectedNode.id) ?? 0} linked entities
+              </p>
+            </div>
+            <div>
+              <p className="label">Live threat activity</p>
+              <p>{liveServiceIds.has(selectedNode.id)
+                ? "⚡ Threat event detected in the last 12 seconds"
+                : "No recent activity detected"}
+              </p>
+            </div>
+            <div>
+              <p className="label">Entity ID</p>
+              <p className="mono" style={{ fontSize: "0.72rem", wordBreak: "break-all" }}>
+                {selectedNode.id}
               </p>
             </div>
           </div>
         )}
       </DetailPanel>
+
     </section>
   );
 }

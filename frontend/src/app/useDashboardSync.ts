@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { fetchBackendSnapshot } from "../api/backend";
-import { apiFetchJson } from "../api/client";
+import { ApiError, apiFetchJson } from "../api/client";
 import { endpoints } from "../api/endpoints";
 import { emptyOperationsSnapshot, fetchOperationsSnapshot } from "../api/operations";
 import type {
@@ -12,7 +12,9 @@ import type {
   InfraCluster,
   ServiceIndicator,
   TimelinePoint,
+  ThreatSummary,
 } from "../types/domain";
+import { emptyThreatSummary } from "../types/domain";
 import type { OperationsSnapshot } from "../types/operations";
 
 const emptyGraph: GraphData = { nodes: [], edges: [] };
@@ -37,6 +39,7 @@ export function useDashboardSync() {
   const [infraClustersData, setInfraClustersData] = useState<InfraCluster[]>([]);
   const [entitiesData, setEntitiesData] = useState<EntityProfile[]>([]);
   const [graphData, setGraphData] = useState<GraphData>(emptyGraph);
+  const [threatSummaryData, setThreatSummaryData] = useState<ThreatSummary>(emptyThreatSummary);
   const [operationsData, setOperationsData] = useState<OperationsSnapshot>(emptyOperationsSnapshot);
 
   useEffect(() => {
@@ -47,12 +50,20 @@ export function useDashboardSync() {
       setSyncError("");
 
       try {
-        const [snapshot, ops, health] = await Promise.all([
+        const [snapshotResult, opsResult, healthResult] = await Promise.allSettled([
           fetchBackendSnapshot(),
           fetchOperationsSnapshot(),
           apiFetchJson<Record<string, unknown>>(endpoints.health()),
         ]);
         if (cancelled) return;
+
+        if (snapshotResult.status !== "fulfilled") {
+          throw snapshotResult.reason;
+        }
+
+        const snapshot = snapshotResult.value;
+        const warnings = [...snapshot.warnings];
+        let nextStatus: BackendStatus = snapshot.mode === "live" ? "connected" : "degraded";
 
         setEventsData(snapshot.events);
         setTimelineData(snapshot.timelineCounts);
@@ -61,19 +72,45 @@ export function useDashboardSync() {
         setInfraClustersData(snapshot.infraClusters);
         setEntitiesData(snapshot.entities);
         setGraphData(snapshot.graph);
-        setOperationsData(ops);
-        setHealthGnnLoaded(Boolean(health.gnn_loaded));
-        setHealthModelVersion(typeof health.gnn_model_version === "string" ? health.gnn_model_version : null);
-        setHealthGnnMetrics(
-          health.gnn_metrics != null && typeof health.gnn_metrics === "object"
-            ? (health.gnn_metrics as Record<string, unknown>)
-            : {},
+        setThreatSummaryData(snapshot.threatSummary);
+
+        if (opsResult.status === "fulfilled") {
+          setOperationsData(opsResult.value);
+        } else {
+          setOperationsData(emptyOperationsSnapshot);
+          warnings.push("operations limited");
+          if (nextStatus === "connected") nextStatus = "degraded";
+        }
+
+        if (healthResult.status === "fulfilled") {
+          const health = healthResult.value;
+          setHealthGnnLoaded(Boolean(health.gnn_loaded));
+          setHealthModelVersion(typeof health.gnn_model_version === "string" ? health.gnn_model_version : null);
+          setHealthGnnMetrics(
+            health.gnn_metrics != null && typeof health.gnn_metrics === "object"
+              ? (health.gnn_metrics as Record<string, unknown>)
+              : {},
+          );
+        } else {
+          setHealthGnnLoaded(false);
+          setHealthModelVersion(null);
+          setHealthGnnMetrics({});
+          warnings.push("health limited");
+          if (nextStatus === "connected") nextStatus = "degraded";
+        }
+
+        setBackendStatus(nextStatus);
+        setBackendLabel(
+          warnings.length > 0 ? `${snapshot.connectionLabel} · ${warnings.join(", ")}` : snapshot.connectionLabel,
         );
-        setBackendStatus(snapshot.mode === "live" ? "connected" : "degraded");
-        const warnings = snapshot.warnings.length > 0 ? ` · ${snapshot.warnings.join(", ")}` : "";
-        setBackendLabel(`${snapshot.connectionLabel}${warnings}`);
       } catch (err) {
         if (cancelled) return;
+        if (err instanceof ApiError && err.status === 401) {
+          setBackendStatus("degraded");
+          setBackendLabel("Authentication required");
+          setSyncError("session_expired");
+          return;
+        }
         setBackendStatus("offline");
         setBackendLabel("Backend unavailable");
         setSyncError(err instanceof Error ? err.message : "backend_unreachable");
@@ -105,6 +142,7 @@ export function useDashboardSync() {
     infraClustersData,
     entitiesData,
     graphData,
+    threatSummaryData,
     operationsData,
     setOperationsData,
     triggerSync: () => setSyncNonce((current) => current + 1),

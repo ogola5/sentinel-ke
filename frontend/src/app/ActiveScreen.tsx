@@ -13,6 +13,7 @@ import type {
   InfraCluster,
   ServiceIndicator,
   SourceType,
+  ThreatSummary,
   TimelinePoint,
 } from "../types/domain";
 import type { OperationsSnapshot } from "../types/operations";
@@ -58,6 +59,7 @@ export default function ActiveScreen({
   eventsData,
   timelineData,
   indicatorsData,
+  threatSummaryData,
   infraClustersData,
   entitiesData,
   graphData,
@@ -94,6 +96,7 @@ export default function ActiveScreen({
   eventsData: EventRecord[];
   timelineData: TimelinePoint[];
   indicatorsData: ServiceIndicator[];
+  threatSummaryData: ThreatSummary;
   infraClustersData: InfraCluster[];
   entitiesData: EntityProfile[];
   graphData: GraphData;
@@ -156,6 +159,7 @@ export default function ActiveScreen({
       {activeScreen === "timeline" && (
         <Timeline
           indicators={indicatorsData}
+          threatSummary={threatSummaryData}
           selectedService={selectedServiceId}
           evidenceRefs={timelineEvidenceRefs}
           onSelectService={onSelectServiceId}

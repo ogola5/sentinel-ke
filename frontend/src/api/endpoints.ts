@@ -99,6 +99,7 @@ export const endpoints = {
   // AI / GNN
   aiTrainingRuns: (limit = 10, offset = 0) => withQuery("/v1/ai/gnn/runs", { limit, offset }),
   aiGNNTrain: () => withBase("/v1/ai/gnn/train"),
+  aiIndicatorsSummary: (days = 7) => withQuery("/v1/ai/indicators/summary", { days }),
 
   // Demo data seeding
   demoIngestCyber: () => withBase("/v1/demo/ingest-synthetic-gnn-data"),
