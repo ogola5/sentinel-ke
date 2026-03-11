@@ -37,6 +37,7 @@ export const NAV_SENSE = [
 
 export const NAV_ANALYZE = [
   { id: "graph", label: "Threat Graph", Icon: Network, tag: "S3" },
+  { id: "investigate", label: "Entity Investigation", Icon: AlertTriangle, tag: "S14" },
   { id: "gnn", label: "GNN Intelligence", Icon: Brain, tag: "S8" },
   { id: "crypto", label: "Crypto Posture", Icon: Lock, tag: "S9" },
 ] as const;

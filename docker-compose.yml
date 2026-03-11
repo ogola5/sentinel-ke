@@ -279,6 +279,159 @@ services:
               capabilities: [gpu]
     restart: unless-stopped
 
+  # ── DDoS alert worker (structural spike + stage classification) ─────────────
+  ddos-alert-worker:
+    build: *backend-build
+    <<: *backend-env
+    environment:
+      PYTHONPATH: /app
+    command: >
+      /bin/sh -c "while true; do
+        python -m app.analytics.layer3.ddos_alert_worker
+          --minutes 60
+          --baseline-minutes 360;
+        sleep 120;
+      done"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      opensearch:
+        condition: service_healthy
+    volumes: *backend-volumes
+    restart: unless-stopped
+
+  # ── Threat pattern worker (BEC, web-attack, vuln-overdue, backup-risk) ───────
+  threat-pattern-worker:
+    build: *backend-build
+    <<: *backend-env
+    environment:
+      PYTHONPATH: /app
+    command: >
+      /bin/sh -c "while true; do
+        python -m app.analytics.layer3.threat_pattern_worker
+          --minutes 1440;
+        sleep 300;
+      done"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes: *backend-volumes
+    restart: unless-stopped
+
+  # ── Path risk worker (attack-path scoring via GNN neighborhoods) ─────────────
+  path-risk-worker:
+    build: *backend-build
+    <<: *backend-env
+    environment:
+      PYTHONPATH: /app
+    command: >
+      /bin/sh -c "while true; do
+        python -m app.analytics.layer3.path_risk_worker
+          --window-key Wmid;
+        sleep 600;
+      done"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes: *backend-volumes
+    restart: unless-stopped
+
+  # ── Decision fusion worker (GNN 60% + path 25% + anomaly 15%) ───────────────
+  decision-fusion-worker:
+    build: *backend-build
+    <<: *backend-env
+    environment:
+      PYTHONPATH: /app
+    command: >
+      /bin/sh -c "while true; do
+        python -m app.analytics.layer3.decision_fusion_worker
+          --window-key Wmid;
+        sleep 600;
+      done"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes: *backend-volumes
+    restart: unless-stopped
+
+  # ── Drift monitoring worker (distribution shift + fairness + auto-rollback) ──
+  drift-monitor-worker:
+    build: *backend-build
+    <<: *backend-env
+    environment:
+      PYTHONPATH: /app
+    command: >
+      /bin/sh -c "while true; do
+        python -m app.analytics.layer3.drift_worker
+          --window-key Wmid;
+        sleep 1800;
+      done"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes: *backend-volumes
+    restart: unless-stopped
+
+  # ── Anomaly worker (feeds decision fusion anomaly signal) ──────────────────
+  anomaly-worker:
+    build: *backend-build
+    <<: *backend-env
+    environment:
+      PYTHONPATH: /app
+    command: >
+      /bin/sh -c "while true; do
+        python -m app.analytics.layer3.anomaly_worker
+          --minutes 60
+          --baseline-minutes 360;
+        sleep 300;
+      done"
+    depends_on:
+      opensearch:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    volumes: *backend-volumes
+    restart: unless-stopped
+
+  # ── Auto containment worker (policy-gated last-mile actioning) ────────────
+  auto-containment-worker:
+    build: *backend-build
+    <<: *backend-env
+    environment:
+      PYTHONPATH: /app
+    command: >
+      /bin/sh -c "while true; do
+        python -m app.analytics.layer3.auto_containment_worker
+          --prediction-type risk_gnn
+          --window-key Wmid;
+        sleep 300;
+      done"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes: *backend-volumes
+    restart: unless-stopped
+
+  # ── Legal evidence bundle worker (continuous legal packaging) ──────────────
+  legal-bundle-worker:
+    build: *backend-build
+    <<: *backend-env
+    environment:
+      PYTHONPATH: /app
+    command: >
+      /bin/sh -c "while true; do
+        python -m app.legal.bundle_seed_worker
+          --exported-by legal-bundle-worker
+          --include-stix
+          --limit ${LEGAL_AUTO_BUNDLE_LIMIT:-50};
+        sleep 900;
+      done"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes: *backend-volumes
+    restart: unless-stopped
+
   # ── Mule campaign analytics worker ─────────────────────────────────────────
   mule-campaign-worker:
     build: *backend-build

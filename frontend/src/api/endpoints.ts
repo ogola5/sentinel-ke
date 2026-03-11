@@ -99,6 +99,7 @@ export const endpoints = {
   // AI / GNN
   aiTrainingRuns: (limit = 10, offset = 0) => withQuery("/v1/ai/gnn/runs", { limit, offset }),
   aiGNNTrain: () => withBase("/v1/ai/gnn/train"),
+  aiIndicatorsSummary: (days = 7) => withQuery("/v1/ai/indicators/summary", { days }),
 
   // Demo data seeding
   demoIngestCyber: () => withBase("/v1/demo/ingest-synthetic-gnn-data"),
@@ -107,6 +108,18 @@ export const endpoints = {
   // Crypto posture
   cryptoPosture: () => withBase("/v1/crypto/posture"),
   cryptoSelfTest: () => withBase("/v1/crypto/posture/self-test"),
+
+  // AI forecasting, tool attribution, paths, fusion, NL copilot
+  aiForecast: (days = 30, horizon = 7, alpha = 0.3, beta = 0.1) =>
+    withQuery("/v1/ai/forecast", { days, horizon, alpha, beta }),
+  aiToolAttribution: (entityKey: string) =>
+    withQuery("/v1/ai/tool-attribution", { entity_key: entityKey }),
+  aiToolsSummary: (limit = 10) => withQuery("/v1/ai/tools/summary", { limit }),
+  aiPaths: (entityKey: string, windowKey?: string) =>
+    withQuery("/v1/ai/paths", { entity_key: entityKey, window_key: windowKey }),
+  aiFusion: (entityKey: string, windowKey?: string) =>
+    withQuery("/v1/ai/fusion", { entity_key: entityKey, window_key: windowKey }),
+  aiQuery: () => withBase("/v1/ai/query"),
 
   // Real-time SSE stream
   // Pass ?token=<FRONTEND_API_KEY> — EventSource cannot set custom headers

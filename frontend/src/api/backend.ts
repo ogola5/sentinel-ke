@@ -9,7 +9,9 @@ import type {
   ServiceIndicator,
   SourceType,
   TimelinePoint,
+  ThreatSummary,
 } from "../types/domain";
+import { emptyThreatSummary } from "../types/domain";
 import { apiFetchJson } from "./client";
 import { endpoints } from "./endpoints";
 
@@ -100,6 +102,7 @@ export type BackendSnapshot = {
   infraClusters: InfraCluster[];
   entities: EntityProfile[];
   graph: GraphData;
+  threatSummary: ThreatSummary;
 };
 
 const sourceSet = new Set<SourceType>(["telco", "bank", "gov", "osint", "infra"]);
@@ -593,12 +596,13 @@ export async function fetchBackendSnapshot(): Promise<BackendSnapshot> {
   const now = new Date();
   const start = new Date(now.getTime() - 60 * 60 * 1000);
 
-  const [eventsRes, timelineRes, campaignsRes, ddosAlertsRes, infraRes] = await Promise.allSettled([
+  const [eventsRes, timelineRes, campaignsRes, ddosAlertsRes, infraRes, threatSummaryRes] = await Promise.allSettled([
     apiFetchJson<EventsSearchResponse>(endpoints.eventsSearch(120)),
     apiFetchJson<EventsTimelineResponse>(endpoints.eventsTimeline(start.toISOString(), now.toISOString(), "5m")),
     apiFetchJson<CampaignsResponse>(endpoints.campaigns(25, 0)),
     apiFetchJson<DdosAlertsResponse>(endpoints.ddosAlerts(20, 0)),
     apiFetchJson<InfraClustersResponse>(endpoints.infraClusters(10, 0)),
+    apiFetchJson<ThreatSummary>(endpoints.aiIndicatorsSummary(7)),
   ]);
 
   const unwrap = <T>(result: PromiseSettledResult<T>, label: string, fallback: T): T => {
@@ -671,6 +675,9 @@ export async function fetchBackendSnapshot(): Promise<BackendSnapshot> {
       ? "Backend connected"
       : `Backend degraded (${Object.entries(ready.components ?? {}).map(([k, v]) => `${k}:${v}`).join(", ")})`;
 
+  const threatSummary: ThreatSummary =
+    threatSummaryRes.status === "fulfilled" ? threatSummaryRes.value : emptyThreatSummary;
+
   return {
     mode,
     connectionLabel,
@@ -682,6 +689,7 @@ export async function fetchBackendSnapshot(): Promise<BackendSnapshot> {
     infraClusters,
     entities,
     graph,
+    threatSummary,
   };
 }
 

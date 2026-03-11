@@ -296,3 +296,36 @@ def run_once(
         "cooldown_minutes": cooldown_minutes,
         "dry_run": dry_run,
     }
+
+
+def main() -> None:
+    import argparse
+    import json
+
+    from app.ledger.db import SessionLocal
+
+    parser = argparse.ArgumentParser(description="Sentinel-KE auto containment worker")
+    parser.add_argument("--prediction-type", default="risk_gnn")
+    parser.add_argument("--window-key", default="Wmid")
+    parser.add_argument("--window-end", default=None)
+    args = parser.parse_args()
+
+    window_end = None
+    if args.window_end:
+        window_end = datetime.fromisoformat(args.window_end.replace("Z", "+00:00"))
+
+    db = SessionLocal()
+    try:
+        out = run_once(
+            db=db,
+            prediction_type=args.prediction_type,
+            window_key=args.window_key,
+            window_end=window_end,
+        )
+        print(json.dumps(out))
+    finally:
+        db.close()
+
+
+if __name__ == "__main__":
+    main()

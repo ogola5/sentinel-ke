@@ -99,6 +99,78 @@ def reason_codes_to_d3fend_controls(reason_codes: Sequence[str] | None) -> List[
     return sorted(controls)
 
 
+# ---------------------------------------------------------------------------
+# MITRE ATT&CK Software Catalog
+# Curated subset mapping software/tool names to the techniques they implement.
+# Source: MITRE ATT&CK Enterprise v14 Software entries.
+# Used to enrich technique hits with the tools that operationalise them.
+# ---------------------------------------------------------------------------
+
+ATTACK_SOFTWARE_CATALOG: List[Dict[str, object]] = [
+    # ── Remote Access / C2 ──────────────────────────────────────────────────
+    {"software_id": "S0154", "name": "Cobalt Strike",    "type": "tool",    "techniques": ["T1055", "T1059", "T1071", "T1105", "T1566", "T1078"]},
+    {"software_id": "S0002", "name": "Mimikatz",         "type": "tool",    "techniques": ["T1003", "T1558", "T1649", "T1078"]},
+    {"software_id": "S0357", "name": "Impacket",         "type": "tool",    "techniques": ["T1021", "T1003", "T1558"]},
+    {"software_id": "S0106", "name": "Lazarus njRAT",    "type": "malware", "techniques": ["T1071", "T1059", "T1027", "T1105"]},
+    {"software_id": "S0099", "name": "Orcus RAT",        "type": "malware", "techniques": ["T1071", "T1059", "T1560"]},
+    {"software_id": "S0043", "name": "Empire",           "type": "tool",    "techniques": ["T1059", "T1071", "T1105", "T1078"]},
+    {"software_id": "S0111", "name": "Metasploit",       "type": "tool",    "techniques": ["T1059", "T1190", "T1021", "T1105"]},
+    # ── DDoS / Network Flood ────────────────────────────────────────────────
+    {"software_id": "S0375", "name": "Mirai",            "type": "malware", "techniques": ["T1498", "T1499", "T1584"]},
+    {"software_id": "S0099", "name": "LOIC",             "type": "tool",    "techniques": ["T1498"]},
+    {"software_id": "S0100", "name": "HOIC",             "type": "tool",    "techniques": ["T1498"]},
+    {"software_id": "S0376", "name": "SlowLoris",        "type": "tool",    "techniques": ["T1499"]},
+    # ── Phishing / Social Engineering ───────────────────────────────────────
+    {"software_id": "S0200", "name": "Evilginx2",        "type": "tool",    "techniques": ["T1566", "T1557", "T1539"]},
+    {"software_id": "S0201", "name": "GoPhish",          "type": "tool",    "techniques": ["T1566"]},
+    # ── Credential / SIM Fraud ──────────────────────────────────────────────
+    {"software_id": "S0174", "name": "Carbanak",         "type": "malware", "techniques": ["T1649", "T1078", "T1190", "T1657"]},
+    {"software_id": "S0175", "name": "FIN7 BOOSTWRITE", "type": "malware", "techniques": ["T1657", "T1078", "T1059"]},
+    # ── Data Exfiltration ───────────────────────────────────────────────────
+    {"software_id": "S0002", "name": "Exfiltron",        "type": "malware", "techniques": ["T1041", "T1048", "T1005"]},
+    {"software_id": "S0050", "name": "CozyDuke",         "type": "malware", "techniques": ["T1071", "T1041", "T1560"]},
+    # ── Ransomware / Destructive ────────────────────────────────────────────
+    {"software_id": "S0366", "name": "WannaCry",         "type": "malware", "techniques": ["T1486", "T1485", "T1190"]},
+    {"software_id": "S0367", "name": "NotPetya",         "type": "malware", "techniques": ["T1486", "T1485", "T1003"]},
+    {"software_id": "S0368", "name": "REvil/Sodinokibi", "type": "malware", "techniques": ["T1486", "T1490", "T1059"]},
+    # ── Reconnaissance ──────────────────────────────────────────────────────
+    {"software_id": "S0269", "name": "Nmap",             "type": "tool",    "techniques": ["T1046", "T1589"]},
+    {"software_id": "S0270", "name": "Shodan (attacker use)", "type": "tool", "techniques": ["T1589", "T1590"]},
+    # ── File Integrity / Persistence ────────────────────────────────────────
+    {"software_id": "S0111", "name": "Rootkit Generic",  "type": "malware", "techniques": ["T1014", "T1485", "T1547"]},
+]
+
+# Index: technique_id → list of software entries
+_TECHNIQUE_TO_SOFTWARE: Dict[str, List[Dict[str, object]]] = {}
+for _sw in ATTACK_SOFTWARE_CATALOG:
+    for _tid in (_sw.get("techniques") or []):
+        _TECHNIQUE_TO_SOFTWARE.setdefault(str(_tid), []).append(_sw)
+
+
+def techniques_to_tools(technique_ids: Sequence[str] | None) -> List[Dict[str, object]]:
+    """
+    Given a list of MITRE ATT&CK technique IDs, return the known software /
+    tools that implement those techniques, deduped by software_id.
+    """
+    seen_sw: set = set()
+    tools: List[Dict[str, object]] = []
+    for tid in technique_ids or []:
+        for sw in _TECHNIQUE_TO_SOFTWARE.get(str(tid), []):
+            sw_id = str(sw.get("software_id") or sw.get("name"))
+            if sw_id in seen_sw:
+                continue
+            seen_sw.add(sw_id)
+            tools.append({
+                "software_id": sw.get("software_id"),
+                "name":        sw.get("name"),
+                "type":        sw.get("type"),
+                "matched_techniques": [
+                    t for t in (sw.get("techniques") or []) if t in set(technique_ids or [])
+                ],
+            })
+    return tools
+
+
 def build_counterfactual(*, probability: float, threshold_score: float, top_feature_hint: str) -> Dict[str, object]:
     thr_prob = max(0.0, min(1.0, float(threshold_score) / 100.0))
     prob = max(0.0, min(1.0, float(probability)))

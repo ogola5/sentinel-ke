@@ -135,6 +135,73 @@ export async function fetchCryptoPosture(): Promise<CryptoPosture | null> {
   }
 }
 
+export async function fetchAIForecast(
+  days = 30,
+  horizon = 7,
+): Promise<Record<string, unknown> | null> {
+  try {
+    return await apiFetchJson<Record<string, unknown>>(endpoints.aiForecast(days, horizon));
+  } catch {
+    return null;
+  }
+}
+
+export async function fetchToolAttribution(entityKey: string): Promise<Record<string, unknown> | null> {
+  try {
+    return await apiFetchJson<Record<string, unknown>>(endpoints.aiToolAttribution(entityKey));
+  } catch {
+    return null;
+  }
+}
+
+export async function fetchToolsSummary(limit = 10): Promise<Record<string, unknown>[]> {
+  try {
+    const data = await apiFetchJson<{ items?: Record<string, unknown>[] } | Record<string, unknown>[]>(
+      endpoints.aiToolsSummary(limit),
+    );
+    return Array.isArray(data) ? data : (data.items ?? []);
+  } catch {
+    return [];
+  }
+}
+
+export async function fetchEntityPaths(
+  entityKey: string,
+  windowKey?: string,
+): Promise<Record<string, unknown> | null> {
+  try {
+    return await apiFetchJson<Record<string, unknown>>(endpoints.aiPaths(entityKey, windowKey));
+  } catch {
+    return null;
+  }
+}
+
+export async function fetchEntityFusion(
+  entityKey: string,
+  windowKey?: string,
+): Promise<Record<string, unknown> | null> {
+  try {
+    return await apiFetchJson<Record<string, unknown>>(endpoints.aiFusion(entityKey, windowKey));
+  } catch {
+    return null;
+  }
+}
+
+export async function queryAICopilot(
+  question: string,
+  context?: Record<string, unknown>,
+): Promise<Record<string, unknown> | null> {
+  try {
+    return await apiFetchJson<Record<string, unknown>>(endpoints.aiQuery(), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question, context }),
+    });
+  } catch {
+    return null;
+  }
+}
+
 export async function runCryptoSelfTest(): Promise<SelfTestResult[]> {
   try {
     const raw = await apiFetchJson<unknown>(endpoints.cryptoSelfTest());

@@ -1,3 +1,5 @@
+import { endpoints } from "./endpoints";
+
 export class ApiError extends Error {
   status: number;
   detail: string;
@@ -14,6 +16,10 @@ export class ApiError extends Error {
 }
 
 type ClientCredentialKey = "apiKey" | "accessToken" | "legalGrantToken" | "legalTarget";
+const SESSION_KEY = "sentinel_auth_session";
+const REFRESH_TOKEN_KEY = "sentinel_refresh_token";
+const PRINCIPAL_KEY = "sentinel_principal";
+const AUTH_EXPIRED_EVENT = "sentinel:auth-expired";
 
 const STORAGE_KEYS: Record<ClientCredentialKey, string> = {
   apiKey: "sentinel_api_key",
@@ -28,6 +34,16 @@ export type ClientCredentials = {
   legalGrantToken: string;
   legalTarget: string;
 };
+
+type RefreshSessionResponse = {
+  access_token?: unknown;
+  refresh_token?: unknown;
+  access_expires_at?: unknown;
+  refresh_expires_at?: unknown;
+  principal?: unknown;
+};
+
+let refreshInFlight: Promise<boolean> | null = null;
 
 const readFromStorage = (key: ClientCredentialKey): string => {
   if (typeof window === "undefined") return "";
@@ -123,8 +139,100 @@ const parseResponseBody = (text: string): unknown => {
   }
 };
 
+const getStoredRefreshToken = (): string => {
+  if (typeof window === "undefined") return "";
+  return window.localStorage.getItem(REFRESH_TOKEN_KEY)?.trim() ?? "";
+};
+
+const clearAuthStorage = (): void => {
+  if (typeof window === "undefined") return;
+  window.localStorage.removeItem(SESSION_KEY);
+  window.localStorage.removeItem(STORAGE_KEYS.accessToken);
+  window.localStorage.removeItem(REFRESH_TOKEN_KEY);
+  window.localStorage.removeItem(PRINCIPAL_KEY);
+};
+
+const notifyAuthExpired = (): void => {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new CustomEvent(AUTH_EXPIRED_EVENT));
+};
+
+const persistRefreshedSession = (payload: unknown): boolean => {
+  if (typeof window === "undefined" || typeof payload !== "object" || payload === null) return false;
+  const session = payload as RefreshSessionResponse;
+  if (
+    typeof session.access_token !== "string" ||
+    typeof session.refresh_token !== "string" ||
+    typeof session.access_expires_at !== "string" ||
+    typeof session.refresh_expires_at !== "string" ||
+    session.principal == null
+  ) {
+    return false;
+  }
+
+  const normalized = {
+    access_token: session.access_token,
+    refresh_token: session.refresh_token,
+    access_expires_at: session.access_expires_at,
+    refresh_expires_at: session.refresh_expires_at,
+    principal: session.principal,
+  };
+
+  window.localStorage.setItem(SESSION_KEY, JSON.stringify(normalized));
+  window.localStorage.setItem(STORAGE_KEYS.accessToken, normalized.access_token);
+  window.localStorage.setItem(REFRESH_TOKEN_KEY, normalized.refresh_token);
+  window.localStorage.setItem(PRINCIPAL_KEY, JSON.stringify(normalized.principal));
+  return true;
+};
+
+const isAuthLifecycleRequest = (url: string): boolean =>
+  url.includes("/v1/auth/login") || url.includes("/v1/auth/refresh") || url.includes("/v1/auth/logout");
+
+const refreshAccessToken = async (): Promise<boolean> => {
+  if (refreshInFlight) {
+    return refreshInFlight;
+  }
+
+  const refreshToken = getStoredRefreshToken();
+  if (!refreshToken) {
+    clearAuthStorage();
+    notifyAuthExpired();
+    return false;
+  }
+
+  refreshInFlight = (async () => {
+    try {
+      const response = await fetch(endpoints.authRefresh(), {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ refresh_token: refreshToken }),
+      });
+      const text = await response.text();
+      const data = parseResponseBody(text);
+      if (!response.ok || !persistRefreshedSession(data)) {
+        clearAuthStorage();
+        notifyAuthExpired();
+        return false;
+      }
+      return true;
+    } catch {
+      clearAuthStorage();
+      notifyAuthExpired();
+      return false;
+    } finally {
+      refreshInFlight = null;
+    }
+  })();
+
+  return refreshInFlight;
+};
+
 export type ApiFetchOptions = {
   requireLegalGrantToken?: boolean;
+  skipAuthRefresh?: boolean;
 };
 
 export async function apiFetchJson<T>(
@@ -132,41 +240,61 @@ export async function apiFetchJson<T>(
   init: RequestInit = {},
   options: ApiFetchOptions = {},
 ): Promise<T> {
-  const headers = new Headers(init.headers ?? {});
-  if (!headers.has("Accept")) headers.set("Accept", "application/json");
-
   const method = (init.method ?? "GET").toUpperCase();
-  if (method !== "GET" && !headers.has("Content-Type")) {
-    headers.set("Content-Type", "application/json");
-  }
 
-  const key = getConfiguredApiKey();
-  if (key && !headers.has("X-API-Key")) {
-    headers.set("X-API-Key", key);
-  }
-
-  const accessToken = getConfiguredAccessToken();
-  if (accessToken && !headers.has("Authorization")) {
-    headers.set("Authorization", `Bearer ${accessToken}`);
-  }
-
-  const legalToken = getConfiguredLegalGrantToken();
-  const legalTarget = getConfiguredLegalTarget();
-  if (options.requireLegalGrantToken) {
-    if (!legalToken) {
-      throw new ApiError(400, "missing_client_legal_grant_token");
+  const buildHeaders = (): Headers => {
+    const headers = new Headers(init.headers ?? {});
+    if (!headers.has("Accept")) headers.set("Accept", "application/json");
+    if (method !== "GET" && !headers.has("Content-Type")) {
+      headers.set("Content-Type", "application/json");
     }
-    if (!headers.has("X-Legal-Grant-Token")) {
-      headers.set("X-Legal-Grant-Token", legalToken);
+
+    const key = getConfiguredApiKey();
+    if (key && !headers.has("X-API-Key")) {
+      headers.set("X-API-Key", key);
     }
-    if (legalTarget && !headers.has("X-Legal-Target")) {
-      headers.set("X-Legal-Target", legalTarget);
+
+    const accessToken = getConfiguredAccessToken();
+    if (accessToken && !headers.has("Authorization")) {
+      headers.set("Authorization", `Bearer ${accessToken}`);
+    }
+
+    const legalToken = getConfiguredLegalGrantToken();
+    const legalTarget = getConfiguredLegalTarget();
+    if (options.requireLegalGrantToken) {
+      if (!legalToken) {
+        throw new ApiError(400, "missing_client_legal_grant_token");
+      }
+      if (!headers.has("X-Legal-Grant-Token")) {
+        headers.set("X-Legal-Grant-Token", legalToken);
+      }
+      if (legalTarget && !headers.has("X-Legal-Target")) {
+        headers.set("X-Legal-Target", legalTarget);
+      }
+    }
+
+    return headers;
+  };
+
+  const send = async (): Promise<{ response: Response; data: unknown }> => {
+    const response = await fetch(url, { ...init, headers: buildHeaders() });
+    const text = await response.text();
+    return { response, data: parseResponseBody(text) };
+  };
+
+  let { response, data } = await send();
+
+  if (
+    response.status === 401 &&
+    !options.skipAuthRefresh &&
+    !isAuthLifecycleRequest(url) &&
+    (getStoredRefreshToken() || getConfiguredAccessToken())
+  ) {
+    const refreshed = await refreshAccessToken();
+    if (refreshed) {
+      ({ response, data } = await send());
     }
   }
-
-  const response = await fetch(url, { ...init, headers });
-  const text = await response.text();
-  const data = parseResponseBody(text);
 
   if (!response.ok) {
     const payload = typeof data === "object" && data !== null ? (data as Record<string, unknown>) : null;
@@ -185,6 +313,10 @@ export async function apiFetchJson<T>(
       (errorObj && "request_id" in errorObj && String(errorObj.request_id)) ||
       response.headers.get("X-Request-ID") ||
       undefined;
+    if (response.status === 401) {
+      clearAuthStorage();
+      notifyAuthExpired();
+    }
     throw new ApiError(response.status, detail, code, requestId);
   }
 

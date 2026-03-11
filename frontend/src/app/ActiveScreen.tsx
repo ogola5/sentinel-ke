@@ -13,6 +13,7 @@ import type {
   InfraCluster,
   ServiceIndicator,
   SourceType,
+  ThreatSummary,
   TimelinePoint,
 } from "../types/domain";
 import type { OperationsSnapshot } from "../types/operations";
@@ -31,6 +32,7 @@ const DefenseCenter = lazy(() => import("../screens/respond/DefenseCenter"));
 const FederationDashboard = lazy(() => import("../screens/govern/FederationDashboard"));
 const CorruptionIntel = lazy(() => import("../screens/govern/CorruptionIntel"));
 const AuditLog = lazy(() => import("../screens/govern/AuditLog"));
+const EntityInvestigation = lazy(() => import("../screens/EntityInvestigation"));
 const CentralCommand = lazy(() => import("../screens/command/CentralCommand"));
 const ExecBrief = lazy(() => import("../screens/command/ExecBrief"));
 const UserManagement = lazy(() => import("../screens/admin/UserManagement"));
@@ -58,6 +60,7 @@ export default function ActiveScreen({
   eventsData,
   timelineData,
   indicatorsData,
+  threatSummaryData,
   infraClustersData,
   entitiesData,
   graphData,
@@ -94,6 +97,7 @@ export default function ActiveScreen({
   eventsData: EventRecord[];
   timelineData: TimelinePoint[];
   indicatorsData: ServiceIndicator[];
+  threatSummaryData: ThreatSummary;
   infraClustersData: InfraCluster[];
   entitiesData: EntityProfile[];
   graphData: GraphData;
@@ -156,6 +160,7 @@ export default function ActiveScreen({
       {activeScreen === "timeline" && (
         <Timeline
           indicators={indicatorsData}
+          threatSummary={threatSummaryData}
           selectedService={selectedServiceId}
           evidenceRefs={timelineEvidenceRefs}
           onSelectService={onSelectServiceId}
@@ -223,6 +228,7 @@ export default function ActiveScreen({
       )}
       {activeScreen === "federation" && <FederationDashboard />}
       {activeScreen === "audit" && <AuditLog />}
+      {activeScreen === "investigate" && <EntityInvestigation />}
     </Suspense>
   );
 }

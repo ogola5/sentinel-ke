@@ -29,6 +29,10 @@ from app.analytics.layer3.ai_intel import (
     event_types_to_kill_chain_stage,
     reason_codes_to_d3fend_controls,
 )
+from app.analytics.layer3.evidence_graph import (
+    build_entity_graph_paths,
+    recent_entity_event_hashes,
+)
 from app.analytics.explainability import (
     heuristic_signal_attributions,
     summarize_feature_attributions,
@@ -42,6 +46,7 @@ from app.analytics.layer3.gnn_model import (
     integrated_gradients_attributions,
     train_graphsage,
 )
+from app.analytics.layer3.post_prediction_pipeline import run_post_prediction_pipeline
 from app.campaign.models import Campaign, CampaignEntity
 from app.core.config import settings
 from app.core.security import compute_event_hash, sha256_hex, stable_json_dumps
@@ -1231,11 +1236,27 @@ def run_once(
             probabilities=train_result.probabilities,
         )
         if fairness.get("fairness_flag") == "FAIL":
-            log.warning(
-                "fairness_policy_violation model_version=%s max_positive_rate_disparity=%.3f",
+            disparity = float(fairness.get("max_positive_rate_disparity") or 0.0)
+            threshold = float(settings.fairness_disparity_threshold)
+            log.error(
+                "fairness_gate_BLOCKED model_version=%s max_positive_rate_disparity=%.3f threshold=%.3f",
                 model_version,
-                fairness.get("max_positive_rate_disparity", 0),
+                disparity,
+                threshold,
             )
+            db.rollback()
+            return {
+                "status": "blocked",
+                "gate": "fairness",
+                "model_version": model_version,
+                "max_positive_rate_disparity": disparity,
+                "threshold": threshold,
+                "detail": (
+                    "Training run blocked by fairness governance gate. "
+                    "max_positive_rate_disparity exceeds FAIRNESS_DISPARITY_THRESHOLD. "
+                    "Investigate entity-type label imbalance before retraining."
+                ),
+            }
 
         provenance = _compute_provenance_metrics(
             node_meta=dataset.node_meta,
@@ -1243,14 +1264,28 @@ def run_once(
             threshold_score=70.0,
         )
         min_real_ratio = max(0.0, min(1.0, float(settings.gnn_min_real_ratio)))
-        real_data_gate_passed = float(provenance.get("real_ratio") or 0.0) >= min_real_ratio
+        real_ratio = float(provenance.get("real_ratio") or 0.0)
+        real_data_gate_passed = real_ratio >= min_real_ratio
         if not real_data_gate_passed:
-            log.warning(
-                "real_data_gate_failed model_version=%s real_ratio=%.3f min_required=%.3f",
+            log.error(
+                "real_data_gate_BLOCKED model_version=%s real_ratio=%.3f min_required=%.3f",
                 model_version,
-                float(provenance.get("real_ratio") or 0.0),
+                real_ratio,
                 min_real_ratio,
             )
+            db.rollback()
+            return {
+                "status": "blocked",
+                "gate": "real_data",
+                "model_version": model_version,
+                "real_ratio": real_ratio,
+                "min_real_ratio": min_real_ratio,
+                "detail": (
+                    "Training run blocked by real-data governance gate. "
+                    "Insufficient proportion of real (non-synthetic) data. "
+                    "Ingest more real threat data before retraining."
+                ),
+            }
 
         run = GNNTrainingRun(
             model_version=model_version,
@@ -1314,6 +1349,27 @@ def run_once(
                         "brier_score": float(train_result.metrics.get("brier_score") or 0.0),
                         "eval_samples": int(train_result.metrics.get("eval_samples") or 0),
                     },
+                },
+                "label_strategy": {
+                    "label_source": "heuristic_risk_flags",
+                    "label_quality": "weak",
+                    "positive_definition": (
+                        "Entity has at least one risk flag (ddos_alert, campaign_entity, "
+                        "vpn_cluster_member, ddos_cluster_member) or exceeds event-count threshold. "
+                        "These are NOT confirmed incident labels from ground-truth investigations."
+                    ),
+                    "eval_caveat": (
+                        "AUC/F1/Precision/Recall metrics are computed on a holdout split of the "
+                        "same weak-label dataset used for training. They measure consistency with "
+                        "the heuristic label logic, NOT real-world detection accuracy against "
+                        "confirmed incidents. Do not use these numbers to claim world-class "
+                        "detection performance without external ground-truth validation."
+                    ),
+                    "recommended_upgrade": (
+                        "Attach confirmed_incident boolean labels from DFIR investigation outcomes "
+                        "to event_log rows. Re-train with those as ground truth to obtain "
+                        "externally validated detection metrics."
+                    ),
                 },
                 "explainability": {
                     "method": attribution_method,
@@ -1496,15 +1552,19 @@ def run_once(
                 "risk_indicator": bool(is_indicator),
             }
 
-            evidence_hashes: List[str] = []
-            if is_indicator:
-                evidence_hashes = _event_hashes(
-                    db,
-                    entity_key=entity_key,
-                    window_start=dataset.window_start,
-                    window_end=dataset.window_end,
-                    limit=20,
-                )
+            evidence_hashes: List[str] = recent_entity_event_hashes(
+                db,
+                entity_key=entity_key,
+                window_start=dataset.window_start,
+                window_end=dataset.window_end,
+                limit=20,
+            )
+            evidence_paths = build_entity_graph_paths(
+                db,
+                entity_key=entity_key,
+                window_start=dataset.window_start,
+                window_end=dataset.window_end,
+            )
 
             expl = db.query(AIExplanation).filter(AIExplanation.prediction_id == pred.id).first()
             expl_payload = {
@@ -1528,7 +1588,7 @@ def run_once(
             if expl:
                 expl.reason_codes = reasons
                 expl.evidence_hashes = evidence_hashes
-                expl.evidence_paths = []
+                expl.evidence_paths = evidence_paths
                 expl.recommended_controls_json = controls
                 expl.counterfactual_json = counterfactual
                 expl.details_json = expl_payload
@@ -1538,7 +1598,7 @@ def run_once(
                         prediction_id=pred.id,
                         reason_codes=reasons,
                         evidence_hashes=evidence_hashes,
-                        evidence_paths=[],
+                        evidence_paths=evidence_paths,
                         recommended_controls_json=controls,
                         counterfactual_json=counterfactual,
                         details_json=expl_payload,
@@ -1569,6 +1629,15 @@ def run_once(
         db.rollback()
         return {"status": "error", "stage": "persist", "detail": str(exc)}
 
+    post_pipeline = run_post_prediction_pipeline(
+        db=db,
+        prediction_type=prediction_type,
+        window_key=dataset.window_key,
+        window_end=dataset.window_end,
+        model_version=model_version,
+        seed_legal_bundles=True,
+    )
+
     return {
         "status": "ok",
         "gnn_run_id": str(run.id),
@@ -1597,6 +1666,7 @@ def run_once(
         "model_based_explanations": int(len(attribution_map)),
         "metrics": train_result.metrics,
         "artifact_path": artifact_path,
+        "post_pipeline": post_pipeline,
         "legal_notice": LEGAL_RISK_NOTICE,
     }
 
