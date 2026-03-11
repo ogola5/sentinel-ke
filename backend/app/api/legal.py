@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db, pagination_params
+from app.legal.bundle_seed import seed_evidence_bundles_once
 from app.legal.schemas import (
     ApprovalPayloadRequest,
     LegalAuthorizationRequest,
@@ -222,3 +224,32 @@ def refresh_evidence_anchor(
     except Exception:
         log.exception("refresh_evidence_anchor_failed")
         raise HTTPException(status_code=500, detail="internal_error")
+
+
+# ---------------------------------------------------------------------------
+# Bulk bundle generation
+# Seeds evidence bundles for all campaigns that have entity evidence.
+# Creates a default standing legal order if no active order exists.
+# Safe to call repeatedly — skips campaigns that already have a bundle.
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "/evidence/bundles/seed",
+    summary="Bulk-generate evidence bundles for all campaigns (creates default legal order if needed)",
+    status_code=200,
+)
+def seed_evidence_bundles(
+    exported_by: str = Query(default="system-seed"),
+    include_stix: bool = Query(default=True),
+    limit: int = Query(default=50, ge=1, le=200),
+    db: Session = Depends(get_db),
+):
+    try:
+        return seed_evidence_bundles_once(
+            db=db,
+            exported_by=exported_by,
+            include_stix=include_stix,
+            limit=limit,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))

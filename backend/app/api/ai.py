@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import uuid
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
@@ -29,6 +29,8 @@ from app.analytics.ai_models import (
     GNNTrainingRun,
     ThreatIntelIndicator,
 )
+from app.analytics.layer3.forecasting import build_risk_forecast
+from app.analytics.layer3.local_analyst_query import answer_local_analyst_query
 from app.analytics.layer3.threat_intel_worker import export_stix_bundle, import_stix_bundle
 
 log = logging.getLogger("sentinel.api.ai")
@@ -938,6 +940,110 @@ def list_threat_intel(
     }
 
 
+# ── /v1/ai/tool-attribution ───────────────────────────────────────────────────
+@router.get("/tool-attribution")
+def tool_attribution(
+    entity_key: str = Query(..., description="Entity key to look up"),
+    db: Session = Depends(get_db),
+):
+    """
+    Enriches entity's ATT&CK technique hits with known attacker tools/malware
+    from the curated MITRE ATT&CK Software catalog.
+    """
+    from app.analytics.ai_models import AIAttackTechniqueHit
+    from app.analytics.layer3.ai_intel import techniques_to_tools
+
+    rows = (
+        db.query(AIAttackTechniqueHit)
+        .filter(AIAttackTechniqueHit.entity_key == entity_key)
+        .order_by(AIAttackTechniqueHit.confidence.desc())
+        .limit(50)
+        .all()
+    )
+    if not rows:
+        return {
+            "entity_key": entity_key,
+            "techniques": [],
+            "tools": [],
+            "summary": {"technique_count": 0, "tool_count": 0, "top_tactic": None},
+        }
+    techniques = [
+        {
+            "technique_id": r.technique_id,
+            "tactic": r.tactic,
+            "confidence": float(r.confidence or 0.0),
+            "source_event_type": r.source_event_type,
+        }
+        for r in rows
+    ]
+    technique_ids = [r.technique_id for r in rows]
+    tools = techniques_to_tools(technique_ids)
+    tactic_counts: Dict[str, int] = {}
+    for t in techniques:
+        tac = str(t.get("tactic") or "unknown")
+        tactic_counts[tac] = tactic_counts.get(tac, 0) + 1
+    top_tactic = max(tactic_counts, key=lambda k: tactic_counts[k]) if tactic_counts else None
+    return {
+        "entity_key": entity_key,
+        "techniques": techniques,
+        "tools": tools,
+        "summary": {
+            "technique_count": len(techniques),
+            "tool_count": len(tools),
+            "top_tactic": top_tactic,
+            "tactic_distribution": tactic_counts,
+        },
+    }
+
+
+# ── /v1/ai/tools/summary ─────────────────────────────────────────────────────
+@router.get("/tools/summary")
+def tools_summary(
+    min_score: float = Query(default=70.0, ge=0.0, le=100.0),
+    limit: int = Query(default=20, ge=1, le=100),
+    db: Session = Depends(get_db),
+):
+    """
+    Top attacker tools inferred from ATT&CK technique hits of all high-risk entities.
+    """
+    from app.analytics.ai_models import AIAttackTechniqueHit, AIPrediction
+    from app.analytics.layer3.ai_intel import techniques_to_tools
+    from collections import Counter
+
+    high_risk = (
+        db.query(AIPrediction.entity_key)
+        .filter(AIPrediction.prediction_type == "risk_gnn")
+        .filter(AIPrediction.score >= min_score)
+        .order_by(AIPrediction.score.desc())
+        .limit(limit)
+        .all()
+    )
+    entity_keys = [str(r[0]) for r in high_risk]
+    if not entity_keys:
+        return {"tools": [], "techniques": [], "entity_count": 0}
+    tech_rows = (
+        db.query(AIAttackTechniqueHit)
+        .filter(AIAttackTechniqueHit.entity_key.in_(entity_keys))
+        .all()
+    )
+    all_technique_ids = [r.technique_id for r in tech_rows]
+    tactic_counter: Counter = Counter(r.tactic for r in tech_rows)
+    tool_counter: Counter = Counter()
+    for r in tech_rows:
+        for sw in techniques_to_tools([r.technique_id]):
+            tool_counter[sw["name"]] += 1
+    top_tools = [{"name": n, "entity_hits": c} for n, c in tool_counter.most_common(20)]
+    tools = techniques_to_tools(all_technique_ids)
+    return {
+        "entity_count": len(entity_keys),
+        "min_score_filter": min_score,
+        "top_tools": top_tools,
+        "tactic_distribution": dict(tactic_counter.most_common()),
+        "unique_tools_inferred": len({sw["name"] for sw in tools}),
+        "unique_techniques_observed": len(set(all_technique_ids)),
+    }
+
+
 @router.post("/threat-intel/import-stix")
 def import_threat_intel(bundle: dict, source: str = Query(default="stix"), db: Session = Depends(get_db)):
     try:
@@ -1136,4 +1242,82 @@ def threat_indicators_summary(
         "kill_chain_distribution": kill_chain_distribution,
         "event_totals":          event_totals,
         "forecast":              forecast,
+    }
+
+
+# ── /v1/ai/forecast ───────────────────────────────────────────────────────────
+@router.get("/forecast")
+def ai_risk_forecast(
+    days: int = Query(default=14, ge=3, le=60, description="History window in days"),
+    horizon: int = Query(default=7, ge=1, le=30, description="Forecast horizon in days"),
+    alpha: float = Query(default=0.3, ge=0.05, le=0.95, description="Level smoothing factor"),
+    beta: float = Query(default=0.1, ge=0.01, le=0.5, description="Trend smoothing factor"),
+    db: Session = Depends(get_db),
+):
+    from sqlalchemy import text as _text
+
+    hist_sql = _text("""
+        SELECT
+            date_trunc('day', window_end AT TIME ZONE 'UTC')::date AS day,
+            AVG(score)   AS avg_score,
+            MAX(score)   AS max_score,
+            COUNT(*)     AS n
+        FROM ai_prediction
+        WHERE prediction_type = 'risk_gnn'
+          AND window_end >= NOW() - INTERVAL '1 day' * :days
+        GROUP BY 1
+        ORDER BY 1
+    """)
+    rows = db.execute(hist_sql, {"days": days}).fetchall()
+    history = [
+        {
+            "date": str(r[0]),
+            "avg_score": round(float(r[1] or 0.0), 2),
+            "max_score": round(float(r[2] or 0.0), 2),
+            "n": int(r[3] or 0),
+        }
+        for r in rows
+    ]
+    return build_risk_forecast(
+        history=history,
+        horizon=horizon,
+        alpha=alpha,
+        beta=beta,
+    )
+
+
+# ---------------------------------------------------------------------------
+# NL Analyst Copilot
+# POST /v1/ai/query
+# ---------------------------------------------------------------------------
+
+class CopilotQueryRequest(BaseModel):
+    question: str
+    context: dict[str, Any] | None = None
+
+
+@router.post("/query", summary="NL analyst copilot — ask Sentinel Copilot a question")
+def nl_copilot_query(payload: CopilotQueryRequest, db: Session = Depends(get_db)):
+    """
+    Local natural-language analyst copilot.
+    """
+    if not settings.ai_copilot_enabled:
+        raise HTTPException(status_code=503, detail="ai_copilot_disabled")
+    try:
+        result = answer_local_analyst_query(
+            db=db,
+            question=payload.question.strip(),
+            context=payload.context,
+        )
+    except Exception as exc:
+        log.exception("copilot_error: %s", exc)
+        raise HTTPException(status_code=500, detail=f"local_copilot_error: {exc}")
+
+    return {
+        "answer": result["answer"],
+        "model": result["model"],
+        "intent": result.get("intent"),
+        "sources": result.get("sources", []),
+        "question": payload.question,
+        "context_provided": payload.context is not None,
     }

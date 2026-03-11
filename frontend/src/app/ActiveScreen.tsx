@@ -32,6 +32,7 @@ const DefenseCenter = lazy(() => import("../screens/respond/DefenseCenter"));
 const FederationDashboard = lazy(() => import("../screens/govern/FederationDashboard"));
 const CorruptionIntel = lazy(() => import("../screens/govern/CorruptionIntel"));
 const AuditLog = lazy(() => import("../screens/govern/AuditLog"));
+const EntityInvestigation = lazy(() => import("../screens/EntityInvestigation"));
 const CentralCommand = lazy(() => import("../screens/command/CentralCommand"));
 const ExecBrief = lazy(() => import("../screens/command/ExecBrief"));
 const UserManagement = lazy(() => import("../screens/admin/UserManagement"));
@@ -227,6 +228,7 @@ export default function ActiveScreen({
       )}
       {activeScreen === "federation" && <FederationDashboard />}
       {activeScreen === "audit" && <AuditLog />}
+      {activeScreen === "investigate" && <EntityInvestigation />}
     </Suspense>
   );
 }

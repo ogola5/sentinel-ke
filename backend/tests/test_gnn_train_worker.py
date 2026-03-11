@@ -102,6 +102,17 @@ def test_gnn_train_worker_persists_outputs(monkeypatch):
         monkeypatch.setattr(gnn_train_worker, "load_dataset", lambda *args, **kwargs: dataset)
         monkeypatch.setattr(gnn_train_worker, "train_graphsage", lambda *args, **kwargs: fake_train)
         monkeypatch.setattr(gnn_train_worker, "_persist_artifact", lambda **kwargs: "/tmp/gnn/model.pt")
+        monkeypatch.setattr(gnn_train_worker, "recent_entity_event_hashes", lambda *args, **kwargs: ["e1", "e2"])
+        monkeypatch.setattr(
+            gnn_train_worker,
+            "build_entity_graph_paths",
+            lambda *args, **kwargs: [{"path": ["account_h:a1", "service_id:s1"], "hop_count": 1, "shared_events": 2}],
+        )
+        monkeypatch.setattr(
+            gnn_train_worker,
+            "run_post_prediction_pipeline",
+            lambda **kwargs: {"path_scores_upserted": 3, "decision_fusions_upserted": 3},
+        )
 
         out = gnn_train_worker.run_once(
             db=db,
@@ -134,6 +145,7 @@ def test_gnn_train_worker_persists_outputs(monkeypatch):
         expl = db.query(AIExplanation).all()
         assert len(expl) == 3
         assert all("legal_notice" in (e.details_json or {}) for e in expl)
+        assert all((e.evidence_paths or []) for e in expl)
 
         emb = db.query(EntityEmbedding).filter(EntityEmbedding.model_version == "gnn-sage-v1").all()
         assert len(emb) == 3

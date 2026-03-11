@@ -51,7 +51,14 @@ from app.analytics.ai_models import (
     GNNTrainingRun,
     GraphFeatureSnapshot,
 )
-from app.analytics.layer3.gnn_train_worker import _compute_fairness_metrics
+from app.analytics.layer3.evidence_graph import (
+    build_entity_graph_paths,
+    recent_entity_event_hashes,
+)
+from app.analytics.layer3.gnn_train_worker import (
+    _compute_fairness_metrics,
+    _compute_provenance_metrics,
+)
 from app.analytics.explainability import (
     heuristic_signal_attributions,
     summarize_feature_attributions,
@@ -90,6 +97,63 @@ LEGAL_RISK_NOTICE = (
 # Dataset loader
 # ---------------------------------------------------------------------------
 
+
+def _corruption_provenance_by_entity(
+    db: Session,
+    *,
+    entity_keys: Sequence[str],
+    window_start: datetime,
+    window_end: datetime,
+) -> Dict[str, Dict[str, object]]:
+    rows = db.execute(
+        text(
+            """
+            SELECT
+                ee.entity_key,
+                COALESCE(sr.source_type, 'unknown') AS source_type,
+                COUNT(*)::int AS n
+            FROM event_entity_index ee
+            JOIN event_log el ON el.event_hash = ee.event_hash
+            LEFT JOIN source_registry sr ON sr.source_id = el.source_id
+            WHERE ee.entity_key = ANY(:entity_keys)
+              AND el.occurred_at >= :window_start
+              AND el.occurred_at <= :window_end
+            GROUP BY ee.entity_key, COALESCE(sr.source_type, 'unknown')
+            """
+        ),
+        {
+            "entity_keys": list(entity_keys),
+            "window_start": window_start,
+            "window_end": window_end,
+        },
+    ).fetchall()
+
+    grouped: Dict[str, Dict[str, int]] = {}
+    for entity_key, source_type, n in rows:
+        grouped.setdefault(str(entity_key), {})
+        grouped[str(entity_key)][str(source_type or "unknown").lower()] = int(n or 0)
+
+    out: Dict[str, Dict[str, object]] = {}
+    for entity_key in entity_keys:
+        counts = grouped.get(str(entity_key), {})
+        total = max(1, sum(int(v) for v in counts.values()))
+        synthetic_count = int(counts.get("synthetic", 0))
+        real_count = max(0, total - synthetic_count)
+        if synthetic_count and real_count:
+            provenance_tag = "mixed"
+        elif real_count > 0:
+            provenance_tag = "real"
+        elif synthetic_count > 0:
+            provenance_tag = "synthetic"
+        else:
+            provenance_tag = "unknown"
+        out[str(entity_key)] = {
+            "provenance_tag": provenance_tag,
+            "real_signal_ratio": round(real_count / float(total), 6),
+            "source_type_counts": counts,
+        }
+    return out
+
 def _load_corruption_dataset(
     db: Session,
     *,
@@ -126,6 +190,19 @@ def _load_corruption_dataset(
                     window_key, window_end)
         return None
 
+    window_start = (
+        db.query(func.min(GraphFeatureSnapshot.window_start))
+        .filter(GraphFeatureSnapshot.window_key == window_key)
+        .filter(GraphFeatureSnapshot.window_end == window_end)
+        .scalar()
+    ) or window_end
+    provenance_by_entity = _corruption_provenance_by_entity(
+        db,
+        entity_keys=[str(s.entity_key) for s in snapshots],
+        window_start=window_start,
+        window_end=window_end,
+    )
+
     # ── Feature matrix ────────────────────────────────────────────────
     entity_keys:    List[str]           = []
     entity_types:   List[str]           = []
@@ -152,12 +229,16 @@ def _load_corruption_dataset(
         entity_types.append(str(snap.entity_type))
         feature_matrix.append(vec)
         labels.append(label)
+        provenance = dict(provenance_by_entity.get(str(snap.entity_key)) or {})
         node_meta.append({
             "entity_type":  str(snap.entity_type),
             "risk_flags":   flags,
             "event_count":  int(snap.event_count or 0),
             "features":     f,
             "corruption_events": f.get("corruption_events") or f.get("event_types") or {},
+            "provenance_tag": provenance.get("provenance_tag", "unknown"),
+            "real_signal_ratio": float(provenance.get("real_signal_ratio") or 0.0),
+            "source_type_counts": dict(provenance.get("source_type_counts") or {}),
         })
 
         if label == 1:
@@ -169,13 +250,6 @@ def _load_corruption_dataset(
         log.warning("corruption_no_positives: all labels are 0 — check risk_flags seeding")
 
     # ── Edge extraction ───────────────────────────────────────────────
-    window_start = (
-        db.query(func.min(GraphFeatureSnapshot.window_start))
-        .filter(GraphFeatureSnapshot.window_key == window_key)
-        .filter(GraphFeatureSnapshot.window_end == window_end)
-        .scalar()
-    ) or (window_end)
-
     raw_edges = _edges_from_postgres(
         db,
         entity_keys=entity_keys,
@@ -254,6 +328,7 @@ def _write_prediction(
     entity_key: str,
     entity_type: str,
     window_key: str,
+    window_start: datetime,
     window_end: datetime,
     model_version: str,
     score: float,
@@ -341,6 +416,19 @@ def _write_prediction(
 
     # Minimal explanation record
     expl = db.query(AIExplanation).filter(AIExplanation.prediction_id == pred.id).first()
+    evidence_hashes = recent_entity_event_hashes(
+        db,
+        entity_key=entity_key,
+        window_start=window_start,
+        window_end=window_end,
+        limit=20,
+    )
+    evidence_paths = build_entity_graph_paths(
+        db,
+        entity_key=entity_key,
+        window_start=window_start,
+        window_end=window_end,
+    )
     payload = {
         "domain":       "corruption",
         "decision_source": "gnn",
@@ -353,13 +441,15 @@ def _write_prediction(
     }
     if expl:
         expl.reason_codes = reasons
+        expl.evidence_hashes = evidence_hashes
+        expl.evidence_paths = evidence_paths
         expl.details_json = payload
     else:
         db.add(AIExplanation(
             prediction_id             = pred.id,
             reason_codes              = reasons,
-            evidence_hashes           = [],
-            evidence_paths            = [],
+            evidence_hashes           = evidence_hashes,
+            evidence_paths            = evidence_paths,
             recommended_controls_json = [],
             counterfactual_json       = {},
             details_json              = payload,
@@ -462,11 +552,48 @@ def run_once(
             probabilities=train_result.probabilities,
         )
         if fairness.get("fairness_flag") == "FAIL":
-            log.warning(
-                "fairness_policy_violation model_version=%s max_positive_rate_disparity=%.3f",
+            disparity = float(fairness.get("max_positive_rate_disparity") or 0.0)
+            threshold = float(settings.fairness_disparity_threshold)
+            log.error(
+                "corruption_fairness_gate_BLOCKED model_version=%s max_positive_rate_disparity=%.3f threshold=%.3f",
                 model_version,
-                fairness.get("max_positive_rate_disparity", 0),
+                disparity,
+                threshold,
             )
+            db.rollback()
+            return {
+                "status": "blocked",
+                "gate": "fairness",
+                "model_version": model_version,
+                "max_positive_rate_disparity": disparity,
+                "threshold": threshold,
+                "detail": "Training run blocked by fairness governance gate.",
+            }
+
+        provenance = _compute_provenance_metrics(
+            node_meta=dataset.node_meta,
+            probabilities=train_result.probabilities,
+            threshold_score=70.0,
+        )
+        min_real_ratio = max(0.0, min(1.0, float(settings.gnn_min_real_ratio)))
+        real_ratio = float(provenance.get("real_ratio") or 0.0)
+        real_data_gate_passed = real_ratio >= min_real_ratio
+        if not real_data_gate_passed:
+            log.error(
+                "corruption_real_data_gate_BLOCKED model_version=%s real_ratio=%.3f min_required=%.3f",
+                model_version,
+                real_ratio,
+                min_real_ratio,
+            )
+            db.rollback()
+            return {
+                "status": "blocked",
+                "gate": "real_data",
+                "model_version": model_version,
+                "real_ratio": real_ratio,
+                "min_real_ratio": min_real_ratio,
+                "detail": "Training run blocked by real-data governance gate.",
+            }
 
         run = GNNTrainingRun(
             model_version    = model_version,
@@ -498,6 +625,29 @@ def run_once(
                 "node_count":     len(dataset.entity_keys),
                 "edge_count":     len(dataset.edges),
                 "fairness":       fairness,
+                "provenance":     provenance,
+                "real_data_gate": {
+                    "min_real_ratio": min_real_ratio,
+                    "passed": bool(real_data_gate_passed),
+                },
+                "label_strategy": {
+                    "label_source": "heuristic_procurement_flags",
+                    "label_quality": "weak",
+                    "positive_definition": (
+                        "Labels come from procurement weak-label heuristics such as single-source "
+                        "awards, director conflicts, emergency procurement, payment anomalies, and "
+                        "event-volume thresholds. They are not confirmed case outcomes."
+                    ),
+                    "eval_caveat": (
+                        "AUC/F1/Precision/Recall are computed on a holdout split of the same weak-label "
+                        "dataset used for training. They do not establish real-world corruption "
+                        "detection accuracy against adjudicated cases."
+                    ),
+                    "recommended_upgrade": (
+                        "Attach confirmed audit or court outcomes before using these metrics as external "
+                        "performance claims."
+                    ),
+                },
                 "explainability": {
                     "method": "gradient_x_input",
                     "top_k": int(settings.ai_explainability_top_k),
@@ -565,6 +715,7 @@ def run_once(
                 entity_key    = dataset.entity_keys[i],
                 entity_type   = dataset.entity_types[i],
                 window_key    = dataset.window_key,
+                window_start  = dataset.window_start,
                 window_end    = dataset.window_end,
                 model_version = model_version,
                 score         = score,

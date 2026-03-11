@@ -437,3 +437,63 @@ def list_webhook_deliveries(
             for r in rows
         ],
     }
+
+
+# ---------------------------------------------------------------------------
+# Self-test webhook receiver
+# Operators register: POST /v1/defense/webhooks with webhook_url pointing here.
+# The hub fires containment payloads; this endpoint logs them and returns 200.
+# Proves the containment dispatch pipeline works end-to-end without an
+# external partner firewall/EDR.
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "/webhooks/self-test/receiver",
+    summary="Built-in webhook receiver for containment self-test (no auth required — by design)",
+    include_in_schema=True,
+)
+async def self_test_webhook_receiver(request: Request):
+    """
+    Receives containment webhook payloads fired by the hub.
+
+    Partners replace this with their own firewall/EDR endpoint.
+    This built-in receiver proves the signing, dispatch, and delivery
+    audit pipeline is operational end-to-end.
+
+    Verifies X-Sentinel-Signature if the header is present.
+    Always returns 200 so the delivery is recorded as `delivered`.
+    """
+    import hashlib
+    import hmac
+
+    body = await request.body()
+    sig_header = request.headers.get("X-Sentinel-Signature", "")
+    verified = False
+
+    if sig_header.startswith("sha256="):
+        # Re-derive the test secret used when registering the self-test webhook
+        test_secret = "sentinel-self-test-secret-key"
+        expected = "sha256=" + hmac.new(
+            test_secret.encode(), body, hashlib.sha256
+        ).hexdigest()
+        verified = hmac.compare_digest(expected, sig_header)
+
+    try:
+        import json
+        payload = json.loads(body)
+    except Exception:
+        payload = {"raw": body.decode(errors="replace")}
+
+    log.info(
+        "containment_self_test_received action_type=%s target=%s signature_verified=%s",
+        payload.get("action_type"),
+        payload.get("target"),
+        verified,
+    )
+    return {
+        "received": True,
+        "action_type": payload.get("action_type"),
+        "target": payload.get("target"),
+        "signature_verified": verified,
+        "note": "Self-test receiver. Replace with real firewall/EDR endpoint in production.",
+    }

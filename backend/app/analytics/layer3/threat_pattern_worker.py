@@ -66,6 +66,171 @@ def _upsert_mitigation(db: Session, *, kind: str, ref_id: str, payload: Dict[str
     )
 
 
+# ---------------------------------------------------------------------------
+# Multi-step attack sequence rules
+# Detects adversary kill-chain progressions by finding entities that have
+# experienced events in a defined sequence within a rolling time window.
+# Each rule is: (name, ordered_event_types, max_gap_minutes, score, severity)
+# ---------------------------------------------------------------------------
+
+SEQUENCE_RULES = [
+    {
+        "name": "sim_swap_followed_by_transaction",
+        "steps": ["SIM_SWAP_EVENT", "TRANSACTION_EVENT"],
+        "max_gap_minutes": 30,
+        "score": 88.0,
+        "reason_codes": ["SIM_SWAP_FRAUD_CHAIN", "ACCOUNT_TAKEOVER_SIGNAL"],
+        "description": "SIM swap followed by financial transaction — classic telco account takeover.",
+        "recommended_actions": [
+            "freeze account pending manual verification",
+            "notify account holder via secondary contact",
+            "flag telco provider for SIM-swap investigation",
+        ],
+    },
+    {
+        "name": "phishing_to_login_to_transaction",
+        "steps": ["PHISHING_MESSAGE_EVENT", "LOGIN_EVENT", "TRANSACTION_EVENT"],
+        "max_gap_minutes": 120,
+        "score": 92.0,
+        "reason_codes": ["PHISHING_ATO_CHAIN", "CREDENTIAL_HARVEST_THEN_FRAUD"],
+        "description": "Phishing → credential capture → login → financial transaction. Full ATO chain.",
+        "recommended_actions": [
+            "immediate account lock and password reset",
+            "revoke all active sessions",
+            "file incident report with cyber unit",
+        ],
+    },
+    {
+        "name": "recon_to_ddos_escalation",
+        "steps": ["DFIR_FINDING_EVENT", "DDOS_SIGNAL_EVENT"],
+        "max_gap_minutes": 240,
+        "score": 82.0,
+        "reason_codes": ["RECON_BEFORE_DDOS", "STAGED_ATTACK_PROGRESSION"],
+        "description": "DFIR finding (reconnaissance artefact) followed by DDoS signal — staged attack.",
+        "recommended_actions": [
+            "activate DDoS scrubbing upstream",
+            "notify ISP and NCSC",
+            "increase rate limits on affected service",
+        ],
+    },
+    {
+        "name": "vulnerability_exploit_to_data_access",
+        "steps": ["VULNERABILITY_EVENT", "DB_AUDIT_EVENT"],
+        "max_gap_minutes": 480,
+        "score": 85.0,
+        "reason_codes": ["VULN_EXPLOIT_DATA_ACCESS", "POST_EXPLOITATION_SIGNAL"],
+        "description": "Unpatched vulnerability event followed by database audit — possible exploitation.",
+        "recommended_actions": [
+            "isolate affected service immediately",
+            "preserve DB audit logs for forensic review",
+            "apply emergency patch or take service offline",
+        ],
+    },
+    {
+        "name": "multi_login_to_sim_swap",
+        "steps": ["LOGIN_EVENT", "SIM_SWAP_EVENT"],
+        "max_gap_minutes": 60,
+        "score": 80.0,
+        "reason_codes": ["CREDENTIAL_STUFFING_PRECEDES_SIM_SWAP"],
+        "description": "Repeated login attempts followed by SIM swap — credential stuffing into SIM fraud.",
+        "recommended_actions": [
+            "enforce MFA step-up for SIM change operations",
+            "alert mobile subscriber",
+            "block source IP if login volume exceeds threshold",
+        ],
+    },
+]
+
+
+def _detect_sequences(
+    rows: list,
+    *,
+    start: datetime,
+    end: datetime,
+) -> List[Dict[str, object]]:
+    """
+    Detect multi-step attack sequences across events grouped by entity anchor.
+
+    For each sequence rule, bucket events by anchor key (account_h, phone_h,
+    service_id, or IP), then check whether the rule's ordered event types
+    occur within max_gap_minutes of each other in chronological order.
+    """
+    from collections import defaultdict
+
+    # Build per-anchor event timeline: anchor_key → [(occurred_at, event_type)]
+    anchor_timeline: Dict[str, List[tuple]] = defaultdict(list)
+    for row in rows:
+        anchors = dict(row.anchors_json or {})
+        # Prefer account-level anchors; fall back to service/ip
+        for field in ("account_h", "phone_h", "person_h", "service_id", "ip"):
+            val = anchors.get(field)
+            if val:
+                key = f"{field}:{val}"
+                anchor_timeline[key].append(
+                    (row.occurred_at, row.event_type, row.section_code)
+                )
+
+    # Sort each timeline by time
+    for key in anchor_timeline:
+        anchor_timeline[key].sort(key=lambda x: x[0])
+
+    sequence_alerts: List[Dict[str, object]] = []
+
+    for rule in SEQUENCE_RULES:
+        steps = rule["steps"]
+        max_gap = timedelta(minutes=int(rule["max_gap_minutes"]))
+        n_steps = len(steps)
+
+        for anchor_key, timeline in anchor_timeline.items():
+            # Sliding pointer: look for step[0], then step[1]...step[n-1] in order
+            step_idx = 0
+            first_ts = None
+            section_code_hit = None
+
+            for ts, et, sec in timeline:
+                if et == steps[step_idx]:
+                    if step_idx == 0:
+                        first_ts = ts
+                        section_code_hit = sec
+                    else:
+                        # Check gap constraint
+                        if first_ts is not None and (ts - first_ts) > max_gap:
+                            # Gap too large — reset
+                            step_idx = 0
+                            first_ts = ts if et == steps[0] else None
+                            section_code_hit = sec if et == steps[0] else None
+                            continue
+                    step_idx += 1
+                    if step_idx == n_steps:
+                        # Full sequence matched
+                        sequence_alerts.append({
+                            "alert_type": f"sequence:{rule['name']}",
+                            "section_code": section_code_hit,
+                            "entity_key": anchor_key,
+                            "window_start": start,
+                            "window_end": end,
+                            "score": float(rule["score"]),
+                            "severity": _severity(float(rule["score"])),
+                            "reason_codes": list(rule["reason_codes"]),
+                            "indicators": {
+                                "sequence_name": rule["name"],
+                                "steps_matched": steps,
+                                "first_event_ts": first_ts.isoformat() if first_ts else None,
+                                "last_event_ts": ts.isoformat(),
+                                "elapsed_minutes": round(
+                                    (ts - first_ts).total_seconds() / 60.0, 1
+                                ) if first_ts else None,
+                                "description": rule["description"],
+                            },
+                            "recommended_actions": list(rule["recommended_actions"]),
+                        })
+                        # Reset for next potential match
+                        step_idx = 0
+                        first_ts = None
+
+    return sequence_alerts
+
+
 def run_once(
     *,
     db: Session,
@@ -233,6 +398,10 @@ def run_once(
             }
         )
 
+    # ── Multi-step sequence detection ──────────────────────────────────────────
+    sequence_alerts = _detect_sequences(rows, start=start, end=end)
+    alert_rows.extend(sequence_alerts)
+
     upserted = _upsert_alerts(db, alert_rows)
 
     mitigations = 0
@@ -256,6 +425,7 @@ def run_once(
     db.commit()
     return {
         "upserted_alerts": upserted,
+        "sequence_alerts_detected": len(sequence_alerts),
         "mitigations_touched": mitigations,
         "section_code": sec or None,
     }

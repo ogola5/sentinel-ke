@@ -107,6 +107,15 @@ class Settings:
     )
 
     # ---------------------------------------------------------
+    # NL Analyst Copilot (local in-house engine)
+    # ---------------------------------------------------------
+    ai_copilot_enabled = env_bool("AI_COPILOT_ENABLED", True)
+    ai_copilot_model = os.environ.get("AI_COPILOT_MODEL", "sentinel-local-analyst-v1").strip()
+    ai_copilot_max_tokens = int(os.environ.get("AI_COPILOT_MAX_TOKENS", "1024"))
+    legal_auto_bundle_enabled = env_bool("LEGAL_AUTO_BUNDLE_ENABLED", True)
+    legal_auto_bundle_limit = int(os.environ.get("LEGAL_AUTO_BUNDLE_LIMIT", "50"))
+
+    # ---------------------------------------------------------
     # Platform hardening
     # ---------------------------------------------------------
     pseudonym_salt = os.environ.get("PSEUDONYM_SALT", "").strip()
