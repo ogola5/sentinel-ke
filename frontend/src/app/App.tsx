@@ -241,6 +241,7 @@ function AuthenticatedApp({
         auditorOnly={auditorOnly}
         central={central}
         execute={execute}
+        manageUsers={manageUsers}
         collapsed={navCollapsed}
         backendStatus={backendStatus}
         backendLabel={backendLabel}
@@ -266,8 +267,9 @@ function AuthenticatedApp({
           onToggleSource={toggleSource}
           onSelectTimeWindow={setTimeWindow}
           onEntityQueryChange={setEntityQuery}
-          onSelectEntity={(entity) => {
+          onInvestigateEntity={(entity) => {
             setSelectedEntity(entity);
+            setActiveScreen("investigate");
             setInspectorOpen(true);
           }}
           onOpenInspector={() => setInspectorOpen(true)}
@@ -301,6 +303,7 @@ function AuthenticatedApp({
               entitiesData={entitiesData}
               graphData={graphData}
               activeCase={activeCase}
+              selectedEntity={selectedEntity}
               selectedCampaignId={selectedCampaignId}
               selectedClusterId={selectedClusterId}
               selectedServiceId={selectedServiceId}

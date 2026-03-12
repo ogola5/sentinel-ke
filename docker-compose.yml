@@ -17,6 +17,8 @@
 
 x-backend-build: &backend-build
   context: ./backend
+  args:
+    INSTALL_ALL_REQUIREMENTS: ${INSTALL_ALL_REQUIREMENTS:-1}
 
 x-backend-env: &backend-env
   env_file: .env
@@ -448,6 +450,24 @@ services:
       postgres:
         condition: service_healthy
     volumes: *backend-volumes
+    restart: unless-stopped
+
+  # ─── Edge sync agent ─────────────────────────────────────────────────────────
+  # Runs on agency stations only.  Enable with:
+  #   docker compose --profile edge up -d
+  # Requires IS_EDGE_NODE=true and EDGE_* vars in .env.
+
+  edge-sync-agent:
+    profiles: ["edge"]
+    build: *backend-build
+    <<: *backend-env
+    volumes: *backend-volumes
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: >
+      /bin/sh -c "while true;
+        do python -m app.sync.edge_agent; sleep ${EDGE_SYNC_INTERVAL_SECONDS:-120}; done"
     restart: unless-stopped
 
   # ─── Infrastructure ──────────────────────────────────────────────────────────

@@ -329,3 +329,98 @@ export async function apiPostJson<T, B extends object>(url: string, body: B): Pr
     body: JSON.stringify(body),
   });
 }
+
+export async function apiFetchBlob(
+  url: string,
+  init: RequestInit = {},
+  options: ApiFetchOptions = {},
+): Promise<{ response: Response; blob: Blob }> {
+  const method = (init.method ?? "GET").toUpperCase();
+
+  const buildHeaders = (): Headers => {
+    const headers = new Headers(init.headers ?? {});
+    if (!headers.has("Accept")) headers.set("Accept", "*/*");
+    if (method !== "GET" && !headers.has("Content-Type")) {
+      headers.set("Content-Type", "application/json");
+    }
+
+    const key = getConfiguredApiKey();
+    if (key && !headers.has("X-API-Key")) {
+      headers.set("X-API-Key", key);
+    }
+
+    const accessToken = getConfiguredAccessToken();
+    if (accessToken && !headers.has("Authorization")) {
+      headers.set("Authorization", `Bearer ${accessToken}`);
+    }
+
+    const legalToken = getConfiguredLegalGrantToken();
+    const legalTarget = getConfiguredLegalTarget();
+    if (options.requireLegalGrantToken) {
+      if (!legalToken) {
+        throw new ApiError(400, "missing_client_legal_grant_token");
+      }
+      if (!headers.has("X-Legal-Grant-Token")) {
+        headers.set("X-Legal-Grant-Token", legalToken);
+      }
+      if (legalTarget && !headers.has("X-Legal-Target")) {
+        headers.set("X-Legal-Target", legalTarget);
+      }
+    }
+
+    return headers;
+  };
+
+  const send = async (): Promise<{ response: Response; errorData?: unknown; blob?: Blob }> => {
+    const response = await fetch(url, { ...init, headers: buildHeaders() });
+    if (!response.ok) {
+      const text = await response.text();
+      return { response, errorData: parseResponseBody(text) };
+    }
+    return { response, blob: await response.blob() };
+  };
+
+  let result = await send();
+  let response = result.response;
+
+  if (
+    response.status === 401 &&
+    !options.skipAuthRefresh &&
+    !isAuthLifecycleRequest(url) &&
+    (getStoredRefreshToken() || getConfiguredAccessToken())
+  ) {
+    const refreshed = await refreshAccessToken();
+    if (refreshed) {
+      result = await send();
+      response = result.response;
+    }
+  }
+
+  if (!response.ok) {
+    const payload = typeof result.errorData === "object" && result.errorData !== null
+      ? (result.errorData as Record<string, unknown>)
+      : null;
+    const errorObj =
+      payload && typeof payload.error === "object" && payload.error !== null
+        ? (payload.error as Record<string, unknown>)
+        : null;
+
+    const detail =
+      (payload && "detail" in payload && String(payload.detail)) ||
+      (errorObj && "message" in errorObj && String(errorObj.message)) ||
+      response.statusText ||
+      "request_failed";
+    const code = errorObj && "code" in errorObj ? String(errorObj.code) : undefined;
+    const requestId =
+      (errorObj && "request_id" in errorObj && String(errorObj.request_id)) ||
+      response.headers.get("X-Request-ID") ||
+      undefined;
+    if (response.status === 401) {
+      clearAuthStorage();
+      notifyAuthExpired();
+    }
+    throw new ApiError(response.status, detail, code, requestId);
+  }
+
+  return { response, blob: result.blob as Blob };
+}

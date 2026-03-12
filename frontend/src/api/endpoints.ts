@@ -1,6 +1,11 @@
-const resolveApiBase = (): string => {
-  // Explicit override (production builds set VITE_API_BASE_URL at build time)
-  const fromEnv = String(import.meta.env.VITE_API_BASE_URL ?? "").trim();
+export const resolveApiBase = (): string => {
+  // Explicit override for deployed builds. Support both names so Vercel config
+  // is not brittle across old/new docs.
+  const fromEnv = String(
+    import.meta.env.VITE_API_BASE_URL ??
+    import.meta.env.VITE_API_URL ??
+    "",
+  ).trim();
   if (fromEnv) return fromEnv.replace(/\/$/, "");
   // Default: relative URLs so all requests go through the Vite dev-server proxy.
   // Docker:  VITE_API_PROXY_TARGET=http://backend:8000  (set in docker-compose)
@@ -51,6 +56,20 @@ export const endpoints = {
   mitigationsExport: () => withBase("/v1/mitigations/export"),
   aiPredictions: (limit = 10, offset = 0, windowKey?: string) =>
     withQuery("/v1/ai/predictions", { limit, offset, window_key: windowKey }),
+  aiPredictionsByEntity: (
+    entityKey: string,
+    limit = 10,
+    offset = 0,
+    windowKey?: string,
+    predictionType?: string,
+  ) =>
+    withQuery("/v1/ai/predictions", {
+      limit,
+      offset,
+      window_key: windowKey,
+      entity_key: entityKey,
+      prediction_type: predictionType,
+    }),
   aiFeedbackBase: () => withBase("/v1/ai/feedback"),
   aiPredictionExplanation: (predictionId: string) =>
     withBase(`/v1/ai/explanations/${encodeURIComponent(predictionId)}`),
@@ -95,6 +114,8 @@ export const endpoints = {
   federationPatterns: (limit = 50, hours = 24, minRisk = 0.6) =>
     withQuery("/v1/federation/stream", { limit, hours, min_risk: minRisk }),
   federationCorrelations: (limit = 20) => withQuery("/v1/federation/correlations", { limit }),
+  federationRegister: () => withBase("/v1/federation/register"),
+  federationEdgeStatus: () => withBase("/v1/federation/edge-status"),
 
   // AI / GNN
   aiTrainingRuns: (limit = 10, offset = 0) => withQuery("/v1/ai/gnn/runs", { limit, offset }),
@@ -116,10 +137,13 @@ export const endpoints = {
     withQuery("/v1/ai/tool-attribution", { entity_key: entityKey }),
   aiToolsSummary: (limit = 10) => withQuery("/v1/ai/tools/summary", { limit }),
   aiPaths: (entityKey: string, windowKey?: string) =>
-    withQuery("/v1/ai/paths", { entity_key: entityKey, window_key: windowKey }),
+    withQuery("/v1/ai/path-scores", { entity_key: entityKey, window_key: windowKey }),
   aiFusion: (entityKey: string, windowKey?: string) =>
-    withQuery("/v1/ai/fusion", { entity_key: entityKey, window_key: windowKey }),
+    withQuery("/v1/ai/decision-fusions", { entity_key: entityKey, window_key: windowKey }),
   aiQuery: () => withBase("/v1/ai/query"),
+  reportsCatalog: () => withBase("/v1/reports/catalog"),
+  reportsGenerate: () => withBase("/v1/reports/generate"),
+  reportsDownload: () => withBase("/v1/reports/download"),
 
   // Real-time SSE stream
   // Pass ?token=<FRONTEND_API_KEY> — EventSource cannot set custom headers

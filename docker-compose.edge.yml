@@ -1,0 +1,185 @@
+# =============================================================================
+# Sentinel-KE — Agency Station (Edge) Compose
+#
+# Runs on each agency station: bank, telco, government, hospital.
+# Lighter than the full central stack — no Neo4j, no OpenSearch,
+# no GNN training workers, no notebook.
+#
+# SETUP (first time at a new agency):
+#   1. Copy .env.edge.example → .env
+#   2. Fill in EDGE_PARTNER_ID, EDGE_HUB_URL, EDGE_HUB_API_KEY,
+#      EDGE_NATIONAL_SALT (all returned by POST /v1/federation/register
+#      when NCSC onboards this agency).
+#   3. docker compose -f docker-compose.edge.yml up -d
+#
+# DATA FLOW:
+#   Agency sources → ingest API → postgres → GNN inference (local)
+#                                                    ↓
+#                                          edge-sync-agent
+#                                                    ↓
+#                                    POST /v1/federation/patterns
+#                                                    ↓
+#                                       NCSC Central Hub
+# =============================================================================
+
+x-backend-build: &backend-build
+  context: ./backend
+
+x-backend-env: &backend-env
+  env_file: .env
+  environment:
+    PYTHONPATH: /app
+    IS_EDGE_NODE: "true"
+
+x-backend-volumes: &backend-volumes
+  - gnn_artifacts:/app/artifacts
+
+services:
+
+  # ── API server ──────────────────────────────────────────────────────────────
+  backend:
+    build: *backend-build
+    <<: *backend-env
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redpanda:
+        condition: service_started
+    volumes: *backend-volumes
+    command: >
+      uvicorn app.main:app
+        --host 0.0.0.0
+        --port 8000
+        --workers 1
+        --timeout-keep-alive 30
+    restart: unless-stopped
+
+  # ── Frontend dashboard (local analyst access) ───────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  # ── Local GNN feature builder — feeds the inference pipeline ────────────────
+  graph-feature-worker:
+    build: *backend-build
+    <<: *backend-env
+    volumes: *backend-volumes
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: >
+      /bin/sh -c "while true;
+        do python -m app.analytics.layer3.graph_feature_worker --window-key Wmid;
+        sleep 300; done"
+    restart: unless-stopped
+
+  # ── GNN inference — scores entities locally before pushing to hub ───────────
+  inference-consumer:
+    build: *backend-build
+    <<: *backend-env
+    volumes: *backend-volumes
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redpanda:
+        condition: service_started
+    command: >
+      /bin/sh -c "while true;
+        do python -m app.analytics.layer3.ai_inference_worker --window-key Wmid;
+        sleep 300; done"
+    restart: unless-stopped
+
+  # ── Threat pattern detection — runs multi-step attack chain rules ────────────
+  threat-pattern-worker:
+    build: *backend-build
+    <<: *backend-env
+    volumes: *backend-volumes
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: >
+      /bin/sh -c "while true;
+        do python -m app.analytics.layer3.threat_pattern_worker --minutes 1440;
+        sleep 300; done"
+    restart: unless-stopped
+
+  # ── Decision fusion — combines GNN + path + anomaly scores ──────────────────
+  decision-fusion-worker:
+    build: *backend-build
+    <<: *backend-env
+    volumes: *backend-volumes
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: >
+      /bin/sh -c "while true;
+        do python -m app.analytics.layer3.decision_fusion_worker --window-key Wmid;
+        sleep 600; done"
+    restart: unless-stopped
+
+  # ── Edge sync agent — pushes high-risk patterns to NCSC central hub ─────────
+  edge-sync-agent:
+    build: *backend-build
+    <<: *backend-env
+    volumes: *backend-volumes
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: >
+      /bin/sh -c "while true;
+        do python -m app.sync.edge_agent; sleep ${EDGE_SYNC_INTERVAL_SECONDS:-120}; done"
+    restart: unless-stopped
+
+  # ── PostgreSQL — local event store ──────────────────────────────────────────
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB:       ${POSTGRES_DB:-sentinel}
+      POSTGRES_USER:     ${POSTGRES_USER:-sentinel}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sentinel}
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-sentinel} -d ${POSTGRES_DB:-sentinel}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+  # ── Redpanda — local event stream (Kafka-compatible) ────────────────────────
+  redpanda:
+    image: docker.redpanda.com/redpandadata/redpanda:v24.1.1
+    command:
+      - redpanda
+      - start
+      - --smp 1
+      - --memory 256M
+      - --reserve-memory 0M
+      - --node-id 0
+      - --check=false
+      - --kafka-addr PLAINTEXT://0.0.0.0:9092
+      - --advertise-kafka-addr PLAINTEXT://redpanda:9092
+    ports:
+      - "9092:9092"
+    volumes:
+      - redpanda_data:/var/lib/redpanda/data
+    restart: unless-stopped
+
+# NOTE: Neo4j and OpenSearch are NOT included.
+# The edge station uses PostgreSQL for all graph queries.
+# The central hub runs Neo4j + OpenSearch for the national threat graph.
+
+volumes:
+  postgres_data:
+  redpanda_data:
+  gnn_artifacts:

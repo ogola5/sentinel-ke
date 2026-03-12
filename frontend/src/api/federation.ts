@@ -2,6 +2,42 @@ import { apiFetchJson } from "./client";
 import { endpoints } from "./endpoints";
 import type { FederationCorrelation, FederationPartner, FederationPattern } from "../types/federation";
 
+export interface PartnerRegistrationPayload {
+  partner_id: string;
+  partner_name: string;
+  partner_type: string;
+  webhook_url?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface PartnerRegistrationResult {
+  partner_id: string;
+  partner_name: string;
+  partner_type: string;
+  api_key: string;
+  correlation_salt: string;
+  warning: string;
+  edge_agent_env: Record<string, string>;
+}
+
+export async function registerFederationPartner(
+  payload: PartnerRegistrationPayload,
+): Promise<PartnerRegistrationResult> {
+  return apiFetchJson<PartnerRegistrationResult>(endpoints.federationRegister(), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function fetchEdgeSyncStatus(): Promise<Record<string, unknown>> {
+  try {
+    return await apiFetchJson<Record<string, unknown>>(endpoints.federationEdgeStatus());
+  } catch (_err) {
+    return { is_edge_node: false, status: "unreachable" };
+  }
+}
+
 interface ListResponse<T> {
   total?: number;
   items: T[];

@@ -32,6 +32,7 @@ import {
   triggerGNNTrain,
 } from "../../api/ai";
 import type { AIFeedback, AIPrediction, FairnessMetrics, GNNTrainingRun } from "../../types/ai";
+import { clampRiskPercent, formatRiskScore, isHighRisk, riskColor, riskSeverityLabel } from "../../utils/risk";
 
 const ANALYST_ID_STORAGE_KEY = "sentinel_analyst_id";
 
@@ -111,20 +112,6 @@ function asNumberArray(value: unknown): number[] {
 function clampPercent(value: number | null | undefined): number {
   if (value == null) return 0;
   return Math.max(0, Math.min(100, value * 100));
-}
-
-function riskClass(score: number): string {
-  if (score >= 0.8) return "critical";
-  if (score >= 0.6) return "high";
-  if (score >= 0.4) return "medium";
-  return "low";
-}
-
-function scoreColor(score: number): string {
-  if (score >= 0.8) return "var(--risk-critical)";
-  if (score >= 0.6) return "var(--risk-high)";
-  if (score >= 0.4) return "var(--risk-medium)";
-  return "var(--risk-low)";
 }
 
 function uncertaintyColor(uncertainty: number | null | undefined): string {
@@ -312,7 +299,7 @@ export default function GNNIntelligence({
     [predictions],
   );
 
-  const highRiskCount = sortedPredictions.filter((prediction) => prediction.score >= 0.7).length;
+  const highRiskCount = sortedPredictions.filter((prediction) => isHighRisk(prediction.score)).length;
   const needsReviewCount = sortedPredictions.filter((prediction) => (prediction.uncertainty ?? 0) >= 0.5).length;
   const abstainedCount = sortedPredictions.filter((prediction) => prediction.abstained).length;
 
@@ -405,7 +392,7 @@ export default function GNNIntelligence({
         <div className="metric-card">
           <div className="metric-label">High-risk</div>
           <div className={`metric-value${highRiskCount > 0 ? " gnn-metric-danger" : ""}`}>{highRiskCount}</div>
-          <div className="metric-sub">Score ≥ 0.70</div>
+          <div className="metric-sub">Score ≥ 70 / 100</div>
         </div>
         <div className="metric-card">
           <div className="metric-label">Uncertain</div>
@@ -606,11 +593,11 @@ export default function GNNIntelligence({
                           <div className="score-bar-track">
                             <div
                               className="score-bar-fill"
-                              style={{ width: `${prediction.score * 100}%`, background: scoreColor(prediction.score) }}
+                              style={{ width: `${clampRiskPercent(prediction.score)}%`, background: riskColor(prediction.score) }}
                             />
                           </div>
-                          <span className="gnn-score-label" style={{ color: scoreColor(prediction.score) }}>
-                            {prediction.score.toFixed(2)}
+                          <span className="gnn-score-label" style={{ color: riskColor(prediction.score) }}>
+                            {formatRiskScore(prediction.score)}
                           </span>
                         </div>
                       </td>
@@ -627,7 +614,9 @@ export default function GNNIntelligence({
                           </span>
                         </div>
                       </td>
-                      <td className="gnn-cell-sm">{prediction.confidence != null ? prediction.confidence.toFixed(2) : "—"}</td>
+                      <td className="gnn-cell-sm">
+                        {prediction.confidence != null ? `${Math.round(prediction.confidence * 100)}%` : "—"}
+                      </td>
                       <td>
                         {prediction.kill_chain_stage ? (
                           <span className="risk-badge info">{prediction.kill_chain_stage}</span>
@@ -646,7 +635,9 @@ export default function GNNIntelligence({
                         {prediction.abstained ? (
                           <span className="risk-badge medium">Abstained</span>
                         ) : (
-                          <span className={`risk-badge ${riskClass(prediction.score)}`}>{riskClass(prediction.score)}</span>
+                          <span className={`risk-badge ${riskSeverityLabel(prediction.score).toLowerCase()}`}>
+                            {riskSeverityLabel(prediction.score)}
+                          </span>
                         )}
                       </td>
                       <td>

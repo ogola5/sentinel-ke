@@ -5,8 +5,12 @@
 #
 # Services:
 #   sentinel-backend     — FastAPI web service (runtime-only image, fast)
-#   sentinel-gnn-worker  — GNN training worker (full ML image with torch)
 #   sentinel-pg          — Managed PostgreSQL (free 90-day tier)
+#
+# ML / GNN strategy for this blueprint:
+#   - Render runs the API only.
+#   - Your local Docker ML workers connect to the same Render Postgres and
+#     write predictions/training runs there.
 #
 # First-deploy checklist (set these in Render dashboard → Environment):
 #   AUTH_TOKEN_SECRET         ← openssl rand -hex 32
@@ -24,11 +28,6 @@ databases:
     plan: free
 
 services:
-  # ---------------------------------------------------------------------------
-  # 1. FastAPI Web Service
-  #    - Runtime-only deps (no PyTorch) → fast build & small image
-  #    - Reads GNN predictions from Postgres (no model artifact needed)
-  # ---------------------------------------------------------------------------
   - type: web
     name: sentinel-backend
     runtime: docker
@@ -103,9 +102,9 @@ services:
       - key: OPENSEARCH_HOST
         value: "disabled"
 
-      # ---- Neo4j (optional — set to your Neo4j Aura instance or leave blank) ----
+      # ---- Neo4j (optional — set to your Neo4j Aura instance later if needed) ----
       - key: NEO4J_URI
-        value: "bolt://localhost:7687"
+        value: "disabled"
 
       # ---- Auto-generated secrets ----
       - key: FRONTEND_API_KEY
@@ -129,73 +128,4 @@ services:
       - key: CORS_ALLOW_ORIGINS
         sync: false
       - key: LEGAL_APPROVER_SECRETS
-        sync: false
-
-  # ---------------------------------------------------------------------------
-  # 2. GNN Training Worker
-  #    - Full ML image (torch + numpy + sklearn)
-  #    - Seeds synthetic data then trains both GNN models on first run
-  #    - Retrains hourly to pick up new data
-  #    - Persistent disk stores .pt artifact files
-  # ---------------------------------------------------------------------------
-  - type: worker
-    name: sentinel-gnn-worker
-    runtime: docker
-    dockerContext: ./backend
-    dockerfilePath: ./backend/Dockerfile
-    dockerBuildArgs:
-      - key: INSTALL_ALL_REQUIREMENTS
-        value: "1"
-    startCommand: /app/scripts/render_gnn_worker.sh
-    autoDeploy: true
-    plan: free
-
-    disk:
-      name: gnn-artifacts
-      mountPath: /app/artifacts/gnn
-      sizeGB: 1
-
-    envVars:
-      # ---- App ----
-      - key: APP_ENV
-        value: production
-      - key: PYTHONUNBUFFERED
-        value: "1"
-
-      # ---- Database ----
-      - key: DATABASE_URL
-        fromDatabase:
-          name: sentinel-pg
-          property: connectionString
-      - key: DB_AUTO_CREATE
-        value: "false"
-
-      # ---- GNN config ----
-      - key: KAFKA_ENABLED
-        value: "false"
-      - key: GNN_ENABLED
-        value: "true"
-      - key: GNN_EDGE_BACKEND
-        value: "postgres"
-      - key: GNN_ARTIFACT_DIR
-        value: "/app/artifacts/gnn"
-      - key: GNN_EPOCHS
-        value: "60"
-
-      # ---- Stub out unused services ----
-      - key: MINIO_ANCHOR_MODE
-        value: "stub"
-      - key: IMMUDB_ANCHOR_MODE
-        value: "stub"
-      - key: OPENSEARCH_HOST
-        value: "disabled"
-      - key: NEO4J_URI
-        value: "bolt://localhost:7687"
-
-      # ---- Secrets (shared with web service) ----
-      - key: PSEUDONYM_SALT
-        generateValue: true
-      - key: AUTH_TOKEN_SECRET
-        sync: false
-      - key: AUTH_PASSWORD_PEPPER
         sync: false

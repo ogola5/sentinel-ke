@@ -34,6 +34,7 @@ from app.api.integrations import router as integrations_router
 from app.api.legal import router as legal_router
 from app.api.metrics import router as metrics_router
 from app.api.mitigations import router as mitigations_router
+from app.api.reports import router as reports_router
 from app.api.stix import router as stix_router
 from app.api.federation import router as federation_router
 from app.api.stream import router as stream_router
@@ -58,6 +59,7 @@ def build_tags_metadata(*, ai_enabled: bool) -> list[dict[str, str]]:
         {"name": "ddos", "description": "DDoS indicators and alerts"},
         {"name": "anomalies", "description": "Anomaly scores"},
         {"name": "mitigations", "description": "IOC and mitigation bundles"},
+        {"name": "reports", "description": "Downloadable operational, legal, and AI explainability reports"},
         {"name": "integrations", "description": "External connector ingestion bridge"},
         {"name": "legal", "description": "Court-order authorization and legal controls"},
         {"name": "metrics", "description": "Operational metrics"},
@@ -89,6 +91,7 @@ def build_router_mounts(*, ai_enabled: bool) -> list[RouterMount]:
         RouterMount(infra_graph_router, (Depends(require_central_access), Depends(require_scope("infra.read")))),
         RouterMount(anomalies_router, (Depends(require_section_access), Depends(require_scope("anomalies.read")))),
         RouterMount(mitigations_router, (Depends(require_section_access), Depends(require_scope("mitigations.read")))),
+        RouterMount(reports_router, (Depends(require_section_access), Depends(require_scope("ai.read")))),
         RouterMount(metrics_router, (Depends(require_section_access), Depends(require_scope("metrics.read")))),
         RouterMount(integrations_router, (Depends(require_section_access), Depends(require_scope("integrations.write")))),
         RouterMount(
