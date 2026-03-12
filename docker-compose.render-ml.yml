@@ -1,0 +1,25 @@
+services:
+  graph-feature-worker:
+    env_file:
+      - .env
+      - .env.render-ml
+
+  cyber-train-worker:
+    env_file:
+      - .env
+      - .env.render-ml
+
+  corruption-train-worker:
+    env_file:
+      - .env
+      - .env.render-ml
+
+  inference-consumer:
+    env_file:
+      - .env
+      - .env.render-ml
+
+  notebook:
+    env_file:
+      - .env
+      - .env.render-ml

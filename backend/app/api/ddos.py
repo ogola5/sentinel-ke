@@ -9,7 +9,7 @@ from opensearchpy import OpenSearch
 from app.analytics.ddos_windows import bucket_interval, window_last_minutes
 from app.analytics.ddos_queries import fetch_overview, fetch_timeseries
 from app.analytics.ddos_indicators import convergence_index, robust_z, classify_stage, risk_score
-from app.search.opensearch import get_client  # your existing OpenSearch client factory
+from app.search.opensearch import get_client, is_opensearch_disabled_error  # your existing OpenSearch client factory
 from app.core.config import settings       # your existing settings
 from app.analytics.ddos_stages import classify_ddos_stage
 from app.analytics.ddos_alerts import DDoSAlert
@@ -40,12 +40,13 @@ def ddos_overview(
     This endpoint is intentionally metric-light; scoring happens in /indicators.
     """
     tw = window_last_minutes(minutes)
-    client: OpenSearch = get_client()
-    index = _events_index()
-
     try:
+        client: OpenSearch = get_client()
+        index = _events_index()
         res = fetch_overview(client, index=index, time_range=tw.to_opensearch_range(), max_services=max_services, max_endpoints=max_endpoints)
     except Exception as e:
+        if is_opensearch_disabled_error(e):
+            return {"window": {"start": tw.start.isoformat(), "end": tw.end.isoformat()}, "items": [], "note": "opensearch_disabled"}
         raise HTTPException(status_code=502, detail=f"opensearch_error: {str(e)}")
 
     buckets = (((res.get("aggregations") or {}).get("services") or {}).get("buckets")) or []
@@ -85,13 +86,21 @@ def ddos_indicators(
     tw = window_last_minutes(minutes)
     bw = window_last_minutes(baseline_minutes)
 
-    client: OpenSearch = get_client()
-    index = _events_index()
-
     try:
+        client: OpenSearch = get_client()
+        index = _events_index()
         ts = fetch_timeseries(client, index=index, time_range=tw.to_opensearch_range(), bucket=bkt, service_id=service_id, endpoint=endpoint)
         base = fetch_timeseries(client, index=index, time_range=bw.to_opensearch_range(), bucket=bkt, service_id=service_id, endpoint=endpoint)
     except Exception as e:
+        if is_opensearch_disabled_error(e):
+            return {
+                "service_id": service_id,
+                "endpoint": endpoint,
+                "bucket": bkt,
+                "window": {"start": tw.start.isoformat(), "end": tw.end.isoformat()},
+                "series": [],
+                "note": "opensearch_disabled",
+            }
         raise HTTPException(status_code=502, detail=f"opensearch_error: {str(e)}")
 
     def _extract(series_res: Dict[str, Any]) -> List[Dict[str, Any]]:

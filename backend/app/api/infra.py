@@ -1,14 +1,21 @@
 # app/api/infra.py
 from fastapi import APIRouter
-from app.search.opensearch import get_client
+from fastapi import HTTPException
+
+from app.search.opensearch import get_client, is_opensearch_disabled_error
 from app.search.bootstrap import ensure_events_index
 
 router = APIRouter(prefix="/v1/infra", tags=["infra"])
 
 @router.get("/ip/{ip}")
 def ip_context(ip: str):
-    client = get_client()
-    index = ensure_events_index(client)
+    try:
+        client = get_client()
+        index = ensure_events_index(client)
+    except Exception as exc:
+        if is_opensearch_disabled_error(exc):
+            raise HTTPException(status_code=503, detail="opensearch_disabled")
+        raise HTTPException(status_code=502, detail=f"opensearch_error:{exc}")
 
     body = {
         "size": 0,

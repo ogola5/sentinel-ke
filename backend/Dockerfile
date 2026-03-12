@@ -22,14 +22,17 @@ ENV PYTHONPATH=/app \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
-COPY requirements.txt .
+ARG INSTALL_ALL_REQUIREMENTS=0
 
-# Install all deps with BuildKit pip cache.
-# Wheels are stored at /root/.cache/pip on the HOST — not baked into the image.
-# On a flaky connection, just re-run `docker compose build` and only
-# packages that weren't fully downloaded will be retried.
+COPY requirements-runtime.txt .
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install --timeout 3600 --retries 10 -r requirements.txt
+    pip install --timeout 600 --retries 10 -r requirements-runtime.txt
+
+COPY requirements.txt .
+RUN --mount=type=cache,target=/root/.cache/pip \
+    if [ "$INSTALL_ALL_REQUIREMENTS" = "1" ]; then \
+      pip install --timeout 3600 --retries 10 -r requirements.txt; \
+    fi
 
 # Copy application code
 COPY app app

@@ -22,8 +22,8 @@ from app.core import metrics_store
 from app.core.prometheus_metrics import prometheus_payload, record_http_request
 from app.core.rate_limit import limiter
 from app.core.runtime_hardening import enforce_runtime_hardening
-from app.search.opensearch import get_client as get_os_client
-from app.graph.neo4j_driver import get_driver
+from app.search.opensearch import get_client as get_os_client, is_opensearch_enabled
+from app.graph.neo4j_driver import get_driver, is_neo4j_enabled
 from app.ledger.db import SessionLocal, engine
 import app.db.registry  # noqa: F401  # ensure all models are registered
 
@@ -158,22 +158,28 @@ def _register_operational_routes(app: FastAPI) -> None:
         except Exception as exc:
             status["postgres"] = f"error:{exc}"
 
-        try:
-            client = get_os_client()
-            ok = client.ping()
-            status["opensearch"] = "ok" if ok else "error:ping_failed"
-        except Exception as exc:
-            status["opensearch"] = f"error:{exc}"
+        if is_opensearch_enabled():
+            try:
+                client = get_os_client()
+                ok = client.ping()
+                status["opensearch"] = "ok" if ok else "error:ping_failed"
+            except Exception as exc:
+                status["opensearch"] = f"error:{exc}"
+        else:
+            status["opensearch"] = "disabled"
 
-        try:
-            drv = get_driver()
-            with drv.session() as sess:
-                sess.run("RETURN 1").single()
-            status["neo4j"] = "ok"
-        except Exception as exc:
-            status["neo4j"] = f"error:{exc}"
+        if is_neo4j_enabled():
+            try:
+                drv = get_driver()
+                with drv.session() as sess:
+                    sess.run("RETURN 1").single()
+                status["neo4j"] = "ok"
+            except Exception as exc:
+                status["neo4j"] = f"error:{exc}"
+        else:
+            status["neo4j"] = "disabled"
 
-        overall = all(value == "ok" for value in status.values())
+        overall = all(value in {"ok", "disabled"} for value in status.values())
         return {"status": "ok" if overall else "degraded", "components": status}
 
 

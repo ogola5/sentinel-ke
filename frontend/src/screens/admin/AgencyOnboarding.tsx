@@ -5,6 +5,8 @@ import {
   ChevronDown, ChevronUp, Terminal,
 } from "lucide-react";
 import { apiCreateUser, apiListUsers } from "../../api/auth";
+import { resolveApiBase } from "../../api/endpoints";
+import { registerFederationPartner, type PartnerRegistrationResult } from "../../api/federation";
 import { KENYA_AGENCIES, agencyColor } from "../../types/auth";
 import type { AuthUser } from "../../types/auth";
 
@@ -69,6 +71,9 @@ export default function AgencyOnboarding() {
   const [connTab, setConnTab]       = useState<ConnTab>("ingest");
   const [selectedAgency, setSelectedAgency] = useState(AGENCY_SPECS[0].code);
   const [expandedSection, setExpandedSection] = useState<string | null>("accounts");
+  const [registering, setRegistering]   = useState(false);
+  const [regResult, setRegResult]       = useState<PartnerRegistrationResult | null>(null);
+  const [regError, setRegError]         = useState("");
 
   const load = async () => {
     setLoading(true);
@@ -129,9 +134,26 @@ export default function AgencyOnboarding() {
     setExpandedSection((p) => (p === section ? null : section));
 
   const sel = AGENCY_SPECS.find((s) => s.code === selectedAgency)!;
-  const API_BASE = typeof window !== "undefined"
-    ? (window.location.origin.includes("localhost") ? "http://localhost:8000" : window.location.origin)
-    : "https://your-backend.onrender.com";
+
+  const handleRegisterPartner = async () => {
+    setRegistering(true);
+    setRegError("");
+    setRegResult(null);
+    try {
+      const result = await registerFederationPartner({
+        partner_id:   sel.code.toLowerCase(),
+        partner_name: sel.name,
+        partner_type: "government",
+      });
+      setRegResult(result);
+    } catch (err) {
+      setRegError(err instanceof Error ? err.message : "Registration failed");
+    } finally {
+      setRegistering(false);
+    }
+  };
+
+  const API_BASE = resolveApiBase() || "http://localhost:8000";
 
   return (
     <div>
@@ -372,8 +394,38 @@ export default function AgencyOnboarding() {
                     the hub — raw identifiers (phone numbers, account numbers) never leave the agency&apos;s premises.
                     This enables cross-agency threat correlation.
                   </p>
+
+                  {/* ── Live register button ── */}
+                  <div className="info-note" style={{ marginBottom: 16 }}>
+                    <p className="label" style={{ marginBottom: 8 }}>Register {sel.name} as a federation partner</p>
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      onClick={() => void handleRegisterPartner()}
+                      disabled={registering || !!regResult}
+                    >
+                      {registering && <Loader size={12} className="spin" />}
+                      {regResult ? <CheckCircle size={12} color="var(--accent)" /> : <Globe size={12} />}
+                      {regResult ? "Registered — copy credentials below" : registering ? "Registering…" : `Register ${sel.code}`}
+                    </button>
+                    {regError && <p className="text-danger" style={{ marginTop: 8, fontSize: "0.8rem" }}>{regError}</p>}
+                    {regResult && (
+                      <div style={{ marginTop: 12 }}>
+                        <p className="label" style={{ color: "var(--warning)", marginBottom: 6 }}>
+                          ⚠ Copy these now — the API key cannot be retrieved again
+                        </p>
+                        <CodeBlock label="Paste into the agency station .env" code={
+                          Object.entries(regResult.edge_agent_env)
+                            .map(([k, v]) => `${k}=${v}`)
+                            .join("\n")
+                        } />
+                        <CodeBlock label="Correlation salt" code={regResult.correlation_salt} />
+                      </div>
+                    )}
+                  </div>
+
                   <CodeBlock
-                    label="Step 1 — Register as a federation partner"
+                    label="Step 1 — Register as a federation partner (curl alternative)"
                     code={`curl -X POST ${API_BASE}/v1/federation/register \\
   -H "Content-Type: application/json" \\
   -H "X-API-Key: $FRONTEND_API_KEY" \\

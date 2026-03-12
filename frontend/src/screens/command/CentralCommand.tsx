@@ -1,18 +1,24 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
-  Globe, RefreshCw, Loader, Shield, AlertTriangle,
-  Activity, Users, Radio, Network, TrendingUp,
+  Activity,
+  AlertTriangle,
+  Globe,
+  Loader,
+  Network,
+  Radio,
+  RefreshCw,
+  Shield,
+  TrendingUp,
+  Users,
 } from "lucide-react";
-import {
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
-  ResponsiveContainer,
-} from "recharts";
-import { fetchFederationPartners, fetchFederationCorrelations } from "../../api/federation";
+
+import { fetchFederationCorrelations, fetchFederationPartners } from "../../api/federation";
 import { apiListUsers } from "../../api/auth";
-import { KENYA_AGENCIES, agencyName, agencyColor } from "../../types/auth";
-import type { FederationPartner, FederationCorrelation } from "../../types/federation";
-import type { AuthUser } from "../../types/auth";
+import { agencyColor, agencyName, type AuthUser, KENYA_AGENCIES } from "../../types/auth";
+import type { FederationCorrelation, FederationPartner } from "../../types/federation";
+import type { ThreatSummary } from "../../types/domain";
 import type { OperationsSnapshot } from "../../types/operations";
+import { formatRiskScore, isHighRisk } from "../../utils/risk";
 
 interface Props {
   operationsData: OperationsSnapshot;
@@ -20,16 +26,47 @@ interface Props {
   activeEventCount: number;
   healthGnnLoaded: boolean;
   healthModelVersion: string | null;
+  threatSummaryData: ThreatSummary;
   onNavigate: (screen: string) => void;
 }
 
+type CommandView = "brief" | "network" | "readiness";
+
 const ALL_AGENCIES = Object.keys(KENYA_AGENCIES);
 
-function threatLevel(critCount: number, highCount: number): { level: string; color: string } {
-  if (critCount > 0) return { level: "CRITICAL", color: "var(--risk-critical)" };
-  if (highCount > 2) return { level: "HIGH", color: "var(--risk-high)" };
-  if (highCount > 0) return { level: "ELEVATED", color: "var(--risk-medium)" };
-  return { level: "GUARDED", color: "var(--accent)" };
+function threatLevel(critCount: number, highCount: number): { level: string; color: string; note: string } {
+  if (critCount > 0) {
+    return { level: "CRITICAL", color: "var(--risk-critical)", note: "Immediate coordination required." };
+  }
+  if (highCount > 5) {
+    return { level: "HIGH", color: "var(--risk-high)", note: "Elevated cross-agency pressure." };
+  }
+  if (highCount > 0) {
+    return { level: "ELEVATED", color: "var(--risk-medium)", note: "Multiple queues need review." };
+  }
+  return { level: "GUARDED", color: "var(--accent)", note: "No critical queue is active right now." };
+}
+
+function CommandStat({
+  label,
+  value,
+  icon,
+  tone,
+}: {
+  label: string;
+  value: number | string;
+  icon: ReactNode;
+  tone?: string;
+}) {
+  return (
+    <div className="metric-card">
+      <div className="metric-label" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        {icon}
+        {label}
+      </div>
+      <div className="metric-value" style={{ color: tone }}>{value}</div>
+    </div>
+  );
 }
 
 export default function CentralCommand({
@@ -38,328 +75,371 @@ export default function CentralCommand({
   activeEventCount,
   healthGnnLoaded,
   healthModelVersion,
+  threatSummaryData,
   onNavigate,
 }: Props) {
-  const [partners, setPartners]         = useState<FederationPartner[]>([]);
+  const [view, setView] = useState<CommandView>("brief");
+  const [partners, setPartners] = useState<FederationPartner[]>([]);
   const [correlations, setCorrelations] = useState<FederationCorrelation[]>([]);
-  const [users, setUsers]               = useState<AuthUser[]>([]);
-  const [loading, setLoading]           = useState(true);
+  const [users, setUsers] = useState<AuthUser[]>([]);
+  const [loading, setLoading] = useState(true);
 
   const load = async () => {
     setLoading(true);
-    const [p, c, u] = await Promise.all([
+    const [partnerRows, correlationRows, userRows] = await Promise.all([
       fetchFederationPartners(),
       fetchFederationCorrelations(20),
       apiListUsers().then((r) => r.items).catch(() => [] as AuthUser[]),
     ]);
-    setPartners(p);
-    setCorrelations(c);
-    setUsers(u);
+    setPartners(partnerRows);
+    setCorrelations(correlationRows);
+    setUsers(userRows);
     setLoading(false);
   };
 
-  useEffect(() => { void load(); }, []);
+  useEffect(() => {
+    void load();
+  }, []);
 
-  // Compute threat level from all data
-  const critCount =
-    operationsData.integrityAlerts.filter((a) => a.severity === "critical").length +
-    correlations.filter((c) => c.risk_level.toLowerCase() === "critical").length;
-  const highCount =
-    operationsData.procurementAnomalies.filter((a) => a.severity === "high").length +
-    correlations.filter((c) => c.risk_level.toLowerCase() === "high").length;
-  const { level: ntl, color: ntlColor } = threatLevel(critCount, highCount);
+  const criticalQueueCount =
+    threatSummaryData.campaign_risk.critical +
+    operationsData.integrityAlerts.filter((item) => item.severity.toLowerCase() === "critical").length;
+  const highQueueCount =
+    threatSummaryData.campaign_risk.high +
+    operationsData.procurementAnomalies.filter((item) => item.severity.toLowerCase() === "high").length +
+    operationsData.predictions.filter((item) => isHighRisk(item.score)).length;
+  const nationalThreat = threatLevel(criticalQueueCount, highQueueCount);
 
-  // Which agencies are online (appear in federation partners)
-  const onlineIds = new Set(partners.filter((p) => p.is_active).map((p) => p.partner_id.toUpperCase()));
-
-  // Per-agency user counts
+  const onlinePartnerIds = new Set(partners.filter((item) => item.is_active).map((item) => item.partner_id.toUpperCase()));
   const agencyUserCounts = ALL_AGENCIES.map((code) => ({
     code,
-    name: code,
-    users: users.filter((u) => u.section_code === code && u.is_active).length,
-  }));
+    label: code,
+    count: users.filter((user) => user.section_code === code && user.is_active).length,
+  })).filter((item) => item.count > 0);
 
-  // User role breakdown
-  const roleBreakdown = ["admin", "analyst", "operator", "auditor"].map((role) => ({
-    role,
-    count: users.filter((u) => u.role === role).length,
-  }));
-
-  const centralUsers  = users.filter((u) => u.access_level === "central").length;
-  const sectionUsers  = users.filter((u) => u.access_level === "section").length;
-  const mfaEnabled    = users.filter((u) => u.mfa_enabled).length;
-  const lockedCount   = users.filter((u) => u.locked_until).length;
+  const topThreats = useMemo(
+    () => threatSummaryData.top_threats.slice(0, 6),
+    [threatSummaryData.top_threats],
+  );
+  const forecast = threatSummaryData.forecast;
+  const highRiskPredictions = operationsData.predictions.filter((item) => isHighRisk(item.score));
+  const blockedGuardrails = operationsData.guardrailDecisions.filter((item) => item.decision === "block");
+  const mfaEnabled = users.filter((item) => item.mfa_enabled).length;
+  const lockedCount = users.filter((item) => item.locked_until).length;
+  const centralUsers = users.filter((item) => item.access_level === "central").length;
+  const sectionUsers = users.filter((item) => item.access_level === "section").length;
 
   return (
-    <div>
-      {/* Header */}
+    <section className="screen">
       <div className="screen-header">
-        <h2>
-          <Globe size={20} color="var(--accent)" />
-          National Command Centre
-          <span className="subtitle">— cross-agency view · central access only</span>
-        </h2>
-        <button className="btn-ghost" onClick={() => void load()} disabled={loading}>
-          {loading ? <Loader size={13} /> : <RefreshCw size={13} />}
-          &nbsp;Refresh
-        </button>
+        <div>
+          <p className="eyebrow">C1</p>
+          <h2>National Command Centre</h2>
+          <p className="subtle">
+            A lean national view: first understand the threat level, then the network, then readiness.
+          </p>
+        </div>
+        <div className="screen-header-actions">
+          <div className="chip-row">
+            {[
+              { id: "brief", label: "National Brief" },
+              { id: "network", label: "Agency Network" },
+              { id: "readiness", label: "Readiness" },
+            ].map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                className={view === item.id ? "chip active" : "chip ghost"}
+                onClick={() => setView(item.id as CommandView)}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+          <button className="ghost" type="button" onClick={() => void load()} disabled={loading}>
+            {loading ? <Loader size={14} className="spin" /> : <RefreshCw size={14} />}
+            &nbsp;Refresh
+          </button>
+        </div>
       </div>
 
-      {/* National Threat Level banner */}
       <div
         className="panel"
         style={{
-          marginBottom: 16,
-          borderColor: ntlColor,
-          background: `${ntlColor}0d`,
-          padding: "20px 24px",
+          borderColor: nationalThreat.color,
+          background: `${nationalThreat.color}10`,
         }}
       >
-        <div style={{ display: "flex", alignItems: "center", gap: 20, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", gap: 24, flexWrap: "wrap", alignItems: "flex-end" }}>
           <div>
-            <p style={{ fontSize: "0.65rem", letterSpacing: "0.14em", opacity: 0.55, textTransform: "uppercase" }}>
-              National Threat Level
+            <p className="label">National threat level</p>
+            <p style={{ fontSize: "2.2rem", fontWeight: 800, color: nationalThreat.color, margin: "2px 0" }}>
+              {nationalThreat.level}
             </p>
-            <div style={{ fontSize: "2.4rem", fontWeight: 900, color: ntlColor, letterSpacing: "0.04em", fontFamily: "JetBrains Mono, monospace" }}>
-              {ntl}
-            </div>
+            <p className="muted">{nationalThreat.note}</p>
           </div>
-          <div style={{ display: "flex", gap: 20, flexWrap: "wrap", marginLeft: "auto" }}>
-            <Stat label="Active campaigns" value={activeCampaignCount} icon={<Radio size={14} />} color="var(--warning)" />
-            <Stat label="Live events" value={activeEventCount} icon={<Activity size={14} />} color="var(--info)" />
-            <Stat label="Critical alerts" value={critCount} icon={<AlertTriangle size={14} />} color="var(--risk-critical)" />
-            <Stat label="Cross-agency hits" value={correlations.length} icon={<Network size={14} />} color="var(--accent)" />
+
+          <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginLeft: "auto" }}>
+            <CommandStat label="Campaigns" value={activeCampaignCount} icon={<Radio size={13} />} tone="var(--warning)" />
+            <CommandStat label="Live events" value={activeEventCount} icon={<Activity size={13} />} tone="var(--info)" />
+            <CommandStat label="High-risk AI queue" value={highRiskPredictions.length} icon={<AlertTriangle size={13} />} tone="var(--risk-high)" />
+            <CommandStat label="Cross-agency hits" value={correlations.length} icon={<Network size={13} />} tone="var(--accent)" />
           </div>
         </div>
       </div>
 
-      {/* Agency presence grid */}
-      <div className="panel" style={{ marginBottom: 16 }}>
-        <div className="panel-header">
-          <h3><Shield size={14} style={{ verticalAlign: "middle", marginRight: 6 }} />Agency Network Status</h3>
-          <span className="muted">{onlineIds.size} / {ALL_AGENCIES.length} online</span>
-        </div>
-        <div className="agency-presence-grid">
-          {ALL_AGENCIES.map((code) => {
-            const online = onlineIds.has(code);
-            const color = agencyColor(code);
-            const partner = partners.find((p) => p.partner_id.toUpperCase() === code);
-            return (
-              <div key={code} className={`agency-presence-card ${online ? "online" : "offline"}`}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <span
-                    style={{
-                      fontFamily: "JetBrains Mono, monospace",
-                      fontSize: "1rem",
-                      fontWeight: 700,
-                      color: online ? color : "var(--ink-muted)",
-                    }}
-                  >
-                    {code}
-                  </span>
-                  <span className={`status-dot ${online ? "live" : "offline"}`} />
+      {view === "brief" && (
+        <>
+          <div className="metric-grid">
+            <CommandStat
+              label="Forecast"
+              value={forecast.forecast_score != null ? `${formatRiskScore(forecast.forecast_score)} / 100` : "No forecast"}
+              icon={<TrendingUp size={13} />}
+              tone={forecast.trend === "rising" ? "var(--risk-high)" : "var(--accent)"}
+            />
+            <CommandStat
+              label="Critical campaign queue"
+              value={threatSummaryData.campaign_risk.critical}
+              icon={<AlertTriangle size={13} />}
+              tone="var(--risk-critical)"
+            />
+            <CommandStat
+              label="Leakage alerts"
+              value={operationsData.leakageSummary.totalAlerts}
+              icon={<Shield size={13} />}
+              tone="var(--warning)"
+            />
+            <CommandStat
+              label="Guardrail blocks"
+              value={blockedGuardrails.length}
+              icon={<Shield size={13} />}
+              tone="var(--risk-critical)"
+            />
+          </div>
+
+          <div className="grid-two">
+            <div className="panel">
+              <div className="panel-header">
+                <h3>What needs attention first</h3>
+                <span className="muted">One queue at a time</span>
+              </div>
+              <div className="list">
+                <div className="list-item">
+                  <p style={{ fontWeight: 600, marginBottom: 4 }}>AI high-risk review queue</p>
+                  <p className="muted">
+                    {highRiskPredictions.length} entities are above the operational review threshold.
+                  </p>
+                  <button className="ghost" type="button" onClick={() => onNavigate("gnn")}>
+                    Open GNN Intelligence
+                  </button>
                 </div>
-                <div style={{ fontSize: "0.68rem", opacity: 0.6, marginTop: 4, lineHeight: 1.4 }}>
-                  {agencyName(code)}
+                <div className="list-item">
+                  <p style={{ fontWeight: 600, marginBottom: 4 }}>Campaign escalation</p>
+                  <p className="muted">
+                    {threatSummaryData.campaign_risk.critical} critical and {threatSummaryData.campaign_risk.high} high campaign indicators are active.
+                  </p>
+                  <button className="ghost" type="button" onClick={() => onNavigate("campaigns")}>
+                    Open Campaigns
+                  </button>
                 </div>
-                <div style={{ fontSize: "0.68rem", marginTop: 6, opacity: 0.5 }}>
-                  {partner ? (
-                    `Last: ${new Date(partner.last_seen_at ?? "").toLocaleDateString()}`
-                  ) : (
-                    "Not registered"
-                  )}
+                <div className="list-item">
+                  <p style={{ fontWeight: 600, marginBottom: 4 }}>Operational integrity</p>
+                  <p className="muted">
+                    {operationsData.integrityAlerts.length} integrity alerts and KES{" "}
+                    {operationsData.leakageSummary.suspectedAmountTotal.toLocaleString()} suspected leakage in the current window.
+                  </p>
+                  <button className="ghost" type="button" onClick={() => onNavigate("ops")}>
+                    Open Operations
+                  </button>
                 </div>
               </div>
-            );
-          })}
-          {/* CENTRAL */}
-          <div className="agency-presence-card online" style={{ borderColor: "var(--accent)" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <span style={{ fontFamily: "JetBrains Mono, monospace", fontSize: "1rem", fontWeight: 700, color: "var(--accent)" }}>
-                CENTRAL
-              </span>
-              <span className="status-dot live" />
             </div>
-            <div style={{ fontSize: "0.68rem", opacity: 0.6, marginTop: 4, lineHeight: 1.4 }}>
-              National Command Centre
+
+            <div className="panel">
+              <div className="panel-header">
+                <h3>Top threat entities</h3>
+                <span className="muted">{topThreats.length} shown</span>
+              </div>
+              {topThreats.length === 0 ? (
+                <div className="state-box">
+                  <Globe size={22} />
+                  <p>No threat entities available yet.</p>
+                </div>
+              ) : (
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Entity</th>
+                      <th>Type</th>
+                      <th>Score</th>
+                      <th>Stage</th>
+                      <th>Severity</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {topThreats.map((item) => (
+                      <tr key={item.entity_key}>
+                        <td className="mono" style={{ fontSize: "0.78rem" }}>{item.entity_key}</td>
+                        <td className="muted">{item.entity_type}</td>
+                        <td>{formatRiskScore(item.score)}</td>
+                        <td>{item.kill_chain_stage ?? "—"}</td>
+                        <td><span className={`risk-badge ${item.severity.toLowerCase()}`}>{item.severity}</span></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
             </div>
-            <div style={{ fontSize: "0.68rem", marginTop: 6, opacity: 0.5 }}>Hub instance</div>
           </div>
-        </div>
-      </div>
-
-      {/* Charts row */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
-        {/* Users by agency */}
-        <div className="panel">
-          <div className="panel-header">
-            <h3><Users size={13} style={{ verticalAlign: "middle", marginRight: 6 }} />Users by Agency</h3>
-            <span className="muted">{users.length} total</span>
-          </div>
-          <ResponsiveContainer width="100%" height={180}>
-            <BarChart data={agencyUserCounts} margin={{ top: 4, right: 8, left: -16, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="name" tick={{ fontSize: 9, fill: "var(--ink-muted)" }} />
-              <YAxis tick={{ fontSize: 10, fill: "var(--ink-muted)" }} />
-              <Tooltip contentStyle={{ background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 8, fontSize: 11 }} />
-              <Bar dataKey="users" fill="var(--info)" opacity={0.8} radius={[3, 3, 0, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-
-        {/* Role breakdown */}
-        <div className="panel">
-          <div className="panel-header">
-            <h3>Role Distribution</h3>
-          </div>
-          <ResponsiveContainer width="100%" height={180}>
-            <BarChart data={roleBreakdown} layout="vertical" margin={{ top: 4, right: 24, left: 10, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis type="number" tick={{ fontSize: 10, fill: "var(--ink-muted)" }} />
-              <YAxis dataKey="role" type="category" tick={{ fontSize: 10, fill: "var(--ink-muted)" }} />
-              <Tooltip contentStyle={{ background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 8, fontSize: 11 }} />
-              <Bar dataKey="count" fill="var(--accent)" opacity={0.8} radius={[0, 3, 3, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-      </div>
-
-      {/* IAM + GNN status row */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16, marginBottom: 16 }}>
-        {/* IAM summary */}
-        <div className="panel">
-          <div className="panel-header"><h3>Identity & Access</h3></div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            <MetricRow label="Central users"  value={centralUsers}  color="var(--accent)" />
-            <MetricRow label="Agency users"   value={sectionUsers}  color="var(--info)" />
-            <MetricRow label="MFA enrolled"   value={mfaEnabled}    color="var(--accent)" />
-            <MetricRow label="Locked accounts" value={lockedCount}  color={lockedCount > 0 ? "var(--danger)" : undefined} />
-          </div>
-          <button
-            className="btn-ghost"
-            style={{ marginTop: 12, fontSize: "0.75rem", width: "100%" }}
-            onClick={() => onNavigate("users")}
-          >
-            User Management →
-          </button>
-        </div>
-
-        {/* GNN status */}
-        <div className="panel">
-          <div className="panel-header"><h3>GNN Model Status</h3></div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            <MetricRow label="Model loaded" value={healthGnnLoaded ? "✓ Active" : "✗ Offline"} color={healthGnnLoaded ? "var(--accent)" : "var(--danger)"} />
-            {healthModelVersion && <MetricRow label="Version" value={healthModelVersion} mono />}
-            <MetricRow label="Predictions" value={operationsData.predictions.length} />
-            <MetricRow label="High-risk" value={operationsData.predictions.filter((p) => p.score >= 0.7).length} color="var(--risk-high)" />
-          </div>
-          <button
-            className="btn-ghost"
-            style={{ marginTop: 12, fontSize: "0.75rem", width: "100%" }}
-            onClick={() => onNavigate("gnn")}
-          >
-            GNN Intelligence →
-          </button>
-        </div>
-
-        {/* Corruption posture */}
-        <div className="panel">
-          <div className="panel-header"><h3>Economic Integrity</h3></div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            <MetricRow label="Procurement anomalies" value={operationsData.procurementAnomalies.length} color="var(--warning)" />
-            <MetricRow label="Integrity alerts" value={operationsData.integrityAlerts.length} color="var(--risk-critical)" />
-            <MetricRow label="Leakage alerts" value={operationsData.leakageAlerts.length} color="var(--risk-high)" />
-            <MetricRow label="Guardrail blocks" value={operationsData.guardrailDecisions.filter((g) => g.decision === "block").length} color="var(--danger)" />
-          </div>
-          <button
-            className="btn-ghost"
-            style={{ marginTop: 12, fontSize: "0.75rem", width: "100%" }}
-            onClick={() => onNavigate("corruption")}
-          >
-            Corruption Intel →
-          </button>
-        </div>
-      </div>
-
-      {/* Cross-agency correlations */}
-      {correlations.length > 0 && (
-        <div className="panel">
-          <div className="panel-header">
-            <h3><TrendingUp size={14} style={{ verticalAlign: "middle", marginRight: 6 }} />Cross-Agency Threat Correlations</h3>
-            <span className="muted">{correlations.length} matched entity hashes</span>
-          </div>
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>Entity hash</th>
-                <th>Partners</th>
-                <th>Agency IDs</th>
-                <th>Max confidence</th>
-                <th>Risk level</th>
-                <th>Last seen</th>
-              </tr>
-            </thead>
-            <tbody>
-              {correlations.slice(0, 8).map((c) => (
-                <tr key={c.entity_key_hash}>
-                  <td><span className="mono" style={{ fontSize: "0.78rem" }}>{c.entity_key_hash.slice(0, 16)}…</span></td>
-                  <td>
-                    <span style={{ fontWeight: 700, color: c.partner_count >= 3 ? "var(--danger)" : "var(--warning)" }}>
-                      {c.partner_count}
-                    </span>
-                  </td>
-                  <td className="muted" style={{ fontSize: "0.75rem" }}>{c.partner_ids.join(", ")}</td>
-                  <td style={{ fontSize: "0.8rem" }}>{c.max_confidence.toFixed(2)}</td>
-                  <td>
-                    <span className={`risk-badge ${c.risk_level.toLowerCase()}`}>{c.risk_level}</span>
-                  </td>
-                  <td className="muted" style={{ fontSize: "0.76rem" }}>
-                    {new Date(c.last_seen).toLocaleDateString("en-KE")}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <button
-            className="btn-ghost"
-            style={{ marginTop: 10, fontSize: "0.75rem" }}
-            onClick={() => onNavigate("federation")}
-          >
-            Full Federation Dashboard →
-          </button>
-        </div>
+        </>
       )}
 
-      {loading && (
-        <div className="state-box">
-          <Loader size={22} />
-          <p>Loading command centre data…</p>
+      {view === "network" && (
+        <>
+          <div className="panel">
+            <div className="panel-header">
+              <h3>Agency network status</h3>
+              <span className="muted">{onlinePartnerIds.size} / {ALL_AGENCIES.length} active partners</span>
+            </div>
+            <div className="agency-presence-grid">
+              {ALL_AGENCIES.map((code) => {
+                const online = onlinePartnerIds.has(code);
+                const color = agencyColor(code);
+                const partner = partners.find((item) => item.partner_id.toUpperCase() === code);
+                return (
+                  <div key={code} className={`agency-presence-card ${online ? "online" : "offline"}`}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <span style={{ fontFamily: "JetBrains Mono, monospace", fontWeight: 700, color: online ? color : "var(--ink-muted)" }}>
+                        {code}
+                      </span>
+                      <span className={`status-dot ${online ? "live" : "offline"}`} />
+                    </div>
+                    <div style={{ fontSize: "0.72rem", opacity: 0.7, marginTop: 4 }}>{agencyName(code)}</div>
+                    <div className="muted" style={{ marginTop: 6 }}>
+                      {partner?.last_seen_at ? `Last seen ${new Date(partner.last_seen_at).toLocaleDateString("en-KE")}` : "Not registered"}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="grid-two">
+            <div className="panel">
+              <div className="panel-header">
+                <h3>Cross-agency correlations</h3>
+                <span className="muted">{correlations.length} active matches</span>
+              </div>
+              {correlations.length === 0 ? (
+                <div className="state-box">
+                  <Network size={22} />
+                  <p>No active cross-agency correlations yet.</p>
+                </div>
+              ) : (
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Entity hash</th>
+                      <th>Partners</th>
+                      <th>Risk</th>
+                      <th>Last seen</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {correlations.slice(0, 8).map((item) => (
+                      <tr key={item.entity_key_hash}>
+                        <td className="mono" style={{ fontSize: "0.78rem" }}>{item.entity_key_hash.slice(0, 16)}…</td>
+                        <td>{item.partner_count} · <span className="muted">{item.partner_ids.join(", ")}</span></td>
+                        <td><span className={`risk-badge ${item.risk_level.toLowerCase()}`}>{item.risk_level}</span></td>
+                        <td className="muted">{new Date(item.last_seen).toLocaleDateString("en-KE")}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+
+            <div className="panel">
+              <div className="panel-header">
+                <h3>Partner coverage</h3>
+                <span className="muted">Active user footprint</span>
+              </div>
+              <div className="list">
+                {agencyUserCounts.length === 0 ? (
+                  <div className="state-box">
+                    <Users size={22} />
+                    <p>No active agency users found.</p>
+                  </div>
+                ) : (
+                  agencyUserCounts.slice(0, 8).map((item) => (
+                    <div key={item.code} className="list-item" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <div>
+                        <p style={{ fontWeight: 600, marginBottom: 2 }}>{item.label}</p>
+                        <p className="muted">{agencyName(item.code)}</p>
+                      </div>
+                      <span className="stat mono">{item.count}</span>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+
+      {view === "readiness" && (
+        <div className="grid-three">
+          <div className="panel">
+            <div className="panel-header">
+              <h3>Identity readiness</h3>
+              <span className="muted">People and access</span>
+            </div>
+            <div className="list">
+              <div className="list-item"><strong>{centralUsers}</strong> central users</div>
+              <div className="list-item"><strong>{sectionUsers}</strong> agency users</div>
+              <div className="list-item"><strong>{mfaEnabled}</strong> MFA-enrolled users</div>
+              <div className="list-item"><strong>{lockedCount}</strong> locked accounts</div>
+            </div>
+            <button className="ghost" type="button" onClick={() => onNavigate("users")}>
+              Open User Management
+            </button>
+          </div>
+
+          <div className="panel">
+            <div className="panel-header">
+              <h3>Model readiness</h3>
+              <span className="muted">AI and explainability</span>
+            </div>
+            <div className="list">
+              <div className="list-item"><strong>{healthGnnLoaded ? "Loaded" : "Offline"}</strong> primary GNN artifact</div>
+              <div className="list-item"><strong>{healthModelVersion ?? "—"}</strong> active model version</div>
+              <div className="list-item"><strong>{operationsData.predictions.length}</strong> predictions in current operational snapshot</div>
+              <div className="list-item"><strong>{highRiskPredictions.length}</strong> predictions above operational threshold</div>
+            </div>
+            <button className="ghost" type="button" onClick={() => onNavigate("gnn")}>
+              Open GNN Intelligence
+            </button>
+          </div>
+
+          <div className="panel">
+            <div className="panel-header">
+              <h3>Economic integrity</h3>
+              <span className="muted">Public-sector risk</span>
+            </div>
+            <div className="list">
+              <div className="list-item"><strong>{operationsData.procurementAnomalies.length}</strong> procurement anomalies</div>
+              <div className="list-item"><strong>{operationsData.integrityAlerts.length}</strong> integrity alerts</div>
+              <div className="list-item"><strong>{operationsData.leakageSummary.totalAlerts}</strong> leakage alerts</div>
+              <div className="list-item">
+                <strong>KES {operationsData.leakageSummary.suspectedAmountTotal.toLocaleString()}</strong> suspected amount
+              </div>
+            </div>
+            <button className="ghost" type="button" onClick={() => onNavigate("reports")}>
+              Open Reports
+            </button>
+          </div>
         </div>
       )}
-    </div>
-  );
-}
-
-function Stat({ label, value, icon, color }: { label: string; value: number | string; icon?: React.ReactNode; color?: string }) {
-  return (
-    <div style={{ textAlign: "center" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 4, justifyContent: "center", opacity: 0.6, fontSize: "0.7rem", textTransform: "uppercase" }}>
-        {icon}{label}
-      </div>
-      <div style={{ fontSize: "1.6rem", fontWeight: 800, color: color ?? "var(--ink)", fontFamily: "JetBrains Mono, monospace" }}>
-        {value}
-      </div>
-    </div>
-  );
-}
-
-function MetricRow({ label, value, color, mono }: { label: string; value: string | number; color?: string; mono?: boolean }) {
-  return (
-    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: "0.82rem" }}>
-      <span className="muted">{label}</span>
-      <span style={{ color: color ?? "var(--ink)", fontFamily: mono ? "JetBrains Mono, monospace" : undefined }}>
-        {value}
-      </span>
-    </div>
+    </section>
   );
 }

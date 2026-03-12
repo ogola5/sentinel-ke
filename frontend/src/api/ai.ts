@@ -60,6 +60,34 @@ export async function fetchAIPredictions(limit = 20, windowKey?: string): Promis
   }
 }
 
+export async function fetchEntityPredictions(
+  entityKey: string,
+  options: {
+    limit?: number;
+    predictionType?: string;
+    windowKey?: string;
+  } = {},
+): Promise<AIPrediction[]> {
+  try {
+    const data = await apiFetchJson<ListResponse<AIPrediction> | AIPrediction[]>(
+      endpoints.aiPredictionsByEntity(entityKey, options.limit ?? 20, 0, options.windowKey, options.predictionType),
+    );
+    return Array.isArray(data) ? data : (data.items ?? []);
+  } catch {
+    return [];
+  }
+}
+
+export async function fetchPredictionExplanation(
+  predictionId: string,
+): Promise<Record<string, unknown> | null> {
+  try {
+    return await apiFetchJson<Record<string, unknown>>(endpoints.aiPredictionExplanation(predictionId));
+  } catch {
+    return null;
+  }
+}
+
 export async function submitAIFeedback(
   predictionId: string,
   feedbackLabel: 0 | 1 | 2,

@@ -1,7 +1,9 @@
-import { ChevronLeft, ChevronRight, LogOut, RefreshCw, Settings } from "lucide-react";
+import { useState } from "react";
+import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, LogOut, RefreshCw, Settings } from "lucide-react";
 
 import { agencyColor, agencyName, type Principal } from "../types/auth";
 import {
+  NAV_ADMIN,
   NAV_ANALYZE,
   NAV_ATTRIBUTE,
   NAV_COMMAND,
@@ -19,6 +21,7 @@ export default function Sidebar({
   auditorOnly,
   central,
   execute,
+  manageUsers,
   collapsed,
   backendStatus,
   backendLabel,
@@ -37,6 +40,7 @@ export default function Sidebar({
   auditorOnly: boolean;
   central: boolean;
   execute: boolean;
+  manageUsers: boolean;
   collapsed: boolean;
   backendStatus: BackendStatus;
   backendLabel: string;
@@ -50,8 +54,15 @@ export default function Sidebar({
   onTriggerSync: () => void;
   onLogout: () => void;
 }) {
+  const [adminOpen, setAdminOpen] = useState(false);
   const statusDotClass = backendStatus === "connected" ? "live" : backendStatus === "degraded" ? "degraded" : "offline";
   const color = agencyColor(principal.section_code);
+
+  // Filter admin items by role so unauthorised entries don't appear
+  const adminItems = NAV_ADMIN.filter((item) => {
+    if (item.id === "exec" || item.id === "onboard" || item.id === "users") return central || manageUsers;
+    return true;
+  });
 
   return (
     <aside className={collapsed ? "nav nav-collapsed" : "nav"}>
@@ -132,6 +143,28 @@ export default function Sidebar({
           <NavGroup label="COMMAND" color="var(--command)" items={NAV_COMMAND} active={activeScreen}
             collapsed={collapsed} onSelect={(id) => onNavigate(id as ScreenId)} />
         )}
+
+        {/* ── System drawer ─────────────────────────────────────────────── */}
+        <div className="nav-group">
+          <button
+            className="nav-admin-toggle"
+            type="button"
+            onClick={() => setAdminOpen((o) => !o)}
+            title="System tools"
+          >
+            <Settings size={12} style={{ opacity: 0.5 }} />
+            {!collapsed && (
+              <>
+                <span className="nav-group-label nav-group-label-grow">SYSTEM</span>
+                {adminOpen ? <ChevronUp size={10} style={{ opacity: 0.4 }} /> : <ChevronDown size={10} style={{ opacity: 0.4 }} />}
+              </>
+            )}
+          </button>
+          {adminOpen && (
+            <NavGroup label="" color="var(--muted)" items={adminItems} active={activeScreen}
+              collapsed={collapsed} onSelect={(id) => onNavigate(id as ScreenId)} />
+          )}
+        </div>
       </nav>
 
       <div className="nav-footer">

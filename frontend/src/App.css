@@ -108,10 +108,41 @@
   flex-wrap: wrap;
   gap: 20px;
   align-items: flex-end;
+  justify-content: space-between;
   padding: 14px 28px;
   border-bottom: 1px solid var(--line);
   background: rgba(var(--surface-rgb), 0.72);
   backdrop-filter: blur(10px);
+}
+
+.topbar-screen {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: min(100%, 280px);
+}
+
+.topbar-screen-title {
+  font-size: 1rem;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.topbar-screen-subtitle {
+  font-size: 0.8rem;
+  color: var(--ink-muted);
+  max-width: 560px;
+  line-height: 1.5;
+  margin: 0;
+}
+
+.topbar-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: flex-end;
+  justify-content: flex-end;
+  flex: 1;
 }
 
 .topbar-group {
@@ -320,6 +351,26 @@
   font-weight: 600;
 }
 
+.nav-group-label-grow {
+  flex: 1;
+}
+
+.nav-admin-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--muted);
+  padding: 4px 10px 2px;
+}
+
+.nav-admin-toggle:hover {
+  color: var(--text);
+}
+
 /* =============================================================================
    Modal overlay (CredentialsPanel)
    ============================================================================= */
@@ -385,7 +436,13 @@
 
 .topbar-search {
   flex: 1;
-  min-width: 0;
+  min-width: min(100%, 320px);
+}
+
+.topbar-search-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .topbar-end {
@@ -1178,6 +1235,10 @@
     grid-template-columns: 1fr;
   }
 
+  .topbar-controls {
+    justify-content: flex-start;
+  }
+
   .evidence-drawer {
     left: 16px;
     right: 16px;
@@ -1201,6 +1262,10 @@
 
   .table-row {
     grid-template-columns: 1fr;
+  }
+
+  .topbar-search-row {
+    flex-wrap: wrap;
   }
 
   .actions {

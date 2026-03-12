@@ -32,6 +32,7 @@ const DefenseCenter = lazy(() => import("../screens/respond/DefenseCenter"));
 const FederationDashboard = lazy(() => import("../screens/govern/FederationDashboard"));
 const CorruptionIntel = lazy(() => import("../screens/govern/CorruptionIntel"));
 const AuditLog = lazy(() => import("../screens/govern/AuditLog"));
+const ReportsCenter = lazy(() => import("../screens/ReportsCenter"));
 const EntityInvestigation = lazy(() => import("../screens/EntityInvestigation"));
 const CentralCommand = lazy(() => import("../screens/command/CentralCommand"));
 const ExecBrief = lazy(() => import("../screens/command/ExecBrief"));
@@ -65,6 +66,7 @@ export default function ActiveScreen({
   entitiesData,
   graphData,
   activeCase,
+  selectedEntity,
   selectedCampaignId,
   selectedClusterId,
   selectedServiceId,
@@ -102,6 +104,7 @@ export default function ActiveScreen({
   entitiesData: EntityProfile[];
   graphData: GraphData;
   activeCase?: CasePacket;
+  selectedEntity: EntityProfile | null;
   selectedCampaignId: string;
   selectedClusterId: string;
   selectedServiceId: string;
@@ -134,6 +137,7 @@ export default function ActiveScreen({
           activeEventCount={eventsData.length}
           healthGnnLoaded={healthGnnLoaded}
           healthModelVersion={healthModelVersion}
+          threatSummaryData={threatSummaryData}
           onNavigate={(screen) => onNavigate(screen as ScreenId)}
         />
       )}
@@ -223,12 +227,13 @@ export default function ActiveScreen({
       {activeScreen === "ops" && (
         <OperationsCenter data={operationsData} onRunLeakage={onRunLeakage} leakageActionLabel={leakageActionLabel} />
       )}
+      {activeScreen === "reports" && <ReportsCenter />}
       {activeScreen === "corruption" && (
         <CorruptionIntel data={operationsData} onRunLeakage={onRunLeakage} leakageActionLabel={leakageActionLabel} />
       )}
       {activeScreen === "federation" && <FederationDashboard />}
       {activeScreen === "audit" && <AuditLog />}
-      {activeScreen === "investigate" && <EntityInvestigation />}
+      {activeScreen === "investigate" && <EntityInvestigation initialEntityKey={selectedEntity?.label ?? null} />}
     </Suspense>
   );
 }

@@ -107,6 +107,20 @@ class Settings:
     )
 
     # ---------------------------------------------------------
+    # Edge / station deployment
+    # Set IS_EDGE_NODE=true on agency stations.
+    # Central hub sets IS_EDGE_NODE=false (default).
+    # ---------------------------------------------------------
+    is_edge_node            = env_bool("IS_EDGE_NODE", False)
+    edge_partner_id         = os.environ.get("EDGE_PARTNER_ID", "").strip()
+    edge_hub_url            = os.environ.get("EDGE_HUB_URL", "").strip()
+    edge_hub_api_key        = os.environ.get("EDGE_HUB_API_KEY", "").strip()
+    edge_national_salt      = os.environ.get("EDGE_NATIONAL_SALT", "").strip()
+    edge_sync_min_risk      = float(os.environ.get("EDGE_SYNC_MIN_RISK", "60.0"))  # AIPrediction.score is 0-100
+    edge_sync_batch_size    = int(os.environ.get("EDGE_SYNC_BATCH_SIZE", "200"))
+    edge_sync_lookback_hours = int(os.environ.get("EDGE_SYNC_LOOKBACK_HOURS", "4"))
+
+    # ---------------------------------------------------------
     # NL Analyst Copilot (local in-house engine)
     # ---------------------------------------------------------
     ai_copilot_enabled = env_bool("AI_COPILOT_ENABLED", True)

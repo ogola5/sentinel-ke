@@ -40,7 +40,7 @@ import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import func, text
 from sqlalchemy.orm import Session
@@ -102,10 +102,13 @@ class PartnerRegistration(BaseModel):
 # Auth helper — verifies edge agent API key
 # ---------------------------------------------------------------------------
 
-def _require_partner_api_key(
+async def _require_partner_api_key(
+    request: Request,
     x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+    x_signature: Optional[str] = Header(default=None, alias="X-Sentinel-Signature"),
     db: Session = Depends(get_db),
 ) -> FederationPartner:
+    request_body = await request.body()
     if not x_api_key:
         raise HTTPException(status_code=401, detail="Missing X-API-Key")
     key_hash = hashlib.sha256(x_api_key.encode()).hexdigest()
@@ -117,6 +120,15 @@ def _require_partner_api_key(
     )
     if not partner:
         raise HTTPException(status_code=403, detail="Unknown or inactive partner API key")
+
+    # Verify HMAC-SHA256 body signature to prevent payload tampering
+    if x_signature:
+        expected = "sha256=" + hmac.new(
+            x_api_key.encode(), request_body, hashlib.sha256
+        ).hexdigest()
+        if not hmac.compare_digest(expected, x_signature):
+            raise HTTPException(status_code=403, detail="Invalid request signature")
+
     return partner
 
 
@@ -124,21 +136,40 @@ def _require_partner_api_key(
 # POST /v1/federation/patterns  — edge agent submits GNN patterns
 # ---------------------------------------------------------------------------
 
+_PARTNER_SUBMIT_WINDOW: Dict[str, list] = {}   # partner_id → [timestamp, ...]
+_PARTNER_MAX_BATCHES_PER_HOUR = 60             # one batch per minute max per partner
+
+
+def _check_partner_rate_limit(partner_id: str) -> None:
+    """Sliding-window rate limiter: max 60 batches per partner per hour."""
+    now = datetime.now(timezone.utc).timestamp()
+    window = _PARTNER_SUBMIT_WINDOW.setdefault(partner_id, [])
+    # evict entries older than 1 hour
+    _PARTNER_SUBMIT_WINDOW[partner_id] = [t for t in window if now - t < 3600]
+    if len(_PARTNER_SUBMIT_WINDOW[partner_id]) >= _PARTNER_MAX_BATCHES_PER_HOUR:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Rate limit exceeded: max {_PARTNER_MAX_BATCHES_PER_HOUR} batches/hour per partner",
+        )
+    _PARTNER_SUBMIT_WINDOW[partner_id].append(now)
+
+
 @router.post(
     "/patterns",
     summary="Submit GNN pattern batch from edge agent",
     description=(
         "Called automatically by the Sentinel-KE Edge Agent after each local GNN run. "
         "Accepts a batch of high-risk entity patterns (hashed keys only — no raw data). "
-        "Auth: partner API key issued at registration."
+        "Auth: partner API key + HMAC-SHA256 request signature."
     ),
     status_code=202,
 )
-def submit_patterns(
+async def submit_patterns(
     batch: PatternBatch,
     partner: FederationPartner = Depends(_require_partner_api_key),
     db: Session = Depends(get_db),
 ) -> dict:
+    _check_partner_rate_limit(partner.partner_id)
     if partner.partner_id != batch.partner_id:
         raise HTTPException(status_code=403,
                             detail="partner_id in payload does not match API key owner")
@@ -416,9 +447,73 @@ def register_partner(
         "warning":            "Store api_key and correlation_salt securely. Neither can be retrieved again.",
         "webhook_registered": reg.webhook_url is not None,
         "edge_agent_env": {
-            "PARTNER_ID":       reg.partner_id,
-            "HUB_URL":          "https://sentinel-ke.onrender.com",
-            "HUB_API_KEY":      raw_key,
-            "NATIONAL_SALT":    correlation_salt,
+            "IS_EDGE_NODE":         "true",
+            "EDGE_PARTNER_ID":      reg.partner_id,
+            "EDGE_HUB_URL":         hub_settings.edge_hub_url or "https://<set-EDGE_HUB_URL-in-env>",
+            "EDGE_HUB_API_KEY":     raw_key,
+            "EDGE_NATIONAL_SALT":   correlation_salt,
         },
+    }
+
+
+# ---------------------------------------------------------------------------
+# GET /v1/federation/edge-status  — edge sync agent health (edge nodes only)
+# ---------------------------------------------------------------------------
+
+@router.get(
+    "/edge-status",
+    summary="Edge sync agent health — reads local sync state file",
+    dependencies=[Depends(require_section_access)],
+)
+def edge_sync_status() -> dict:
+    """
+    Returns the local edge sync agent's last push time, total pushed,
+    and last error (if any).  Only meaningful when running on an edge node.
+    Returns is_edge_node=false on the central hub.
+    """
+    import json as _json
+    from pathlib import Path as _Path
+
+    if not hub_settings.is_edge_node:
+        return {
+            "is_edge_node": False,
+            "message": "This instance is the central hub, not an edge station.",
+        }
+
+    state_file = _Path(hub_settings.gnn_artifact_dir).parent / "edge_sync_state.json"
+    if not state_file.exists():
+        return {
+            "is_edge_node": True,
+            "partner_id": hub_settings.edge_partner_id,
+            "status": "never_synced",
+            "last_synced_at": None,
+            "total_pushed": 0,
+            "last_error": None,
+        }
+
+    try:
+        state = _json.loads(state_file.read_text())
+    except Exception as exc:
+        return {"is_edge_node": True, "status": "state_file_corrupt", "error": str(exc)}
+
+    last_synced = state.get("last_synced_at")
+    age_sec = None
+    status = "unknown"
+    if last_synced:
+        try:
+            last_dt = datetime.fromisoformat(last_synced)
+            age_sec = round((datetime.now(timezone.utc) - last_dt).total_seconds())
+            status = "healthy" if age_sec < 300 else ("stale" if age_sec < 900 else "lagging")
+        except Exception:
+            status = "parse_error"
+
+    return {
+        "is_edge_node": True,
+        "partner_id": hub_settings.edge_partner_id,
+        "hub_url": hub_settings.edge_hub_url,
+        "status": status,
+        "last_synced_at": last_synced,
+        "age_seconds": age_sec,
+        "total_pushed": state.get("total_pushed", 0),
+        "last_error": state.get("last_error"),
     }
