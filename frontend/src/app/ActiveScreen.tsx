@@ -233,7 +233,12 @@ export default function ActiveScreen({
       )}
       {activeScreen === "federation" && <FederationDashboard />}
       {activeScreen === "audit" && <AuditLog />}
-      {activeScreen === "investigate" && <EntityInvestigation initialEntityKey={selectedEntity?.label ?? null} />}
+      {activeScreen === "investigate" && (
+        <EntityInvestigation
+          initialEntityKey={selectedEntity?.label ?? null}
+          analystId={principal.username}
+        />
+      )}
     </Suspense>
   );
 }

@@ -16,6 +16,7 @@ REQUIRED_COLUMNS: Mapping[str, tuple[str, ...]] = {
     "entity_embedding": ("embedding_type",),
     "infra_cluster": ("cluster_key",),
     "containment_webhook": ("secret_enc",),
+    "legal_authorization_grant": ("policy_version", "model_action_scope_json"),
 }
 
 
@@ -58,6 +59,8 @@ def apply_schema_contract(engine: Engine) -> Dict[str, int]:
         "CREATE UNIQUE INDEX IF NOT EXISTS ux_infra_cluster_cluster_key ON infra_cluster (cluster_key)",
         "ALTER TABLE containment_webhook ADD COLUMN IF NOT EXISTS secret_enc TEXT",
         "ALTER TABLE containment_webhook DROP COLUMN IF EXISTS secret_hash",
+        "ALTER TABLE legal_authorization_grant ADD COLUMN IF NOT EXISTS policy_version VARCHAR DEFAULT 'v1'",
+        "ALTER TABLE legal_authorization_grant ADD COLUMN IF NOT EXISTS model_action_scope_json JSONB DEFAULT '{}'::jsonb",
     )
 
     applied = 0

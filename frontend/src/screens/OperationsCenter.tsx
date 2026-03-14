@@ -5,6 +5,7 @@ import type { OperationsSnapshot } from "../types/operations";
 import { formatRiskScore, isHighRisk, riskSeverityLabel } from "../utils/risk";
 
 type OperationsView = "overview" | "review" | "integrity";
+type ReviewQueue = "predictions" | "anomalies";
 
 type OperationsCenterProps = {
   data: OperationsSnapshot;
@@ -21,8 +22,47 @@ const anomalyLabel = (score: number): "high" | "medium" | "low" => {
 const compactAmount = (value: number): string =>
   new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 }).format(value);
 
+const VIEW_GUIDES: Record<OperationsView, {
+  kicker: string;
+  title: string;
+  summary: string;
+  steps: [string, string, string];
+}> = {
+  overview: {
+    kicker: "Operational posture",
+    title: "Start with the short national posture before you open any queue.",
+    summary: "This view keeps posture, top pressure points, and next-action items in one place without mixing in all the detailed queues.",
+    steps: [
+      "Read the current pressure points.",
+      "Choose the next queue to clear.",
+      "Move into Review Queue for one queue at a time.",
+    ],
+  },
+  review: {
+    kicker: "Review queue",
+    title: "Work one operational queue at a time.",
+    summary: "This view is for analyst review only. Pick either AI predictions or anomalies, clear that queue, then move on.",
+    steps: [
+      "Choose one queue only.",
+      "Review the highest-priority rows first.",
+      "Open mitigations only after you understand the queue state.",
+    ],
+  },
+  integrity: {
+    kicker: "Integrity and leakage",
+    title: "Use this view for financial integrity, procurement risk, and leakage signals.",
+    summary: "This view narrows the problem to corruption and economic exposure instead of mixing it with cyber triage.",
+    steps: [
+      "Read the leakage summary first.",
+      "Check the priority integrity rows next.",
+      "Trigger a leakage run only when you need a fresh pass.",
+    ],
+  },
+};
+
 export default function OperationsCenter({ data, onRunLeakage, leakageActionLabel }: OperationsCenterProps) {
   const [view, setView] = useState<OperationsView>("overview");
+  const [reviewQueue, setReviewQueue] = useState<ReviewQueue>("predictions");
 
   const highRiskPredictions = useMemo(
     () => data.predictions.filter((item) => isHighRisk(item.score)),
@@ -36,6 +76,9 @@ export default function OperationsCenter({ data, onRunLeakage, leakageActionLabe
     () => data.guardrailDecisions.filter((item) => item.decision === "block"),
     [data.guardrailDecisions],
   );
+  const viewGuide = VIEW_GUIDES[view];
+  const primaryQueue = highRiskPredictions.length >= highAnomalies.length ? "AI risk queue" : "Anomaly queue";
+  const reviewCount = reviewQueue === "predictions" ? data.predictions.length : data.anomalies.length;
 
   return (
     <section className="screen">
@@ -44,7 +87,7 @@ export default function OperationsCenter({ data, onRunLeakage, leakageActionLabe
           <p className="eyebrow">S7</p>
           <h2>Operations</h2>
           <p className="subtle">
-            One operational queue at a time: first posture, then review, then integrity and leakage.
+            One operational queue at a time: posture first, review second, integrity third.
           </p>
         </div>
         <div className="screen-header-actions">
@@ -70,142 +113,201 @@ export default function OperationsCenter({ data, onRunLeakage, leakageActionLabe
         </div>
       </div>
 
-      <div className="metric-grid">
-        <div className="metric-card">
-          <div className="metric-label">Live events</div>
-          <div className="metric-value">{data.metrics.events}</div>
-          <div className="metric-sub">{data.metrics.graphDeltas} graph deltas</div>
-        </div>
-        <div className="metric-card">
-          <div className="metric-label">Anomaly queue</div>
-          <div className="metric-value">{data.anomalies.length}</div>
-          <div className="metric-sub">{highAnomalies.length} high severity</div>
-        </div>
-        <div className="metric-card">
-          <div className="metric-label">AI risk queue</div>
-          <div className="metric-value">{highRiskPredictions.length}</div>
-          <div className="metric-sub">Scores at or above 70 / 100</div>
-        </div>
-        <div className="metric-card">
-          <div className="metric-label">Leakage monitor</div>
-          <div className="metric-value">KES {compactAmount(data.leakageSummary.suspectedAmountTotal)}</div>
-          <div className="metric-sub">{data.leakageSummary.totalAlerts} alerts</div>
+      <div className="panel workflow-guide-panel" style={{ background: "rgba(var(--info-rgb), 0.08)", borderColor: "rgba(var(--info-rgb), 0.24)" }}>
+        <p className="workflow-stage-kicker">{viewGuide.kicker}</p>
+        <div className="detail-grid">
+          <div>
+            <strong>{viewGuide.title}</strong>
+            <p className="workflow-stage-copy" style={{ marginTop: 6 }}>{viewGuide.summary}</p>
+          </div>
+          <div>
+            <strong>Best flow</strong>
+            <ul className="inspector-compact-list" style={{ marginTop: 8 }}>
+              {viewGuide.steps.map((step) => <li key={step}>{step}</li>)}
+            </ul>
+          </div>
         </div>
       </div>
 
       {view === "overview" && (
-        <div className="grid-two">
-          <div className="panel">
-            <div className="panel-header">
-              <h3>Current posture</h3>
-              <span className="muted">What matters right now</span>
+        <div className="workflow-stack">
+          <div className="metric-grid">
+            <div className="metric-card">
+              <div className="metric-label">Live events</div>
+              <div className="metric-value">{data.metrics.events}</div>
+              <div className="metric-sub">{data.metrics.graphDeltas} graph deltas</div>
             </div>
-            <div className="list">
-              <div className="list-item">
-                <p style={{ display: "flex", alignItems: "center", gap: 8, fontWeight: 600 }}>
-                  <AlertTriangle size={14} color="var(--risk-high)" />
-                  Anomaly queue
-                </p>
-                <p className="muted">{data.anomalies.length} active anomalies, {highAnomalies.length} in the highest bucket.</p>
-              </div>
-              <div className="list-item">
-                <p style={{ display: "flex", alignItems: "center", gap: 8, fontWeight: 600 }}>
-                  <Shield size={14} color="var(--accent)" />
-                  AI risk review
-                </p>
-                <p className="muted">{highRiskPredictions.length} AI predictions are above the operational threshold.</p>
-              </div>
-              <div className="list-item">
-                <p style={{ display: "flex", alignItems: "center", gap: 8, fontWeight: 600 }}>
-                  <Wallet size={14} color="var(--warning)" />
-                  Economic exposure
-                </p>
-                <p className="muted">
-                  {data.integrityAlerts.length} integrity alerts and KES {data.leakageSummary.suspectedAmountTotal.toLocaleString()} suspected leakage.
-                </p>
-              </div>
+            <div className="metric-card">
+              <div className="metric-label">Anomaly queue</div>
+              <div className="metric-value">{data.anomalies.length}</div>
+              <div className="metric-sub">{highAnomalies.length} high severity</div>
+            </div>
+            <div className="metric-card">
+              <div className="metric-label">AI risk queue</div>
+              <div className="metric-value">{highRiskPredictions.length}</div>
+              <div className="metric-sub">Scores at or above 70 / 100</div>
+            </div>
+            <div className="metric-card">
+              <div className="metric-label">Leakage monitor</div>
+              <div className="metric-value">KES {compactAmount(data.leakageSummary.suspectedAmountTotal)}</div>
+              <div className="metric-sub">{data.leakageSummary.totalAlerts} alerts</div>
             </div>
           </div>
 
-          <div className="panel">
-            <div className="panel-header">
-              <h3>Recent actionable items</h3>
-              <span className="muted">Short list, not a flood</span>
+          <div className="workflow-summary-banner">
+            <div>
+              <strong>{primaryQueue}</strong>
+              <span className="muted">Recommended next queue to clear based on current pressure</span>
             </div>
-            <div className="list">
-              {[
-                ...highRiskPredictions.slice(0, 2).map((item) => ({
-                  title: item.entityKey,
-                  subtitle: `${item.predictionType} · ${item.evidenceCount} evidence refs`,
-                  score: `${formatRiskScore(item.score)} / 100`,
-                })),
-                ...data.mitigations.slice(0, 2).map((item) => ({
-                  title: item.kind,
-                  subtitle: item.stakeholders.join(", ") || item.refId,
-                  score: item.createdAt,
-                })),
-              ].slice(0, 4).map((item, index) => (
-                <div key={`${item.title}-${index}`} className="list-item" style={{ display: "flex", justifyContent: "space-between", gap: 16 }}>
-                  <div>
-                    <p style={{ fontWeight: 600, marginBottom: 3 }}>{item.title}</p>
-                    <p className="muted">{item.subtitle}</p>
+            <div>
+              <strong>{highRiskPredictions.length + highAnomalies.length}</strong>
+              <span className="muted">High-priority review rows across the platform</span>
+            </div>
+            <div>
+              <strong>KES {data.leakageSummary.suspectedAmountTotal.toLocaleString()}</strong>
+              <span className="muted">Current suspected economic exposure</span>
+            </div>
+          </div>
+
+          <div className="grid-two">
+            <div className="panel workflow-stage-panel">
+              <div className="panel-header">
+                <h3>Current posture</h3>
+                <span className="muted">What matters right now</span>
+              </div>
+              <div className="list">
+                <div className="list-item">
+                  <p style={{ display: "flex", alignItems: "center", gap: 8, fontWeight: 600 }}>
+                    <AlertTriangle size={14} color="var(--risk-high)" />
+                    Anomaly queue
+                  </p>
+                  <p className="muted">{data.anomalies.length} active anomalies, {highAnomalies.length} in the highest bucket.</p>
+                </div>
+                <div className="list-item">
+                  <p style={{ display: "flex", alignItems: "center", gap: 8, fontWeight: 600 }}>
+                    <Shield size={14} color="var(--accent)" />
+                    AI risk review
+                  </p>
+                  <p className="muted">{highRiskPredictions.length} AI predictions are above the operational threshold.</p>
+                </div>
+                <div className="list-item">
+                  <p style={{ display: "flex", alignItems: "center", gap: 8, fontWeight: 600 }}>
+                    <Wallet size={14} color="var(--warning)" />
+                    Economic exposure
+                  </p>
+                  <p className="muted">
+                    {data.integrityAlerts.length} integrity alerts and KES {data.leakageSummary.suspectedAmountTotal.toLocaleString()} suspected leakage.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="panel workflow-stage-panel">
+              <div className="panel-header">
+                <h3>Next actionable items</h3>
+                <span className="muted">Short list, not a flood</span>
+              </div>
+              <div className="list">
+                {[
+                  ...highRiskPredictions.slice(0, 2).map((item) => ({
+                    title: item.entityKey,
+                    subtitle: `${item.predictionType} · ${item.evidenceCount} evidence refs`,
+                    score: `${formatRiskScore(item.score)} / 100`,
+                  })),
+                  ...data.mitigations.slice(0, 2).map((item) => ({
+                    title: item.kind,
+                    subtitle: item.stakeholders.join(", ") || item.refId,
+                    score: item.createdAt,
+                  })),
+                ].slice(0, 4).map((item, index) => (
+                  <div key={`${item.title}-${index}`} className="list-item" style={{ display: "flex", justifyContent: "space-between", gap: 16 }}>
+                    <div>
+                      <p style={{ fontWeight: 600, marginBottom: 3 }}>{item.title}</p>
+                      <p className="muted">{item.subtitle}</p>
+                    </div>
+                    <span className="mono">{item.score}</span>
                   </div>
-                  <span className="mono">{item.score}</span>
-                </div>
-              ))}
-              {highRiskPredictions.length === 0 && data.mitigations.length === 0 && (
-                <div className="state-box">
-                  <Activity size={20} />
-                  <p>No action queue is populated yet.</p>
-                </div>
-              )}
+                ))}
+                {highRiskPredictions.length === 0 && data.mitigations.length === 0 && (
+                  <div className="state-box">
+                    <Activity size={20} />
+                    <p>No action queue is populated yet.</p>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         </div>
       )}
 
       {view === "review" && (
-        <div className="grid-two">
-          <div className="panel">
-            <div className="panel-header">
-              <h3>Anomalies</h3>
-              <span className="muted">{data.anomalies.length} rows</span>
-            </div>
-            {data.anomalies.length === 0 ? (
-              <div className="state-box">
-                <AlertTriangle size={20} />
-                <p>No anomalies available.</p>
-              </div>
-            ) : (
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>Service</th>
-                    <th>Endpoint</th>
-                    <th>Score</th>
-                    <th>Window</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.anomalies.slice(0, 8).map((item) => (
-                    <tr key={item.id}>
-                      <td className="mono" style={{ fontSize: "0.78rem" }}>{item.serviceId}</td>
-                      <td className="muted">{item.endpoint}</td>
-                      <td><span className={`risk-badge ${anomalyLabel(item.score)}`}>{item.score.toFixed(2)}</span></td>
-                      <td className="muted">{item.windowEnd}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
+        <div className="workflow-stack">
+          <div className="chip-row">
+            <button
+              type="button"
+              className={reviewQueue === "predictions" ? "chip active" : "chip ghost"}
+              onClick={() => setReviewQueue("predictions")}
+            >
+              AI Predictions
+            </button>
+            <button
+              type="button"
+              className={reviewQueue === "anomalies" ? "chip active" : "chip ghost"}
+              onClick={() => setReviewQueue("anomalies")}
+            >
+              Anomalies
+            </button>
           </div>
 
-          <div className="panel">
-            <div className="panel-header">
-              <h3>AI predictions</h3>
-              <span className="muted">{data.predictions.length} rows</span>
+          <div className="workflow-summary-banner">
+            <div>
+              <strong>{reviewQueue === "predictions" ? "AI predictions" : "Anomalies"}</strong>
+              <span className="muted">Current active queue</span>
             </div>
-            {data.predictions.length === 0 ? (
+            <div>
+              <strong>{reviewCount}</strong>
+              <span className="muted">Rows in the selected queue</span>
+            </div>
+            <div>
+              <strong>{reviewQueue === "predictions" ? highRiskPredictions.length : highAnomalies.length}</strong>
+              <span className="muted">Highest-priority rows in the selected queue</span>
+            </div>
+          </div>
+
+          <div className="panel workflow-stage-panel">
+            <div className="panel-header">
+              <h3>{reviewQueue === "predictions" ? "AI predictions" : "Anomalies"}</h3>
+              <span className="muted">{reviewCount} rows</span>
+            </div>
+            {reviewQueue === "anomalies" ? (
+              data.anomalies.length === 0 ? (
+                <div className="state-box">
+                  <AlertTriangle size={20} />
+                  <p>No anomalies available.</p>
+                </div>
+              ) : (
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Service</th>
+                      <th>Endpoint</th>
+                      <th>Score</th>
+                      <th>Window</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.anomalies.slice(0, 10).map((item) => (
+                      <tr key={item.id}>
+                        <td className="mono" style={{ fontSize: "0.78rem" }}>{item.serviceId}</td>
+                        <td className="muted">{item.endpoint}</td>
+                        <td><span className={`risk-badge ${anomalyLabel(item.score)}`}>{item.score.toFixed(2)}</span></td>
+                        <td className="muted">{item.windowEnd}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )
+            ) : data.predictions.length === 0 ? (
               <div className="state-box">
                 <Shield size={20} />
                 <p>No AI predictions available.</p>
@@ -221,7 +323,7 @@ export default function OperationsCenter({ data, onRunLeakage, leakageActionLabe
                   </tr>
                 </thead>
                 <tbody>
-                  {data.predictions.slice(0, 8).map((item) => (
+                  {data.predictions.slice(0, 10).map((item) => (
                     <tr key={item.id}>
                       <td className="mono" style={{ fontSize: "0.78rem" }}>{item.entityKey}</td>
                       <td className="muted">{item.predictionType}</td>
@@ -236,103 +338,120 @@ export default function OperationsCenter({ data, onRunLeakage, leakageActionLabe
                 </tbody>
               </table>
             )}
-          </div>
 
-          <div className="panel" style={{ gridColumn: "1 / -1" }}>
-            <div className="panel-header">
-              <h3>Mitigations and exports</h3>
-              <span className="muted">{data.mitigations.length} recent mitigation rows</span>
-            </div>
-            {data.mitigations.length === 0 ? (
-              <div className="state-box">
-                <FileWarning size={20} />
-                <p>No mitigations available.</p>
-              </div>
-            ) : (
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>Kind</th>
-                    <th>Reference</th>
-                    <th>Stakeholders</th>
-                    <th>Created</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.mitigations.slice(0, 8).map((item) => (
-                    <tr key={item.id}>
-                      <td>{item.kind}</td>
-                      <td className="mono">{item.refId}</td>
-                      <td className="muted">{item.stakeholders.join(", ") || "—"}</td>
-                      <td>{item.createdAt}</td>
+            <details className="collapsible-panel">
+              <summary>
+                Mitigations and exports
+                <span className="muted">{data.mitigations.length} recent rows</span>
+              </summary>
+              {data.mitigations.length === 0 ? (
+                <div className="state-box">
+                  <FileWarning size={20} />
+                  <p>No mitigations available.</p>
+                </div>
+              ) : (
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Kind</th>
+                      <th>Reference</th>
+                      <th>Stakeholders</th>
+                      <th>Created</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
+                  </thead>
+                  <tbody>
+                    {data.mitigations.slice(0, 8).map((item) => (
+                      <tr key={item.id}>
+                        <td>{item.kind}</td>
+                        <td className="mono">{item.refId}</td>
+                        <td className="muted">{item.stakeholders.join(", ") || "—"}</td>
+                        <td>{item.createdAt}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </details>
           </div>
         </div>
       )}
 
       {view === "integrity" && (
-        <div className="grid-two">
-          <div className="panel">
-            <div className="panel-header">
-              <h3>Leakage summary</h3>
-              <span className="muted">{data.leakageSummary.windowDays}-day window</span>
+        <div className="workflow-stack">
+          <div className="workflow-summary-banner">
+            <div>
+              <strong>{data.leakageSummary.totalAlerts}</strong>
+              <span className="muted">Leakage alerts in the current {data.leakageSummary.windowDays}-day window</span>
             </div>
-            <div className="detail-grid">
-              <div>
-                <p className="label">Alerts</p>
-                <p className="stat">{data.leakageSummary.totalAlerts}</p>
+            <div>
+              <strong>KES {data.leakageSummary.suspectedAmountTotal.toLocaleString()}</strong>
+              <span className="muted">Suspected amount at risk</span>
+            </div>
+            <div>
+              <strong>{data.procurementAnomalies.length + data.integrityAlerts.length}</strong>
+              <span className="muted">Priority integrity rows available for review</span>
+            </div>
+          </div>
+
+          <div className="grid-two">
+            <div className="panel workflow-stage-panel">
+              <div className="panel-header">
+                <h3>Leakage summary</h3>
+                <span className="muted">{data.leakageSummary.windowDays}-day window</span>
               </div>
-              <div>
-                <p className="label">Suspected amount</p>
-                <p className="stat">KES {data.leakageSummary.suspectedAmountTotal.toLocaleString()}</p>
+              <div className="detail-grid">
+                <div>
+                  <p className="label">Alerts</p>
+                  <p className="stat">{data.leakageSummary.totalAlerts}</p>
+                </div>
+                <div>
+                  <p className="label">Suspected amount</p>
+                  <p className="stat">KES {data.leakageSummary.suspectedAmountTotal.toLocaleString()}</p>
+                </div>
+                <div>
+                  <p className="label">Detectors</p>
+                  <p className="stat">{Object.keys(data.leakageSummary.byDetector).length}</p>
+                </div>
+                <div>
+                  <p className="label">Severity buckets</p>
+                  <p className="stat">{Object.keys(data.leakageSummary.bySeverity).length}</p>
+                </div>
               </div>
-              <div>
-                <p className="label">Detectors</p>
-                <p className="stat">{Object.keys(data.leakageSummary.byDetector).length}</p>
-              </div>
-              <div>
-                <p className="label">Severity buckets</p>
-                <p className="stat">{Object.keys(data.leakageSummary.bySeverity).length}</p>
+              <div className="panel-subsection">
+                <h4>Leakage by severity</h4>
+                <div className="chip-row">
+                  {Object.entries(data.leakageSummary.bySeverity).map(([severity, count]) => (
+                    <span key={severity} className={`risk-badge ${severity.toLowerCase()}`}>
+                      {severity}: {count}
+                    </span>
+                  ))}
+                </div>
               </div>
             </div>
-            <div className="panel-subsection">
-              <h4>Leakage by severity</h4>
-              <div className="chip-row">
-                {Object.entries(data.leakageSummary.bySeverity).map(([severity, count]) => (
-                  <span key={severity} className={`risk-badge ${severity.toLowerCase()}`}>
-                    {severity}: {count}
-                  </span>
-                ))}
+
+            <div className="panel workflow-stage-panel">
+              <div className="panel-header">
+                <h3>Integrity pressure</h3>
+                <span className="muted">Most important queues</span>
+              </div>
+              <div className="list">
+                <div className="list-item">
+                  <strong>{data.procurementAnomalies.length}</strong> procurement anomalies
+                </div>
+                <div className="list-item">
+                  <strong>{blockedGuardrails.length}</strong> guardrail blocks
+                </div>
+                <div className="list-item">
+                  <strong>{data.integrityAlerts.length}</strong> integrity alerts
+                </div>
+                <div className="list-item">
+                  <strong>{data.economySignals.length}</strong> economy signals
+                </div>
               </div>
             </div>
           </div>
 
-          <div className="panel">
-            <div className="panel-header">
-              <h3>Integrity and procurement</h3>
-              <span className="muted">Most important queues</span>
-            </div>
-            <div className="list">
-              <div className="list-item">
-                <strong>{data.procurementAnomalies.length}</strong> procurement anomalies
-              </div>
-              <div className="list-item">
-                <strong>{blockedGuardrails.length}</strong> guardrail blocks
-              </div>
-              <div className="list-item">
-                <strong>{data.integrityAlerts.length}</strong> integrity alerts
-              </div>
-              <div className="list-item">
-                <strong>{data.economySignals.length}</strong> economy signals
-              </div>
-            </div>
-          </div>
-
-          <div className="panel" style={{ gridColumn: "1 / -1" }}>
+          <div className="panel workflow-stage-panel">
             <div className="panel-header">
               <h3>Priority integrity rows</h3>
               <span className="muted">Top anomalies first</span>

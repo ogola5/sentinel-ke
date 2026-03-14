@@ -123,6 +123,47 @@ export default function DefenseCenter() {
         </button>
       </div>
 
+      <div className="panel workflow-guide-panel" style={{ background: "rgba(var(--danger-rgb), 0.08)", borderColor: "rgba(var(--danger-rgb), 0.24)", marginBottom: 12 }}>
+        <div className="panel-header">
+          <h3>How to use this page</h3>
+          <span className="muted">Act only after the incident run is clear</span>
+        </div>
+        <div className="detail-grid">
+          <div>
+            <p className="label">Step 1</p>
+            <p>Select one incident run from the left. Do not execute actions without a run.</p>
+          </div>
+          <div>
+            <p className="label">Step 2</p>
+            <p>Choose the action and target carefully. This page is for verified response, not exploration.</p>
+          </div>
+          <div>
+            <p className="label">Step 3</p>
+            <p>Check execution results and the webhook delivery log before closing the incident.</p>
+          </div>
+        </div>
+        <div className="chip-row" style={{ marginTop: 12 }}>
+          <span className="chip">Select run</span>
+          <span className="chip">Execute action</span>
+          <span className="chip">Confirm webhook receipt</span>
+        </div>
+      </div>
+
+      <div className="metric-grid" style={{ marginBottom: 18 }}>
+        <div className="metric-card">
+          <div className="metric-label">Incident runs</div>
+          <div className="metric-value">{runs.length}</div>
+        </div>
+        <div className="metric-card">
+          <div className="metric-label">Active webhooks</div>
+          <div className="metric-value">{webhooks.filter((item) => item.is_active).length}</div>
+        </div>
+        <div className="metric-card">
+          <div className="metric-label">Recent deliveries</div>
+          <div className="metric-value">{deliveries.length}</div>
+        </div>
+      </div>
+
       {execResult && (
         <div
           className="panel"
@@ -139,11 +180,24 @@ export default function DefenseCenter() {
         </div>
       )}
 
+      <div className="workflow-summary-banner" style={{ marginBottom: 18 }}>
+        <div>
+          <strong>Current selected run</strong>
+          <p className="muted" style={{ margin: "4px 0 0" }}>
+            {activeRun ? `${activeRun.incident_key} · ${activeRun.severity} · ${activeRun.status}` : "Select an incident run from the left first."}
+          </p>
+        </div>
+        <div>
+          <div className="label">Next move</div>
+          <div>{activeRun ? "Choose the safest action and verify delivery receipts." : "Choose an incident run before any action."}</div>
+        </div>
+      </div>
+
       <div className="pane-layout">
         {/* Left: Playbook runs */}
         <div className="pane-left">
           <div className="panel-header" style={{ padding: "12px 16px", borderBottom: "1px solid var(--line)" }}>
-            <h3>Playbook Runs</h3>
+            <h3>1. Choose Incident Run</h3>
             <span className="muted">{runs.length}</span>
           </div>
           {loading ? (
@@ -183,9 +237,9 @@ export default function DefenseCenter() {
         {/* Right: actions + webhooks */}
         <div className="pane-right">
           {/* Execute action panel */}
-          <div className="panel">
+          <div className="panel workflow-stage-panel">
             <div className="panel-header">
-              <h3>Execute Containment Action</h3>
+              <h3>2. Execute Containment Action</h3>
               <span className="muted">{activeRun ? activeRun.incident_key : "Select an incident run"}</span>
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr auto", gap: 10, alignItems: "end" }}>
@@ -224,9 +278,9 @@ export default function DefenseCenter() {
           </div>
 
           {/* Containment actions table */}
-          <div className="panel">
+          <div className="panel workflow-stage-panel">
             <div className="panel-header">
-              <h3>Execution Results (session)</h3>
+              <h3>3. Execution Results (session)</h3>
               <span className="muted">{actions.length} actions captured</span>
             </div>
             {actions.length === 0 ? (
@@ -282,54 +336,10 @@ export default function DefenseCenter() {
           </div>
 
           {/* Webhook registry */}
-          <div className="panel">
-            <div className="panel-header">
-              <h3>Registered Webhooks</h3>
-              <span className="muted">{webhooks.length} registered</span>
-            </div>
-            {webhooks.length === 0 ? (
-              <div className="state-box" style={{ padding: 24 }}>
-                <Webhook size={22} />
-                <p>No webhooks registered. POST /v1/defense/webhooks to register a partner endpoint.</p>
-              </div>
-            ) : (
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>Section</th>
-                    <th>Action type</th>
-                    <th>URL</th>
-                    <th>Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {webhooks.map((w) => (
-                    <tr key={w.id}>
-                      <td>{w.section_code}</td>
-                      <td><span className="mono" style={{ fontSize: "0.78rem" }}>{w.action_type}</span></td>
-                      <td className="muted" style={{ fontSize: "0.76rem", maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis" }}>{w.webhook_url}</td>
-                      <td>
-                        {w.is_active ? (
-                          <span style={{ display: "flex", alignItems: "center", gap: 6, color: "var(--accent)", fontSize: "0.8rem" }}>
-                            <CheckCircle size={13} /> Active
-                          </span>
-                        ) : (
-                          <span style={{ display: "flex", alignItems: "center", gap: 6, color: "var(--danger)", fontSize: "0.8rem" }}>
-                            <XCircle size={13} /> Inactive
-                          </span>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </div>
-
           {/* Delivery audit log */}
-          <div className="panel">
+          <div className="panel workflow-stage-panel">
             <div className="panel-header">
-              <h3>Webhook Delivery Log</h3>
+              <h3>4. Webhook Delivery Log</h3>
               <span className="muted">{deliveries.length} recent</span>
             </div>
             {deliveries.length === 0 ? (
@@ -366,6 +376,50 @@ export default function DefenseCenter() {
                 </tbody>
               </table>
             )}
+
+            <details className="collapsible-panel">
+              <summary>
+                <span>Webhook registry</span>
+                <span className="muted">{webhooks.length} registered hooks</span>
+              </summary>
+              {webhooks.length === 0 ? (
+                <div className="state-box" style={{ padding: 24 }}>
+                  <Webhook size={22} />
+                  <p>No webhooks registered. POST /v1/defense/webhooks to register a partner endpoint.</p>
+                </div>
+              ) : (
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Section</th>
+                      <th>Action type</th>
+                      <th>URL</th>
+                      <th>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {webhooks.map((w) => (
+                      <tr key={w.id}>
+                        <td>{w.section_code}</td>
+                        <td><span className="mono" style={{ fontSize: "0.78rem" }}>{w.action_type}</span></td>
+                        <td className="muted" style={{ fontSize: "0.76rem", maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis" }}>{w.webhook_url}</td>
+                        <td>
+                          {w.is_active ? (
+                            <span style={{ display: "flex", alignItems: "center", gap: 6, color: "var(--accent)", fontSize: "0.8rem" }}>
+                              <CheckCircle size={13} /> Active
+                            </span>
+                          ) : (
+                            <span style={{ display: "flex", alignItems: "center", gap: 6, color: "var(--danger)", fontSize: "0.8rem" }}>
+                              <XCircle size={13} /> Inactive
+                            </span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </details>
           </div>
         </div>
       </div>

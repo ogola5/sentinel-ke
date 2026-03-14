@@ -142,7 +142,7 @@ def run_once(
     db: Session,
     prediction_type: str,
     window_key: str,
-    window_end: datetime,
+    window_end: datetime | None,
 ) -> Dict[str, object]:
     """
     Policy-gated auto-containment from latest AI predictions.
@@ -161,11 +161,33 @@ def run_once(
     if not allowed:
         return {"status": "no_allowed_actions", "executed": 0, "skipped": 0}
 
+    resolved_window_end = window_end
+    if resolved_window_end is None:
+        latest_pred = (
+            db.query(AIPrediction)
+            .filter(AIPrediction.prediction_type == prediction_type)
+            .filter(AIPrediction.window_key == window_key)
+            .order_by(AIPrediction.window_end.desc(), AIPrediction.created_at.desc())
+            .first()
+        )
+        if not latest_pred or latest_pred.window_end is None:
+            return {
+                "status": "no_predictions",
+                "executed": 0,
+                "failed": 0,
+                "skipped": 0,
+                "considered": 0,
+                "window_key": window_key,
+                "window_end": None,
+                "dry_run": bool(settings.ai_auto_containment_dry_run),
+            }
+        resolved_window_end = latest_pred.window_end
+
     q = (
         db.query(AIPrediction)
         .filter(AIPrediction.prediction_type == prediction_type)
         .filter(AIPrediction.window_key == window_key)
-        .filter(AIPrediction.window_end == window_end)
+        .filter(AIPrediction.window_end == resolved_window_end)
         .order_by(AIPrediction.score.desc())
     )
 
@@ -224,7 +246,7 @@ def run_once(
             continue
 
         incident_key = (
-            f"auto:{prediction_type}:{window_key}:{window_end.isoformat()}:"
+            f"auto:{prediction_type}:{window_key}:{resolved_window_end.isoformat()}:"
             f"{section_code or 'unknown'}"
         )
         run = _get_or_create_run(db, incident_key=incident_key, section_code=section_code)
@@ -249,7 +271,7 @@ def run_once(
             "prediction_uncertainty": float(pred.uncertainty or 0.0),
             "kill_chain_stage": pred.kill_chain_stage,
             "window_key": window_key,
-            "window_end": window_end.isoformat(),
+            "window_end": resolved_window_end.isoformat(),
             "dry_run": dry_run,
             "cooldown_minutes": cooldown_minutes,
         }
@@ -295,6 +317,7 @@ def run_once(
         "max_uncertainty": max_uncertainty,
         "cooldown_minutes": cooldown_minutes,
         "dry_run": dry_run,
+        "window_end": resolved_window_end.isoformat(),
     }
 
 

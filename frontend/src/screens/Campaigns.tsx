@@ -65,6 +65,27 @@ export default function Campaigns({
         </div>
       </div>
 
+      <div className="panel" style={{ background: "rgba(var(--warning-rgb), 0.08)", borderColor: "rgba(var(--warning-rgb), 0.26)" }}>
+        <div className="panel-header">
+          <h3>How to use this page</h3>
+          <span className="muted">Campaigns are for coordinated activity, not single alerts</span>
+        </div>
+        <div className="detail-grid">
+          <div>
+            <p className="label">Step 1</p>
+            <p>Choose one campaign from the left and read its confidence and severity first.</p>
+          </div>
+          <div>
+            <p className="label">Step 2</p>
+            <p>Review top entities, factors, and history before deciding to escalate.</p>
+          </div>
+          <div>
+            <p className="label">Step 3</p>
+            <p>Open graph or evidence for deeper review, then generate a case only when justified.</p>
+          </div>
+        </div>
+      </div>
+
       <div className={severityClass(selected.severity)}>
         <strong>{selected.severity.toUpperCase()} severity</strong>
         <span>{selected.name} / {selected.type} / {selected.status}</span>
@@ -73,7 +94,7 @@ export default function Campaigns({
       <div className="grid-two">
         <div className="panel">
           <div className="panel-header">
-            <h3>Campaigns</h3>
+            <h3>1. Choose Campaign</h3>
             <span className="muted">Operational objects</span>
           </div>
           <div className="campaign-list">
@@ -98,8 +119,14 @@ export default function Campaigns({
 
         <div className="panel">
           <div className="panel-header">
-            <h3>{selected.name}</h3>
+            <h3>2. Review Campaign</h3>
             <span className="muted">{selected.id}</span>
+          </div>
+          <div className="list-item" style={{ marginBottom: 12 }}>
+            <strong>{selected.name}</strong>
+            <p className="muted" style={{ marginTop: 4 }}>
+              Read this summary first, then use the sections below to decide whether this campaign is ready for graph pivoting or case generation.
+            </p>
           </div>
           <div className="detail-grid">
             <div>
@@ -150,6 +177,9 @@ export default function Campaigns({
             </button>
             <button className="ghost" type="button" onClick={onOpenEvidence}>
               Evidence references
+            </button>
+            <button className="ghost" type="button" onClick={onGenerateCase}>
+              3. Generate Case Packet
             </button>
           </div>
         </div>

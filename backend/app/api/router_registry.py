@@ -134,7 +134,7 @@ def build_router_mounts(*, ai_enabled: bool) -> list[RouterMount]:
                 Depends(require_step_up()),
             ),
         ),
-        RouterMount(defense_router, (Depends(require_section_access),)),
+        RouterMount(defense_router, ()),
         # Federation router manages its own per-endpoint auth:
         #   POST /patterns  → partner API key (edge agents)
         #   GET  /partners, /stream, /correlations → section access (analysts)

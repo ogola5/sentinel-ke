@@ -41,6 +41,12 @@ export type ScreenChrome = {
   entitySearchPlaceholder?: string;
 };
 
+export type ScreenGuide = {
+  purpose: string;
+  steps: [string, string, string];
+  next?: string;
+};
+
 // ── Primary navigation (8 items — analyst daily workflow) ─────────────────────
 
 export const NAV_SENSE = [
@@ -193,6 +199,104 @@ export const SCREEN_CHROME: Record<ScreenId, ScreenChrome> = {
   users: {
     title: "User Management",
     subtitle: "Control access, roles, and user readiness without cluttering the analyst flow.",
+  },
+};
+
+export const SCREEN_GUIDES: Record<ScreenId, ScreenGuide> = {
+  live: {
+    purpose: "Use this page to understand what is arriving right now before you open a deeper workflow.",
+    steps: ["Scan the newest events.", "Open one event only.", "Pivot to graph or investigation if it matters."],
+    next: "Investigate",
+  },
+  graph: {
+    purpose: "Use this page to see how services, infrastructure, and campaigns connect.",
+    steps: ["Pick one node or edge.", "Check linked evidence.", "Move to Investigate for a single-entity explanation."],
+    next: "Investigate",
+  },
+  investigate: {
+    purpose: "Use this page to explain one entity clearly, record analyst judgment, and trigger a contained response.",
+    steps: ["Search one real entity key.", "Read trust and evidence before acting.", "Record feedback, containment, or export a report."],
+    next: "Reports",
+  },
+  campaigns: {
+    purpose: "Use this page to review coordinated activity, not isolated alerts.",
+    steps: ["Open the highest-risk campaign.", "Inspect linked entities.", "Generate a case if escalation is justified."],
+    next: "Cases",
+  },
+  cases: {
+    purpose: "Use this page to package evidence into a clean, reviewable case artifact.",
+    steps: ["Generate a case from a campaign.", "Check evidence coverage.", "Export JSON or STIX when ready."],
+    next: "Reports",
+  },
+  defense: {
+    purpose: "Use this page to execute response actions and confirm webhook delivery.",
+    steps: ["Select an incident run.", "Choose the safest action.", "Confirm delivery receipts before closing."],
+    next: "Audit",
+  },
+  ops: {
+    purpose: "Use this page to keep operational queues lean and prioritized.",
+    steps: ["Start with the highest-risk queue.", "Open only one queue at a time.", "Escalate to campaigns or reports when needed."],
+    next: "Investigate",
+  },
+  reports: {
+    purpose: "Use this page to create readable outputs for operators, leadership, and legal review.",
+    steps: ["Choose one report type.", "Use a real entity or prediction.", "Preview before downloading."],
+    next: "Investigate",
+  },
+  command: {
+    purpose: "Use this page to keep leadership focused on threat level, network posture, and readiness.",
+    steps: ["Read the national brief.", "Check agency network or readiness.", "Open the next operational workspace only when needed."],
+    next: "Operations",
+  },
+  timeline: {
+    purpose: "Use this page to understand service movement over time.",
+    steps: ["Choose one service.", "Review the timeline.", "Pivot to campaigns or infrastructure if it escalates."],
+    next: "Campaigns",
+  },
+  infra: {
+    purpose: "Use this page to inspect shared infrastructure behind linked attacks.",
+    steps: ["Choose one cluster.", "Review shared endpoints and evidence.", "Escalate to graph or campaigns if confirmed."],
+    next: "Graph",
+  },
+  gnn: {
+    purpose: "Use this page to review model quality, queue quality, and training caveats.",
+    steps: ["Check the queue first.", "Review metrics with caveats.", "Train or seed only when needed."],
+    next: "Investigate",
+  },
+  crypto: {
+    purpose: "Use this page to inspect cryptographic posture and self-test state.",
+    steps: ["Check compliance status.", "Review key and token posture.", "Capture evidence if posture has degraded."],
+    next: "Reports",
+  },
+  corruption: {
+    purpose: "Use this page to review procurement and leakage risks in one place.",
+    steps: ["Check the highest-risk anomaly.", "Open the supporting integrity signal.", "Export a report for review."],
+    next: "Reports",
+  },
+  federation: {
+    purpose: "Use this page to see partner status and cross-agency correlations.",
+    steps: ["Check which partners are active.", "Review the highest-risk correlation.", "Escalate only material matches."],
+    next: "Command",
+  },
+  audit: {
+    purpose: "Use this page to verify accountability, control events, and traceability.",
+    steps: ["Start with the newest entries.", "Verify the action trail.", "Use reports if leadership needs a summary."],
+    next: "Reports",
+  },
+  exec: {
+    purpose: "Use this page to prepare a short crisis brief for leadership.",
+    steps: ["Confirm the threat level.", "Summarize only the top risks.", "Move leaders to Command or Reports if deeper detail is needed."],
+    next: "Command",
+  },
+  onboard: {
+    purpose: "Use this page to prepare an agency for controlled federation access.",
+    steps: ["Create the agency profile.", "Provision the user and access level.", "Confirm readiness before federation use."],
+    next: "Users",
+  },
+  users: {
+    purpose: "Use this page to manage access, not operational investigations.",
+    steps: ["Search the user.", "Update the account or password.", "Return to Command or Defense for operations."],
+    next: "Command",
   },
 };
 

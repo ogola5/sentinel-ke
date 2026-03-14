@@ -1,6 +1,15 @@
 import { apiFetchJson } from "./client";
 import { endpoints } from "./endpoints";
-import type { AIFeedback, AIPrediction, CryptoPosture, GNNTrainingRun, SelfTestResult } from "../types/ai";
+import type {
+  AIFeedback,
+  AIDriftReport,
+  AIPrediction,
+  CryptoPosture,
+  EntityTrustSummary,
+  GNNTrainingRun,
+  PlatformTrustSummary,
+  SelfTestResult,
+} from "../types/ai";
 
 interface ListResponse<T> {
   total?: number;
@@ -210,6 +219,54 @@ export async function fetchEntityFusion(
 ): Promise<Record<string, unknown> | null> {
   try {
     return await apiFetchJson<Record<string, unknown>>(endpoints.aiFusion(entityKey, windowKey));
+  } catch {
+    return null;
+  }
+}
+
+export async function fetchEntityTrustSummary(
+  entityKey: string,
+  predictionType?: string,
+): Promise<EntityTrustSummary | null> {
+  try {
+    return await apiFetchJson<EntityTrustSummary>(endpoints.aiTrustEntity(entityKey, predictionType));
+  } catch {
+    return null;
+  }
+}
+
+export async function fetchPlatformTrustSummary(): Promise<PlatformTrustSummary | null> {
+  try {
+    return await apiFetchJson<PlatformTrustSummary>(endpoints.aiTrustSummary());
+  } catch {
+    return null;
+  }
+}
+
+export async function fetchDriftReports(
+  limit = 10,
+  predictionType?: string,
+  status?: string,
+): Promise<AIDriftReport[]> {
+  try {
+    const data = await apiFetchJson<ListResponse<AIDriftReport> | AIDriftReport[]>(
+      endpoints.aiDriftReports(limit, 0, predictionType, status),
+    );
+    return Array.isArray(data) ? data : (data.items ?? []);
+  } catch {
+    return [];
+  }
+}
+
+export async function runDriftCheck(
+  predictionType: "risk_gnn" | "corruption_risk",
+): Promise<Record<string, unknown> | null> {
+  try {
+    return await apiFetchJson<Record<string, unknown>>(endpoints.aiDriftRun(), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prediction_type: predictionType }),
+    });
   } catch {
     return null;
   }

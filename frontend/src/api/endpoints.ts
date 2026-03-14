@@ -102,12 +102,19 @@ export const endpoints = {
 
   // Defense & Containment
   defenseIncidents: (limit = 20, offset = 0) => withQuery("/v1/defense/incidents/runs", { limit, offset }),
+  defenseIncidentsCreate: () => withBase("/v1/defense/incidents/runs"),
   defenseWebhooks: (section_code?: string) =>
     withQuery("/v1/defense/webhooks", section_code ? { section_code } : {}),
-  defenseWebhookDeliveries: (limit = 50, offset = 0) =>
-    withQuery("/v1/defense/webhooks/deliveries", { limit, offset }),
+  defenseWebhookDeliveries: (limit = 50, offset = 0, sectionCode?: string, status?: string) =>
+    withQuery("/v1/defense/webhooks/deliveries", { limit, offset, section_code: sectionCode, status }),
   defenseVulnerabilities: (limit = 20, status?: string) =>
     withQuery("/v1/defense/vulnerabilities", { limit, ...(status ? { status } : {}) }),
+  defenseBackupAttestList: (limit = 20, offset = 0, sectionCode?: string) =>
+    withQuery("/v1/defense/backups/attest", { limit, offset, section_code: sectionCode }),
+  defenseBackupAttestCreate: () => withBase("/v1/defense/backups/attest"),
+  defenseRestoreDrillsList: (limit = 20, offset = 0, sectionCode?: string) =>
+    withQuery("/v1/defense/backups/restore-drills", { limit, offset, section_code: sectionCode }),
+  defenseRestoreDrillsCreate: () => withBase("/v1/defense/backups/restore-drills"),
 
   // Federation
   federationPartners: (limit = 50) => withQuery("/v1/federation/partners", { limit }),
@@ -121,6 +128,9 @@ export const endpoints = {
   aiTrainingRuns: (limit = 10, offset = 0) => withQuery("/v1/ai/gnn/runs", { limit, offset }),
   aiGNNTrain: () => withBase("/v1/ai/gnn/train"),
   aiIndicatorsSummary: (days = 7) => withQuery("/v1/ai/indicators/summary", { days }),
+  aiDriftReports: (limit = 20, offset = 0, predictionType?: string, status?: string) =>
+    withQuery("/v1/ai/drift-reports", { limit, offset, prediction_type: predictionType, status }),
+  aiDriftRun: () => withBase("/v1/ai/drift-reports/run"),
 
   // Demo data seeding
   demoIngestCyber: () => withBase("/v1/demo/ingest-synthetic-gnn-data"),
@@ -140,6 +150,9 @@ export const endpoints = {
     withQuery("/v1/ai/path-scores", { entity_key: entityKey, window_key: windowKey }),
   aiFusion: (entityKey: string, windowKey?: string) =>
     withQuery("/v1/ai/decision-fusions", { entity_key: entityKey, window_key: windowKey }),
+  aiTrustEntity: (entityKey: string, predictionType?: string) =>
+    withQuery("/v1/ai/trust/entity", { entity_key: entityKey, prediction_type: predictionType }),
+  aiTrustSummary: () => withBase("/v1/ai/trust/summary"),
   aiQuery: () => withBase("/v1/ai/query"),
   reportsCatalog: () => withBase("/v1/reports/catalog"),
   reportsGenerate: () => withBase("/v1/reports/generate"),

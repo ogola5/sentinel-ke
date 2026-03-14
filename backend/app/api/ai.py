@@ -32,6 +32,7 @@ from app.analytics.ai_models import (
 from app.analytics.layer3.forecasting import build_risk_forecast
 from app.analytics.layer3.local_analyst_query import answer_local_analyst_query
 from app.analytics.layer3.threat_intel_worker import export_stix_bundle, import_stix_bundle
+from app.analytics.layer3.trust_service import build_entity_trust_summary, build_platform_trust_summary
 
 log = logging.getLogger("sentinel.api.ai")
 router = APIRouter(prefix="/v1/ai", tags=["ai"])
@@ -239,6 +240,12 @@ def list_gnn_runs(
 class GNNTrainRequest(BaseModel):
     domain: Literal["cyber", "corruption"] = "cyber"
     epochs: int = 60
+    model_version: str | None = None
+
+
+class DriftRunRequest(BaseModel):
+    prediction_type: Literal["risk_gnn", "corruption_risk"] = "risk_gnn"
+    window_key: str | None = None
     model_version: str | None = None
 
 
@@ -648,6 +655,40 @@ def list_drift_reports(
             for r in rows
         ],
     }
+
+
+@router.post("/drift-reports/run")
+def run_drift_report(
+    body: DriftRunRequest,
+    _principal=Depends(require_central_access),
+    db: Session = Depends(get_db),
+):
+    latest_run = (
+        db.query(GNNTrainingRun)
+        .filter(GNNTrainingRun.prediction_type == body.prediction_type)
+        .order_by(GNNTrainingRun.window_end.desc(), GNNTrainingRun.created_at.desc())
+        .first()
+    )
+    model_version = body.model_version or (latest_run.model_version if latest_run else None)
+    if not model_version:
+        raise HTTPException(status_code=404, detail="gnn_run_not_found")
+
+    window_key = body.window_key or (latest_run.window_key if latest_run else None)
+    if not window_key:
+        window_key = "Wmid" if body.prediction_type == "risk_gnn" else "Wcorruption"
+
+    try:
+        from app.analytics.layer3.drift_worker import run_once as run_drift  # noqa: PLC0415
+
+        return run_drift(
+            db=db,
+            prediction_type=body.prediction_type,
+            window_key=window_key,
+            model_version=model_version,
+        )
+    except Exception:
+        log.exception("ai_run_drift_report_failed")
+        raise HTTPException(status_code=500, detail="internal_error")
 
 
 @router.get("/input-anomalies")
@@ -1284,6 +1325,27 @@ def ai_risk_forecast(
         alpha=alpha,
         beta=beta,
     )
+
+
+@router.get("/trust/entity")
+def entity_trust_summary(
+    entity_key: str = Query(..., description="Entity key to inspect"),
+    prediction_type: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+):
+    try:
+        return build_entity_trust_summary(
+            db=db,
+            entity_key=entity_key,
+            prediction_type=prediction_type,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.get("/trust/summary")
+def platform_trust_summary(db: Session = Depends(get_db)):
+    return build_platform_trust_summary(db=db)
 
 
 # ---------------------------------------------------------------------------

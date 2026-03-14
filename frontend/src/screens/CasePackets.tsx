@@ -13,9 +13,29 @@ export default function CasePackets({ packet, onExportJson, onExportStix }: Case
       <section className="screen">
         <div className="screen-header">
           <div>
-            <p className="eyebrow">S6</p>
+            <p className="eyebrow">S5</p>
             <h2>Case Packet + STIX Export</h2>
             <p className="subtle">Generate operational outputs from a campaign.</p>
+          </div>
+        </div>
+        <div className="panel" style={{ background: "rgba(var(--accent-rgb), 0.08)", borderColor: "rgba(var(--accent-rgb), 0.24)" }}>
+          <div className="panel-header">
+            <h3>How to use this page</h3>
+            <span className="muted">Cases are generated after campaign review</span>
+          </div>
+          <div className="detail-grid">
+            <div>
+              <p className="label">Step 1</p>
+              <p>Open the Campaigns page first and confirm the campaign is worth escalation.</p>
+            </div>
+            <div>
+              <p className="label">Step 2</p>
+              <p>Generate the case packet from that campaign.</p>
+            </div>
+            <div>
+              <p className="label">Step 3</p>
+              <p>Return here to inspect evidence paths and export JSON or STIX.</p>
+            </div>
           </div>
         </div>
         <div className="panel">
@@ -29,7 +49,7 @@ export default function CasePackets({ packet, onExportJson, onExportStix }: Case
     <section className="screen">
       <div className="screen-header">
         <div>
-          <p className="eyebrow">S6</p>
+          <p className="eyebrow">S5</p>
           <h2>Case Packet + STIX Export</h2>
           <p className="subtle">Operational readiness, ready for tomorrow.</p>
         </div>
@@ -43,9 +63,30 @@ export default function CasePackets({ packet, onExportJson, onExportStix }: Case
         </div>
       </div>
 
+      <div className="panel" style={{ background: "rgba(var(--accent-rgb), 0.08)", borderColor: "rgba(var(--accent-rgb), 0.24)" }}>
+        <div className="panel-header">
+          <h3>How to use this page</h3>
+          <span className="muted">Read, verify, then export</span>
+        </div>
+        <div className="detail-grid">
+          <div>
+            <p className="label">Step 1</p>
+            <p>Read the executive summary first so the case objective is clear.</p>
+          </div>
+          <div>
+            <p className="label">Step 2</p>
+            <p>Check evidence paths and AI rationale before export.</p>
+          </div>
+          <div>
+            <p className="label">Step 3</p>
+            <p>Use recommended actions and only then export JSON or STIX.</p>
+          </div>
+        </div>
+      </div>
+
       <div className="panel">
         <div className="panel-header">
-          <h3>Executive summary</h3>
+          <h3>1. Executive summary</h3>
           <span className="muted">{packet.id}</span>
         </div>
         <p>{packet.summary}</p>
@@ -82,7 +123,7 @@ export default function CasePackets({ packet, onExportJson, onExportStix }: Case
       <div className="grid-two">
         <div className="panel">
           <div className="panel-header">
-            <h3>Evidence paths</h3>
+            <h3>2. Evidence paths</h3>
             <span className="muted">Explainable chain</span>
           </div>
           <div className="list">
@@ -119,7 +160,7 @@ export default function CasePackets({ packet, onExportJson, onExportStix }: Case
 
         <div className="panel">
           <div className="panel-header">
-            <h3>Recommended actions</h3>
+            <h3>3. Recommended actions and export</h3>
             <span className="muted">Stakeholder-specific</span>
           </div>
           <div className="action-grid">
