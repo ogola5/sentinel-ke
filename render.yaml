@@ -93,12 +93,14 @@ services:
         value: "true"
       - key: HTTP_REQUEST_LOGGING_ENABLED
         value: "true"
+      - key: FEDERATION_REQUIRE_SIGNED_REQUESTS
+        value: "true"
 
       # ---- Stub out services not on Render free tier ----
       - key: MINIO_ANCHOR_MODE
-        value: "stub"
+        value: "disabled"
       - key: IMMUDB_ANCHOR_MODE
-        value: "stub"
+        value: "disabled"
       - key: OPENSEARCH_HOST
         value: "disabled"
 

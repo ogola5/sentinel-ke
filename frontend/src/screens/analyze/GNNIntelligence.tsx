@@ -25,10 +25,11 @@ import {
 } from "lucide-react";
 
 import {
+  bootstrapDemoData,
   fetchAIFeedback,
+  fetchAIForecast,
   fetchAIPredictions,
   fetchGNNTrainingRuns,
-  seedDemoData,
   submitAIFeedback,
   triggerGNNTrain,
 } from "../../api/ai";
@@ -212,7 +213,10 @@ export default function GNNIntelligence({
   const [seedBusy, setSeedBusy] = useState(false);
   const [feedbackBusyId, setFeedbackBusyId] = useState<string | null>(null);
   const [feedbackError, setFeedbackError] = useState("");
+  const [loadError, setLoadError] = useState("");
   const [showAllMetrics, setShowAllMetrics] = useState(false);
+  const [forecast, setForecast] = useState<Record<string, unknown> | null>(null);
+  const [forecastLoading, setForecastLoading] = useState(false);
 
   const analystId = useMemo(() => loadAnalystId(), []);
   const activeWindowKey = DOMAIN_OPTIONS.find((option) => option.domain === activeDomain)?.windowKey ?? "Wmid";
@@ -220,10 +224,11 @@ export default function GNNIntelligence({
   const load = useCallback(async () => {
     setSyncing(true);
     setFeedbackError("");
+    setLoadError("");
     try {
       const [runRows, predictionRows, feedbackRows] = await Promise.all([
-        fetchGNNTrainingRuns(24),
-        fetchAIPredictions(50, activeWindowKey),
+        fetchGNNTrainingRuns(24, { strict: true }),
+        fetchAIPredictions(50, activeWindowKey, { strict: true }),
         fetchAIFeedback(analystId, 200),
       ]);
       setRuns(runRows);
@@ -234,6 +239,11 @@ export default function GNNIntelligence({
           return acc;
         }, {}),
       );
+    } catch (err) {
+      setRuns([]);
+      setPredictions([]);
+      setFeedbackByPrediction({});
+      setLoadError(err instanceof Error ? err.message : "gnn_data_load_failed");
     } finally {
       setLoading(false);
       setSyncing(false);
@@ -244,12 +254,21 @@ export default function GNNIntelligence({
     void load();
   }, [load]);
 
+  useEffect(() => {
+    if (view !== "ops" || forecast !== null) return;
+    setForecastLoading(true);
+    fetchAIForecast(30, 7)
+      .then((data) => setForecast(data))
+      .catch(() => setForecast(null))
+      .finally(() => setForecastLoading(false));
+  }, [view, forecast]);
+
   const handleSeed = async (domain: Domain) => {
     setSeedBusy(true);
     setTrainMsg(null);
     try {
-      const response = await seedDemoData(domain);
-      setTrainMsg(`Seeding started: ${response.message}`);
+      const response = await bootstrapDemoData(domain);
+      setTrainMsg(`Bootstrap started: ${response.message}`);
     } catch (error: unknown) {
       setTrainMsg(`Seed failed: ${String(error)}`);
     } finally {
@@ -261,8 +280,33 @@ export default function GNNIntelligence({
     setTrainBusy(true);
     setTrainMsg(null);
     try {
-      const response = await triggerGNNTrain(domain);
-      setTrainMsg(`Training accepted (${response.model_version}): ${response.message}`);
+      const response = asRecord(
+        await triggerGNNTrain(domain, 25, {
+          waitForCompletion: true,
+          allowDemoRealDataOverride: true,
+          allowDemoFairnessOverride: true,
+        }),
+      );
+      const status = String(response.status ?? "unknown");
+      const modelVersion = String(response.model_version ?? "unknown");
+      const runId = String(response.gnn_run_id ?? "");
+      const predictionsCreated = metricNumber(response, "predictions_created", "predictions");
+      const overrideApplied = response.real_data_gate_override_applied === true;
+      const fairnessOverrideApplied = response.fairness_gate_override_applied === true;
+
+      if (status === "ok") {
+        setTrainMsg(
+          `Training completed (${modelVersion})${runId ? ` · run ${runId}` : ""}${predictionsCreated != null ? ` · ${predictionsCreated} predictions written` : ""}${overrideApplied ? " · demo real-data override applied" : ""}${fairnessOverrideApplied ? " · demo fairness override applied" : ""}.`,
+        );
+      } else if (status === "blocked") {
+        const gate = String(response.gate ?? "unknown");
+        const detail = String(response.detail ?? "Training was blocked by governance.");
+        setTrainMsg(`Training blocked by ${gate}: ${detail}`);
+      } else {
+        const detail = String(response.detail ?? "Training failed.");
+        setTrainMsg(`Train failed: ${detail}`);
+      }
+      await load();
     } catch (error: unknown) {
       setTrainMsg(`Train failed: ${String(error)}`);
     } finally {
@@ -309,6 +353,10 @@ export default function GNNIntelligence({
   const avgRealSignalRatio = metricNumber(latestProvenance, "avg_real_signal_ratio");
   const feedbackOverrideCount = metricNumber(latestFeedbackMetrics, "override_count");
   const feedbackConsumedCount = metricNumber(latestFeedbackMetrics, "consumed_count", "new_feedback_count");
+  const realGateOverrideApplied =
+    asRecord(latestRun?.real_data_gate ?? latestMetrics.real_data_gate).override_applied === true;
+  const fairnessGateOverrideApplied =
+    asRecord(latestRun?.metrics?.fairness_gate ?? latestMetrics.fairness_gate).override_applied === true;
 
   const epochTrainLosses = asNumberArray(latestMetrics.epoch_train_losses);
   const epochValLosses = asNumberArray(latestMetrics.epoch_val_losses);
@@ -426,6 +474,12 @@ export default function GNNIntelligence({
           <span className="muted">Latest run written to the platform</span>
         </div>
       </div>
+
+      {loadError && (
+        <div className="panel" style={{ borderColor: "rgba(255,77,90,.35)" }}>
+          <span className="muted" style={{ fontSize: "0.82rem" }}>{loadError}</span>
+        </div>
+      )}
 
       {view === "overview" && (
         <div className="workflow-stack">
@@ -677,20 +731,110 @@ export default function GNNIntelligence({
 
       {view === "ops" && (
         <div className="workflow-stack">
+
+          {/* ── Risk Forecast ─────────────────────────────────────────────── */}
+          <div className="panel workflow-stage-panel">
+            <div className="panel-header">
+              <h3>Risk Forecast</h3>
+              <span className="muted">
+                {forecastLoading
+                  ? "Loading…"
+                  : forecast
+                    ? `${String(forecast.trend_direction ?? "—")} · confidence grade ${String(forecast.confidence_grade ?? "—")}`
+                    : "7-day threat risk projection"}
+              </span>
+            </div>
+
+            {forecastLoading && (
+              <div className="state-box"><Loader size={18} className="spin" /><p>Fetching forecast…</p></div>
+            )}
+
+            {!forecastLoading && !forecast && (
+              <div className="state-box"><Brain size={22} /><p>No forecast data yet. Train the model first.</p></div>
+            )}
+
+            {!forecastLoading && forecast && (() => {
+              const alertRec = asRecord(forecast.alert_recommendation);
+              const alertLevel = String(alertRec.level ?? "");
+              const alertMsg   = String(alertRec.message ?? "");
+              const fPoints = Array.isArray(forecast.forecast) ? forecast.forecast as Array<Record<string, unknown>> : [];
+              const hPoints = Array.isArray(forecast.history)  ? forecast.history  as Array<Record<string, unknown>> : [];
+              const alertColor = alertLevel === "CRITICAL" ? "var(--risk-critical)" : alertLevel === "HIGH" ? "var(--risk-high)" : alertLevel === "MEDIUM" ? "var(--warning)" : "var(--accent)";
+              const combined = [
+                ...hPoints.slice(-14).map(p => ({ date: String(p.date ?? ""), score: asNumber(p.score) ?? asNumber(p.avg_score) ?? 0, type: "history" as const })),
+                ...fPoints.map(p => ({ date: String(p.date ?? ""), score: asNumber(p.forecast_score) ?? 0, type: "forecast" as const })),
+              ];
+              return (
+                <>
+                  {alertMsg && (
+                    <div style={{ marginBottom: 12, padding: "8px 12px", borderRadius: 6, background: alertColor + "18", borderLeft: `3px solid ${alertColor}` }}>
+                      <span style={{ fontSize: "0.78rem", fontWeight: 600, color: alertColor }}>{alertLevel}</span>
+                      <span style={{ fontSize: "0.78rem", marginLeft: 8, color: "var(--ink-muted)" }}>{alertMsg}</span>
+                    </div>
+                  )}
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 8, marginBottom: 14 }}>
+                    {[
+                      { label: "Trend",       value: String(forecast.trend_direction ?? "—") },
+                      { label: "Net change",  value: typeof forecast.net_change_forecast === "number" ? (forecast.net_change_forecast > 0 ? `+${forecast.net_change_forecast}` : String(forecast.net_change_forecast)) : "—" },
+                      { label: "Confidence",  value: typeof forecast.forecast_confidence === "number" ? `${Math.round(forecast.forecast_confidence * 100)}%` : "—" },
+                      { label: "Volatility",  value: typeof forecast.volatility === "number" ? String(forecast.volatility) : "—" },
+                    ].map(stat => (
+                      <div key={stat.label} className="metric-card" style={{ padding: "8px 10px" }}>
+                        <div className="metric-label">{stat.label}</div>
+                        <div className="metric-value" style={{ fontSize: "1rem" }}>{stat.value}</div>
+                      </div>
+                    ))}
+                  </div>
+                  {combined.length > 0 && (
+                    <ResponsiveContainer width="100%" height={160}>
+                      <LineChart data={combined} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="rgba(171,199,182,0.12)" />
+                        <XAxis dataKey="date" tick={{ fontSize: 9 }} tickFormatter={(v: string) => v.slice(5)} />
+                        <YAxis tick={{ fontSize: 9 }} domain={[0, 100]} />
+                        <Tooltip
+                          formatter={(v: number | string | undefined, name: string | undefined) => [`${Number(v ?? 0)}`, name === "score" ? "Risk score" : (name ?? "Metric")]}
+                          labelStyle={{ fontSize: 10 }}
+                          contentStyle={{ fontSize: 10 }}
+                        />
+                        <Legend wrapperStyle={{ fontSize: 10 }} />
+                        <Line
+                          type="monotone"
+                          dataKey="score"
+                          name="Risk score"
+                          stroke="#2fd67d"
+                          strokeWidth={2}
+                          dot={(props: { cx?: number; cy?: number; payload?: { type?: string } }) => {
+                            const { cx = 0, cy = 0, payload } = props;
+                            return payload?.type === "forecast"
+                              ? <circle key={`dot-${cx}-${cy}`} cx={cx} cy={cy} r={3} fill="#f0bf4c" stroke="none" />
+                              : <circle key={`dot-${cx}-${cy}`} cx={cx} cy={cy} r={2} fill="#2fd67d" stroke="none" />;
+                          }}
+                        />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  )}
+                  <p className="muted" style={{ fontSize: "0.7rem", marginTop: 6 }}>
+                    Green = historical · Yellow dots = forecast horizon
+                  </p>
+                </>
+              );
+            })()}
+          </div>
+
           <div className="gnn-ops-grid">
             <div className="panel workflow-stage-panel gnn-train-panel">
               <div className="panel-header">
                 <h3><Zap size={14} /> Training controls</h3>
-                <span className="muted gnn-train-sub">Seed data then retrain when the environment needs it</span>
+                <span className="muted gnn-train-sub">Bootstrap a usable demo state, then retrain only when the environment needs it</span>
               </div>
               <div className={`gnn-train-actions${trainMsg ? " has-msg" : ""}`}>
                 <button type="button" className="btn-ghost" onClick={() => void handleSeed("cyber")} disabled={seedBusy || trainBusy}>
                   {seedBusy ? <Loader size={13} className="spin" /> : <Database size={13} />}
-                  &nbsp;Seed Cyber Data
+                  &nbsp;Bootstrap Cyber Demo
                 </button>
                 <button type="button" className="btn-ghost" onClick={() => void handleSeed("corruption")} disabled={seedBusy || trainBusy}>
                   {seedBusy ? <Loader size={13} className="spin" /> : <Database size={13} />}
-                  &nbsp;Seed Corruption Data
+                  &nbsp;Bootstrap Corruption Demo
                 </button>
                 <button type="button" className="btn-train-cyber" onClick={() => void handleTrain("cyber")} disabled={trainBusy || seedBusy}>
                   {trainBusy ? <Loader size={13} className="spin" /> : <Play size={13} />}
@@ -702,7 +846,7 @@ export default function GNNIntelligence({
                 </button>
               </div>
               {trainMsg && (
-                <div className={`gnn-train-msg${trainMsg.includes("failed") ? " error" : ""}`}>
+                <div className={`gnn-train-msg${trainMsg.toLowerCase().includes("failed") || trainMsg.toLowerCase().includes("blocked") ? " error" : ""}`}>
                   {trainMsg}
                 </div>
               )}
@@ -724,6 +868,7 @@ export default function GNNIntelligence({
                     {latestRun?.real_data_gate_passed === false ? "Failed for the latest run." : "No failure recorded on the latest run."}
                     {realRatio != null ? ` Real ratio ${Math.round(realRatio * 100)}%.` : ""}
                     {avgRealSignalRatio != null ? ` Avg per-node real signal ${Math.round(avgRealSignalRatio * 100)}%.` : ""}
+                    {realGateOverrideApplied ? " Demo override was applied so the run completed despite low real-data coverage." : ""}
                   </p>
                 </div>
                 <div className="list-item">
@@ -731,6 +876,7 @@ export default function GNNIntelligence({
                   <p className="muted">
                     {latestRun?.fairness?.fairness_flag ?? "No fairness result recorded"}
                     {latestRun?.fairness_blocked ? " · deployment blocked" : ""}
+                    {fairnessGateOverrideApplied ? " · demo override allowed the run to complete" : ""}
                   </p>
                 </div>
                 <div className="list-item">

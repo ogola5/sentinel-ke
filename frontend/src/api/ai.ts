@@ -1,4 +1,4 @@
-import { apiFetchJson } from "./client";
+import { ApiError, apiFetchJson } from "./client";
 import { endpoints } from "./endpoints";
 import type {
   AIFeedback,
@@ -16,6 +16,10 @@ interface ListResponse<T> {
   items: T[];
 }
 
+interface QueryOptions {
+  strict?: boolean;
+}
+
 const asRecord = (value: unknown): Record<string, unknown> =>
   value && typeof value === "object" ? (value as Record<string, unknown>) : {};
 
@@ -31,12 +35,23 @@ const asBoolean = (value: unknown): boolean => value === true;
 
 export async function triggerGNNTrain(
   domain: "cyber" | "corruption",
-  epochs = 60,
-): Promise<{ accepted: boolean; domain: string; model_version: string; message: string }> {
+  epochs = 25,
+  options: {
+    waitForCompletion?: boolean;
+    allowDemoRealDataOverride?: boolean;
+    allowDemoFairnessOverride?: boolean;
+  } = {},
+): Promise<Record<string, unknown>> {
   return apiFetchJson(endpoints.aiGNNTrain(), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ domain, epochs }),
+    body: JSON.stringify({
+      domain,
+      epochs,
+      wait_for_completion: options.waitForCompletion ?? true,
+      allow_demo_real_data_override: options.allowDemoRealDataOverride ?? true,
+      allow_demo_fairness_override: options.allowDemoFairnessOverride ?? true,
+    }),
   });
 }
 
@@ -47,24 +62,46 @@ export async function seedDemoData(
   return apiFetchJson(url, { method: "POST" });
 }
 
-export async function fetchGNNTrainingRuns(limit = 10): Promise<GNNTrainingRun[]> {
+export async function bootstrapDemoData(
+  domain: "cyber" | "corruption",
+): Promise<{ accepted: boolean; domain: string; scenario: string; message: string }> {
+  return apiFetchJson(endpoints.demoBootstrap(), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      domain,
+      scenario: "ddos_vpn_fraud",
+      epochs: 25,
+      allow_demo_real_data_override: true,
+      allow_demo_fairness_override: true,
+    }),
+  });
+}
+
+export async function fetchGNNTrainingRuns(limit = 10, options: QueryOptions = {}): Promise<GNNTrainingRun[]> {
   try {
     const data = await apiFetchJson<ListResponse<GNNTrainingRun> | GNNTrainingRun[]>(
       endpoints.aiTrainingRuns(limit),
     );
     return Array.isArray(data) ? data : (data.items ?? []);
-  } catch {
+  } catch (err) {
+    if (options.strict || !(err instanceof ApiError) || err.status >= 500 || err.status === 401 || err.status === 403) {
+      throw err;
+    }
     return [];
   }
 }
 
-export async function fetchAIPredictions(limit = 20, windowKey?: string): Promise<AIPrediction[]> {
+export async function fetchAIPredictions(limit = 20, windowKey?: string, options: QueryOptions = {}): Promise<AIPrediction[]> {
   try {
     const data = await apiFetchJson<ListResponse<AIPrediction> | AIPrediction[]>(
       endpoints.aiPredictions(limit, 0, windowKey),
     );
     return Array.isArray(data) ? data : (data.items ?? []);
-  } catch {
+  } catch (err) {
+    if (options.strict || !(err instanceof ApiError) || err.status >= 500 || err.status === 401 || err.status === 403) {
+      throw err;
+    }
     return [];
   }
 }
@@ -75,6 +112,7 @@ export async function fetchEntityPredictions(
     limit?: number;
     predictionType?: string;
     windowKey?: string;
+    strict?: boolean;
   } = {},
 ): Promise<AIPrediction[]> {
   try {
@@ -82,7 +120,10 @@ export async function fetchEntityPredictions(
       endpoints.aiPredictionsByEntity(entityKey, options.limit ?? 20, 0, options.windowKey, options.predictionType),
     );
     return Array.isArray(data) ? data : (data.items ?? []);
-  } catch {
+  } catch (err) {
+    if (options.strict || !(err instanceof ApiError) || err.status >= 500 || err.status === 401 || err.status === 403) {
+      throw err;
+    }
     return [];
   }
 }

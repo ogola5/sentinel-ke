@@ -4,14 +4,17 @@ import "../App.css";
 
 import LoginScreen from "../screens/auth/LoginScreen";
 import { apiLogout, clearSession, getRefreshToken, loadPrincipal } from "../api/auth";
-import { createCasePacketFromCampaign, fetchCampaignEvidenceForDrawer } from "../api/backend";
 import {
-  apiFetchJson,
+  createCasePacketFromCampaign,
+  downloadCasePacketFromCampaign,
+  downloadStixBundleForCampaign,
+  fetchCampaignEvidenceForDrawer,
+} from "../api/backend";
+import {
   loadClientCredentials,
   saveClientCredentials,
   type ClientCredentials,
 } from "../api/client";
-import { endpoints } from "../api/endpoints";
 import { runLeakageDetection } from "../api/operations";
 import {
   canExecute,
@@ -30,6 +33,7 @@ import Sidebar from "./Sidebar";
 import Topbar from "./Topbar";
 import { SCREEN_GUIDES, SOURCE_OPTIONS, type ScreenId } from "./navigation";
 import { useDashboardSync } from "./useDashboardSync";
+import { canonicalServiceKey } from "../utils/entityKeys";
 
 type EvidenceState = {
   open: boolean;
@@ -86,6 +90,7 @@ function AuthenticatedApp({
     healthGnnLoaded,
     healthModelVersion,
     healthGnnMetrics,
+    healthPlatformStatus,
     eventsData,
     timelineData,
     indicatorsData,
@@ -181,6 +186,7 @@ function AuthenticatedApp({
     setSelectedServiceId(event.service_id);
     const entity = entitiesData.find(
       (item) =>
+        item.id === canonicalServiceKey(event.service_id) ||
         item.label.toLowerCase().includes(event.service_id.toLowerCase()) ||
         item.label.toLowerCase().includes(event.endpoint.toLowerCase()),
     );
@@ -189,20 +195,12 @@ function AuthenticatedApp({
     }
   };
 
-  const triggerBackendAction = async (path: string, method: "POST" | "GET" = "POST") => {
-    setActionStatus(`${method} ${path}`);
+  const handleGenerateCase = async (campaignId?: string) => {
+    const id = campaignId ?? selectedCampaignId;
+    if (!id) return;
     try {
-      await apiFetchJson<Record<string, unknown>>(path, { method });
-      setActionStatus(`done ${path}`);
-    } catch (err) {
-      setActionStatus(`failed: ${err instanceof Error ? err.message : "request_failed"}`);
-    }
-  };
-
-  const handleGenerateCase = async () => {
-    if (!selectedCampaignId) return;
-    try {
-      const packet = await createCasePacketFromCampaign(selectedCampaignId);
+      const packet = await createCasePacketFromCampaign(id);
+      setSelectedCampaignId(id);
       setCasesData((current) => [packet, ...current.filter((item) => item.id !== packet.id)]);
       setSelectedCaseId(packet.id);
       setActiveScreen("cases");
@@ -313,6 +311,7 @@ function AuthenticatedApp({
               healthGnnLoaded={healthGnnLoaded}
               healthModelVersion={healthModelVersion}
               healthGnnMetrics={healthGnnMetrics}
+              healthPlatformStatus={healthPlatformStatus}
               leakageActionLabel={leakageActionLabel}
               onNavigate={(id) => setActiveScreen(id)}
               onSelectEvent={handleSelectEvent}
@@ -325,6 +324,7 @@ function AuthenticatedApp({
               onSelectServiceId={setSelectedServiceId}
               onOpenEvidence={openEvidence}
               onGenerateCase={() => void handleGenerateCase()}
+              onGenerateCaseForId={(id: string) => void handleGenerateCase(id)}
               onOpenCampaignEvidence={async () => {
                 if (!selectedCampaignId) return;
                 try {
@@ -336,14 +336,42 @@ function AuthenticatedApp({
               }}
               onRunLeakage={() => void handleRunLeakage()}
               onCaseExportJson={() => {
-                if (selectedCampaignId) {
-                  void triggerBackendAction(endpoints.caseFromCampaign(selectedCampaignId), "POST");
+                const exportCampaignId = activeCase?.campaignId ?? selectedCampaignId;
+                if (exportCampaignId) {
+                  void (async () => {
+                    try {
+                      const filename = await downloadCasePacketFromCampaign(exportCampaignId);
+                      setActionStatus(`downloaded ${filename}`);
+                    } catch (err) {
+                      setActionStatus(`failed: ${err instanceof Error ? err.message : "request_failed"}`);
+                    }
+                  })();
                 }
               }}
               onCaseExportStix={() => {
-                if (selectedCampaignId) {
-                  void triggerBackendAction(endpoints.stixCaseByCampaign(selectedCampaignId), "GET");
+                const exportCampaignId = activeCase?.campaignId ?? selectedCampaignId;
+                if (exportCampaignId) {
+                  void (async () => {
+                    try {
+                      const filename = await downloadStixBundleForCampaign(exportCampaignId);
+                      setActionStatus(`downloaded ${filename}`);
+                    } catch (err) {
+                      setActionStatus(`failed: ${err instanceof Error ? err.message : "request_failed"}`);
+                    }
+                  })();
                 }
+              }}
+              onInvestigateEntity={(entityKey: string) => {
+                const match = entitiesData.find(
+                  (e) => e.id === entityKey || e.label.toLowerCase() === entityKey.toLowerCase(),
+                );
+                if (match) {
+                  setSelectedEntity(match);
+                } else {
+                  // Stub entity so EntityInvestigation receives the key as initialEntityKey
+                  setSelectedEntity({ id: entityKey, label: entityKey } as typeof entitiesData[0]);
+                }
+                setActiveScreen("investigate");
               }}
             />
           </main>

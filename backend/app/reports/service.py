@@ -265,6 +265,14 @@ def _serialize_bundle(
     anchor: LegalEvidenceAnchor | None,
     certificate: LegalEvidenceCertificate | None,
 ) -> dict[str, Any]:
+    anchor_status = None
+    if anchor is not None:
+        anchor_status = anchor.anchor_status
+        if anchor_status == "anchored" and (
+            str(anchor.minio_backend or "").endswith("_stub")
+            or str(anchor.immudb_backend or "").endswith("_stub")
+        ):
+            anchor_status = "simulated"
     return {
         "bundle_id": bundle.bundle_id,
         "export_type": bundle.export_type,
@@ -309,7 +317,7 @@ def _serialize_bundle(
         ],
         "anchor": None if anchor is None else {
             "anchor_id": anchor.anchor_id,
-            "anchor_status": anchor.anchor_status,
+            "anchor_status": anchor_status,
             "minio_backend": anchor.minio_backend,
             "minio_bucket": anchor.minio_bucket,
             "minio_object_key": anchor.minio_object_key,
@@ -1188,7 +1196,7 @@ def _build_legal_bundle(db: Session, payload: ReportRequest, period: Mapping[str
         },
         {
             "title": "Anchor status",
-            "severity": "high" if anchor_status in {"failed", "stub"} else "info",
+            "severity": "high" if anchor_status in {"failed", "simulated", "skipped"} else "info",
             "plain_text": (
                 f"Anchor backend status is {anchor_status}."
                 if anchor_status else
@@ -1208,7 +1216,7 @@ def _build_legal_bundle(db: Session, payload: ReportRequest, period: Mapping[str
     }
     report["recommended_actions"] = [
         "Confirm that the order scope covers the target entities and actions.",
-        "Refresh or verify the anchor if the current status is stub or failed.",
+        "Refresh or verify the anchor if the current status is simulated, skipped, or failed.",
         "Retain the certificate and audit chain alongside any exported copy.",
     ]
     report["governance"] = {

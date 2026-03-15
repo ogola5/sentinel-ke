@@ -11,13 +11,18 @@ Design principles:
 from __future__ import annotations
 
 import hashlib
+import logging
 import math
+import os
 import random
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from app.analytics.layer3.gnn_backbone import GNNDataset
+
+
+log = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -663,10 +668,23 @@ def train_graphsage(
 
     random.seed(seed)
     torch.manual_seed(seed)
-    try:
-        torch.use_deterministic_algorithms(True)
-    except Exception:  # noqa: BLE001
-        pass
+    cuda_available = torch.cuda.is_available()
+    if cuda_available:
+        torch.cuda.manual_seed_all(seed)
+
+    # Determinism is useful for reproducibility, but hard-failing on CUDA without
+    # CuBLAS workspace configuration makes live retraining brittle in demos.
+    deterministic_enabled = False
+    if cuda_available and not os.environ.get("CUBLAS_WORKSPACE_CONFIG"):
+        log.warning(
+            "gnn_determinism_relaxed reason=missing_cublas_workspace_config device=cuda"
+        )
+    else:
+        try:
+            torch.use_deterministic_algorithms(True)
+            deterministic_enabled = True
+        except Exception as exc:  # noqa: BLE001
+            log.warning("gnn_determinism_unavailable err=%s", exc)
 
     if not dataset.feature_matrix:
         raise ValueError("dataset has no feature rows")
@@ -871,6 +889,7 @@ def train_graphsage(
     metrics["eval_samples"]      = int(len(eval_idx))
     metrics["epoch_train_losses"] = epoch_train_losses
     metrics["epoch_val_losses"]   = epoch_val_losses
+    metrics["deterministic_training"] = bool(deterministic_enabled)
     metrics.update(split_manifest)
 
     return GNNTrainResult(

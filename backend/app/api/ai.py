@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Any, Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -220,10 +221,12 @@ def list_gnn_runs(
                 "params": r.params_json,
                 "metrics": r.metrics_json,
                 "fairness": (r.metrics_json or {}).get("fairness", {}),
+                "fairness_gate": (r.metrics_json or {}).get("fairness_gate", {}),
                 "fairness_blocked": (
-                    (r.metrics_json or {}).get("fairness", {}).get(
+                    ((r.metrics_json or {}).get("fairness", {}).get(
                         "max_positive_rate_disparity", 0
-                    ) > settings.fairness_disparity_threshold
+                    ) > settings.fairness_disparity_threshold)
+                    and not bool(((r.metrics_json or {}).get("fairness_gate") or {}).get("override_applied", False))
                 ),
                 "provenance": (r.metrics_json or {}).get("provenance", {}),
                 "real_data_gate": (r.metrics_json or {}).get("real_data_gate", {}),
@@ -241,6 +244,9 @@ class GNNTrainRequest(BaseModel):
     domain: Literal["cyber", "corruption"] = "cyber"
     epochs: int = 60
     model_version: str | None = None
+    wait_for_completion: bool = True
+    allow_demo_real_data_override: bool = False
+    allow_demo_fairness_override: bool = False
 
 
 class DriftRunRequest(BaseModel):
@@ -249,7 +255,13 @@ class DriftRunRequest(BaseModel):
     model_version: str | None = None
 
 
-def _run_cyber_train(epochs: int, model_version: str) -> None:
+def _run_cyber_train(
+    epochs: int,
+    model_version: str,
+    *,
+    allow_demo_real_data_override: bool = False,
+    allow_demo_fairness_override: bool = False,
+) -> dict[str, Any]:
     from app.analytics.layer3.gnn_train_worker import run_once
     from app.ledger.db import SessionLocal
     db = SessionLocal()
@@ -259,15 +271,25 @@ def _run_cyber_train(epochs: int, model_version: str) -> None:
             window_key="Wmid",
             epochs=epochs,
             model_version=model_version,
+            allow_demo_real_data_override=allow_demo_real_data_override,
+            allow_demo_fairness_override=allow_demo_fairness_override,
         )
         log.info("gnn_train_cyber_done: %s", result)
+        return result
     except Exception as exc:
-        log.error("gnn_train_cyber_failed: %s", exc)
+        log.exception("gnn_train_cyber_failed: %s", exc)
+        return {"status": "error", "stage": "api_train", "detail": str(exc)}
     finally:
         db.close()
 
 
-def _run_corruption_train(epochs: int, model_version: str) -> None:
+def _run_corruption_train(
+    epochs: int,
+    model_version: str,
+    *,
+    allow_demo_real_data_override: bool = False,
+    allow_demo_fairness_override: bool = False,
+) -> dict[str, Any]:
     from app.analytics.corruption.train_worker import run_once
     from app.ledger.db import SessionLocal
     db = SessionLocal()
@@ -277,15 +299,19 @@ def _run_corruption_train(epochs: int, model_version: str) -> None:
             window_key="Wcorruption",
             epochs=epochs,
             model_version=model_version,
+            allow_demo_real_data_override=allow_demo_real_data_override,
+            allow_demo_fairness_override=allow_demo_fairness_override,
         )
         log.info("gnn_train_corruption_done: %s", result)
+        return result
     except Exception as exc:
-        log.error("gnn_train_corruption_failed: %s", exc)
+        log.exception("gnn_train_corruption_failed: %s", exc)
+        return {"status": "error", "stage": "api_train", "detail": str(exc)}
     finally:
         db.close()
 
 
-@router.post("/gnn/train", status_code=202)
+@router.post("/gnn/train")
 @limiter.limit("5/minute")
 def trigger_gnn_train(
     request: Request,
@@ -294,28 +320,80 @@ def trigger_gnn_train(
     _principal=Depends(require_central_access),
 ):
     """
-    Trigger a GNN retraining run in the background.
+    Trigger a GNN retraining run.
 
     domain = "cyber"       → cyber threat GNN (window_key Wmid, feat_dim 44)
     domain = "corruption"  → corruption risk GNN (window_key Wcorruption, feat_dim 42)
 
-    Returns immediately; poll GET /v1/ai/gnn/runs to see the new run when complete.
+    By default this waits for the selected training run to complete and returns
+    the actual outcome. Set wait_for_completion=false for fire-and-forget mode.
     """
     default_versions = {"cyber": "gnn-sage-v1", "corruption": "corruption-gnn-v1"}
     mv = body.model_version or default_versions[body.domain]
 
-    if body.domain == "cyber":
-        background_tasks.add_task(_run_cyber_train, body.epochs, mv)
-    else:
-        background_tasks.add_task(_run_corruption_train, body.epochs, mv)
+    if body.wait_for_completion:
+        if body.domain == "cyber":
+            result = _run_cyber_train(
+                body.epochs,
+                mv,
+                allow_demo_real_data_override=body.allow_demo_real_data_override,
+                allow_demo_fairness_override=body.allow_demo_fairness_override,
+            )
+        else:
+            result = _run_corruption_train(
+                body.epochs,
+                mv,
+                allow_demo_real_data_override=body.allow_demo_real_data_override,
+                allow_demo_fairness_override=body.allow_demo_fairness_override,
+            )
 
-    return {
-        "accepted": True,
-        "domain": body.domain,
-        "model_version": mv,
-        "epochs": body.epochs,
-        "message": "Training started in background. Poll GET /v1/ai/gnn/runs for results.",
-    }
+        payload = {
+            "accepted": result.get("status") in {"ok", "blocked"},
+            "domain": body.domain,
+            "model_version": mv,
+            "epochs": body.epochs,
+            "wait_for_completion": True,
+            "demo_real_data_override_requested": bool(body.allow_demo_real_data_override),
+            "demo_fairness_override_requested": bool(body.allow_demo_fairness_override),
+            **result,
+        }
+        status_code = 200
+        if result.get("status") == "blocked":
+            status_code = 409
+        elif result.get("status") == "error":
+            status_code = 500
+        return JSONResponse(status_code=status_code, content=payload)
+
+    if body.domain == "cyber":
+        background_tasks.add_task(
+            _run_cyber_train,
+            body.epochs,
+            mv,
+            allow_demo_real_data_override=body.allow_demo_real_data_override,
+            allow_demo_fairness_override=body.allow_demo_fairness_override,
+        )
+    else:
+        background_tasks.add_task(
+            _run_corruption_train,
+            body.epochs,
+            mv,
+            allow_demo_real_data_override=body.allow_demo_real_data_override,
+            allow_demo_fairness_override=body.allow_demo_fairness_override,
+        )
+
+    return JSONResponse(
+        status_code=202,
+        content={
+            "accepted": True,
+            "domain": body.domain,
+            "model_version": mv,
+            "epochs": body.epochs,
+            "wait_for_completion": False,
+            "demo_real_data_override_requested": bool(body.allow_demo_real_data_override),
+            "demo_fairness_override_requested": bool(body.allow_demo_fairness_override),
+            "message": "Training started in background. Poll GET /v1/ai/gnn/runs for results.",
+        },
+    )
 
 
 @router.get("/gnn/runs/{run_id}")
@@ -344,6 +422,14 @@ def get_gnn_run(run_id: str, db: Session = Depends(get_db)):
         "artifact_path": r.artifact_path,
         "params": r.params_json,
         "metrics": r.metrics_json,
+        "fairness": (r.metrics_json or {}).get("fairness", {}),
+        "fairness_gate": (r.metrics_json or {}).get("fairness_gate", {}),
+        "fairness_blocked": (
+            ((r.metrics_json or {}).get("fairness", {}).get(
+                "max_positive_rate_disparity", 0
+            ) > settings.fairness_disparity_threshold)
+            and not bool(((r.metrics_json or {}).get("fairness_gate") or {}).get("override_applied", False))
+        ),
         "provenance": (r.metrics_json or {}).get("provenance", {}),
         "real_data_gate": (r.metrics_json or {}).get("real_data_gate", {}),
         "real_data_gate_passed": bool(

@@ -1,4 +1,4 @@
-import { apiFetchJson } from "./client";
+import { ApiError, apiFetchJson } from "./client";
 import { endpoints } from "./endpoints";
 import type {
   FederationCorrelation,
@@ -23,6 +23,10 @@ export interface PartnerRegistrationResult {
   correlation_salt: string;
   warning: string;
   edge_agent_env: Record<string, string>;
+}
+
+interface QueryOptions {
+  strict?: boolean;
 }
 
 export async function registerFederationPartner(
@@ -81,7 +85,7 @@ const toIsoFromAgo = (secondsAgo: number | null | undefined): string | null => {
   return new Date(Date.now() - secondsAgo * 1000).toISOString();
 };
 
-export async function fetchFederationPartners(): Promise<FederationPartner[]> {
+export async function fetchFederationPartners(options: QueryOptions = {}): Promise<FederationPartner[]> {
   try {
     const data = await apiFetchJson<ListResponse<Record<string, unknown>> | Array<Record<string, unknown>>>(
       endpoints.federationPartners(),
@@ -112,12 +116,15 @@ export async function fetchFederationPartners(): Promise<FederationPartner[]> {
         run_count: r.run_count != null ? asNumber(r.run_count) : null,
       };
     });
-  } catch (_err) {
+  } catch (err) {
+    if (options.strict || !(err instanceof ApiError) || err.status >= 500 || err.status === 401 || err.status === 403) {
+      throw err;
+    }
     return [];
   }
 }
 
-export async function fetchFederationPatterns(limit = 50): Promise<FederationPattern[]> {
+export async function fetchFederationPatterns(limit = 50, options: QueryOptions = {}): Promise<FederationPattern[]> {
   try {
     const data = await apiFetchJson<ListResponse<Record<string, unknown>> | Array<Record<string, unknown>>>(
       endpoints.federationPatterns(limit),
@@ -139,12 +146,15 @@ export async function fetchFederationPatterns(limit = 50): Promise<FederationPat
         created_at: asString(r.received_at, asString(r.window_end, "")),
       };
     });
-  } catch (_err) {
+  } catch (err) {
+    if (options.strict || !(err instanceof ApiError) || err.status >= 500 || err.status === 401 || err.status === 403) {
+      throw err;
+    }
     return [];
   }
 }
 
-export async function fetchFederationCorrelations(limit = 20): Promise<FederationCorrelation[]> {
+export async function fetchFederationCorrelations(limit = 20, options: QueryOptions = {}): Promise<FederationCorrelation[]> {
   try {
     const data = await apiFetchJson<
       | ListResponse<Record<string, unknown>>
@@ -183,7 +193,10 @@ export async function fetchFederationCorrelations(limit = 20): Promise<Federatio
         last_seen: asString(r.last_seen, ""),
       };
     });
-  } catch (_err) {
+  } catch (err) {
+    if (options.strict || !(err instanceof ApiError) || err.status >= 500 || err.status === 401 || err.status === 403) {
+      throw err;
+    }
     return [];
   }
 }

@@ -1,4 +1,4 @@
-import { apiFetchJson, apiPostJson } from "./client";
+import { ApiError, apiFetchJson, apiPostJson } from "./client";
 import { endpoints } from "./endpoints";
 import type {
   BackupAttestationRecord,
@@ -13,6 +13,10 @@ import type {
 interface ListResponse<T> {
   total?: number;
   items: T[];
+}
+
+interface QueryOptions {
+  strict?: boolean;
 }
 
 const asString = (value: unknown, fallback = ""): string =>
@@ -96,12 +100,15 @@ const toRestoreDrill = (row: Record<string, unknown>): RestoreDrillRecord => ({
   created_at: asString(row.created_at),
 });
 
-export async function fetchPlaybookRuns(limit = 20): Promise<PlaybookRun[]> {
+export async function fetchPlaybookRuns(limit = 20, options: QueryOptions = {}): Promise<PlaybookRun[]> {
   try {
     const data = await apiFetchJson<ListResponse<Record<string, unknown>>>(endpoints.defenseIncidents(limit));
     const rows = Array.isArray(data) ? data : (data.items ?? []);
     return rows.map((r) => toPlaybookRun(asRecord(r))).filter((r) => r.id !== "");
-  } catch (_err) {
+  } catch (err) {
+    if (options.strict || !(err instanceof ApiError) || err.status >= 500 || err.status === 401 || err.status === 403) {
+      throw err;
+    }
     return [];
   }
 }
@@ -136,19 +143,22 @@ export async function executeContainmentAction(
   });
 }
 
-export async function fetchWebhooks(sectionCode?: string): Promise<WebhookRecord[]> {
+export async function fetchWebhooks(options: { sectionCode?: string; strict?: boolean } = {}): Promise<WebhookRecord[]> {
   try {
-    const data = await apiFetchJson<ListResponse<Record<string, unknown>>>(endpoints.defenseWebhooks(sectionCode));
+    const data = await apiFetchJson<ListResponse<Record<string, unknown>>>(endpoints.defenseWebhooks(options.sectionCode));
     const rows = Array.isArray(data) ? data : (data.items ?? []);
     return rows.map((r) => toWebhook(asRecord(r))).filter((r) => r.id !== "");
-  } catch (_err) {
+  } catch (err) {
+    if (options.strict || !(err instanceof ApiError) || err.status >= 500 || err.status === 401 || err.status === 403) {
+      throw err;
+    }
     return [];
   }
 }
 
 export async function fetchWebhookDeliveries(
   limit = 50,
-  options: { sectionCode?: string; status?: string } = {},
+  options: { sectionCode?: string; status?: string; strict?: boolean } = {},
 ): Promise<WebhookDeliveryRecord[]> {
   try {
     const data = await apiFetchJson<ListResponse<Record<string, unknown>>>(
@@ -156,7 +166,10 @@ export async function fetchWebhookDeliveries(
     );
     const rows = Array.isArray(data) ? data : (data.items ?? []);
     return rows.map((r) => toDelivery(asRecord(r))).filter((r) => r.id !== "");
-  } catch (_err) {
+  } catch (err) {
+    if (options.strict || !(err instanceof ApiError) || err.status >= 500 || err.status === 401 || err.status === 403) {
+      throw err;
+    }
     return [];
   }
 }

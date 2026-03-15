@@ -24,6 +24,9 @@ const DEV_PRESETS = [
   { label: "OAG",     username: "oag_test",   hint: "Office of the Auditor General" },
 ];
 
+const showDevLoginAids =
+  String(import.meta.env.VITE_ENABLE_DEV_LOGIN_AIDS ?? "").trim().toLowerCase() === "true";
+
 export default function LoginScreen({ onLogin }: Props) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -141,7 +144,7 @@ export default function LoginScreen({ onLogin }: Props) {
                     type="text"
                     value={username}
                     onChange={(e) => { setUsername(e.target.value); setActivePreset(null); }}
-                    placeholder="e.g. kps_test or admin"
+                    placeholder="Enter your assigned username"
                     autoFocus
                     disabled={loading}
                   />
@@ -213,13 +216,15 @@ export default function LoginScreen({ onLogin }: Props) {
         </div>
 
         {/* ── Developer / First-time Setup Guide ───────────────── */}
-        <div className="setup-guide-toggle" onClick={() => setGuideOpen((p) => !p)}>
-          <Terminal size={13} />
-          <span>First time? Developer setup guide</span>
-          {guideOpen ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
-        </div>
+        {showDevLoginAids && (
+          <>
+            <div className="setup-guide-toggle" onClick={() => setGuideOpen((p) => !p)}>
+              <Terminal size={13} />
+              <span>First time? Developer setup guide</span>
+              {guideOpen ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+            </div>
 
-        {guideOpen && (
+            {guideOpen && (
           <div className="setup-guide-panel">
             {/* Step 1 */}
             <div className="setup-step">
@@ -313,6 +318,8 @@ export default function LoginScreen({ onLogin }: Props) {
               </span>
             </div>
           </div>
+            )}
+          </>
         )}
 
         {/* Agency chips */}
@@ -326,20 +333,20 @@ export default function LoginScreen({ onLogin }: Props) {
                 key={code}
                 className={`agency-chip ${activePreset?.startsWith(code.toLowerCase()) ? "active-chip" : ""}`}
                 title={KENYA_AGENCIES[code].name}
-                onClick={() => applyPreset({ label: code, username: `${code.toLowerCase()}_test`, hint: KENYA_AGENCIES[code].name })}
-                style={{ cursor: "pointer" }}
+                onClick={showDevLoginAids ? () => applyPreset({ label: code, username: `${code.toLowerCase()}_test`, hint: KENYA_AGENCIES[code].name }) : undefined}
+                style={{ cursor: showDevLoginAids ? "pointer" : "default" }}
               >
                 {code}
               </span>
             ))}
             <span className="agency-chip central" title="Central Command"
-              onClick={() => applyPreset({ label: "Admin", username: "admin", hint: "Central admin" })}
-              style={{ cursor: "pointer" }}>
+              onClick={showDevLoginAids ? () => applyPreset({ label: "Admin", username: "admin", hint: "Central admin" }) : undefined}
+              style={{ cursor: showDevLoginAids ? "pointer" : "default" }}>
               CENTRAL
             </span>
           </div>
           <p className="muted" style={{ textAlign: "center", fontSize: "0.68rem", marginTop: 8 }}>
-            Click an agency to pre-fill the username
+            {showDevLoginAids ? "Click an agency to pre-fill the username" : "Access is provisioned centrally for authorised personnel only"}
           </p>
         </div>
 

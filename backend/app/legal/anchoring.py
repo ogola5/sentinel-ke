@@ -67,12 +67,12 @@ class MinioEvidenceAnchorClient:
     """
     MinIO anchoring modes:
     - disabled: skip
-    - stub: deterministic local receipt (default)
+    - stub: deterministic local receipt (simulated, not immutable)
     - webhook: POST receipt payload to configured URL
     """
 
     def __init__(self) -> None:
-        self.mode = _env("MINIO_ANCHOR_MODE", "stub").lower()
+        self.mode = _env("MINIO_ANCHOR_MODE", "disabled").lower()
         self.bucket = _env("MINIO_ANCHOR_BUCKET", "sentinel-legal-evidence")
         self.webhook_url = _env("MINIO_ANCHOR_WEBHOOK_URL", "")
         self.timeout = _as_timeout("MINIO_ANCHOR_TIMEOUT_SEC", 5.0)
@@ -111,7 +111,7 @@ class MinioEvidenceAnchorClient:
         if self.mode == "stub":
             return MinioReceipt(
                 backend="minio_stub",
-                status="anchored",
+                status="simulated",
                 bucket=self.bucket,
                 object_key=object_key,
                 version_id=version_id,
@@ -324,12 +324,12 @@ class ImmudbEvidenceAnchorClient:
     """
     immudb anchoring modes:
     - disabled: skip
-    - stub: deterministic local receipt (default)
+    - stub: deterministic local receipt (simulated, not immutable)
     - webhook: POST key/value to configured URL
     """
 
     def __init__(self) -> None:
-        self.mode = _env("IMMUDB_ANCHOR_MODE", "stub").lower()
+        self.mode = _env("IMMUDB_ANCHOR_MODE", "disabled").lower()
         self.webhook_url = _env("IMMUDB_ANCHOR_WEBHOOK_URL", "")
         self.http_base = _env("IMMUDB_HTTP_BASE_URL", "")
         self.http_anchor_path = _env("IMMUDB_HTTP_ANCHOR_PATH", "/api/v2/anchor")
@@ -360,7 +360,7 @@ class ImmudbEvidenceAnchorClient:
         if self.mode == "stub":
             return ImmudbReceipt(
                 backend="immudb_stub",
-                status="anchored",
+                status="simulated",
                 key=key,
                 tx_id=stub_tx,
                 verified=True,
@@ -513,6 +513,8 @@ def merge_anchor_status(minio_status: str, immudb_status: str) -> str:
         return "anchored"
     if a or b:
         return "partial"
+    if minio_status == "simulated" or immudb_status == "simulated":
+        return "simulated"
     if minio_status == "skipped" and immudb_status == "skipped":
         return "skipped"
     return "failed"
@@ -642,10 +644,16 @@ class LegalEvidenceAnchoringService:
 
     @staticmethod
     def _anchor_to_dict(row: LegalEvidenceAnchor) -> Dict[str, Any]:
+        anchor_status = row.anchor_status
+        if anchor_status == "anchored" and (
+            str(row.minio_backend or "").endswith("_stub")
+            or str(row.immudb_backend or "").endswith("_stub")
+        ):
+            anchor_status = "simulated"
         return {
             "anchor_id": row.anchor_id,
             "bundle_id": row.bundle_id,
-            "anchor_status": row.anchor_status,
+            "anchor_status": anchor_status,
             "anchor_receipt_hash": row.anchor_receipt_hash,
             "minio": {
                 "backend": row.minio_backend,

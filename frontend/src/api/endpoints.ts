@@ -97,8 +97,19 @@ export const endpoints = {
     withQuery("/v1/economy/leakage/run", { window_days: windowDays }),
   caseFromCampaign: (campaignId: string) =>
     withBase(`/v1/cases/from-campaign/${encodeURIComponent(campaignId)}`),
+  casesRecent: (limit = 20) => withQuery("/v1/cases/recent", { limit }),
   stixCaseByCampaign: (campaignId: string) =>
     withBase(`/v1/stix/case/${encodeURIComponent(campaignId)}`),
+
+  // Graph traversal (Neo4j-backed)
+  graphEntity: (entityKey: string) =>
+    withBase(`/v1/graph/entity/${encodeURIComponent(entityKey)}`),
+  graphNeighbors: (entityKey: string, limit = 20) =>
+    withQuery(`/v1/graph/neighbors/${encodeURIComponent(entityKey)}`, { limit }),
+  graphPath: (fromKey: string, toKey: string, maxHops = 4) =>
+    withQuery("/v1/graph/path", { from: fromKey, to: toKey, max_hops: maxHops }),
+  graphEvidence: (eventHash: string) =>
+    withBase(`/v1/graph/evidence/${encodeURIComponent(eventHash)}`),
 
   // Defense & Containment
   defenseIncidents: (limit = 20, offset = 0) => withQuery("/v1/defense/incidents/runs", { limit, offset }),
@@ -135,6 +146,7 @@ export const endpoints = {
   // Demo data seeding
   demoIngestCyber: () => withBase("/v1/demo/ingest-synthetic-gnn-data"),
   demoIngestCorruption: () => withBase("/v1/demo/ingest-corruption-data"),
+  demoBootstrap: () => withBase("/v1/demo/bootstrap"),
 
   // Crypto posture
   cryptoPosture: () => withBase("/v1/crypto/posture"),
@@ -154,6 +166,18 @@ export const endpoints = {
     withQuery("/v1/ai/trust/entity", { entity_key: entityKey, prediction_type: predictionType }),
   aiTrustSummary: () => withBase("/v1/ai/trust/summary"),
   aiQuery: () => withBase("/v1/ai/query"),
+  // Previously unreachable AI endpoints — now wired
+  aiLinkPredictions: (entityKey?: string, limit = 20) =>
+    withQuery("/v1/ai/link-predictions", { entity_key: entityKey, limit }),
+  aiBaselines: (entityKey?: string) =>
+    withQuery("/v1/ai/baselines", { entity_key: entityKey }),
+  aiRollouts: (limit = 20) => withQuery("/v1/ai/rollouts", { limit }),
+  aiInputAnomalies: (limit = 20) => withQuery("/v1/ai/input-anomalies", { limit }),
+  aiThresholds: () => withBase("/v1/ai/thresholds"),
+  aiCampaignIndicators: (campaignId?: string, limit = 20) =>
+    withQuery("/v1/ai/campaign-indicators", { campaign_id: campaignId, limit }),
+  aiTechniques: (limit = 50) => withQuery("/v1/ai/techniques", { limit }),
+  aiThreatIntel: (limit = 20) => withQuery("/v1/ai/threat-intel", { limit }),
   reportsCatalog: () => withBase("/v1/reports/catalog"),
   reportsGenerate: () => withBase("/v1/reports/generate"),
   reportsDownload: () => withBase("/v1/reports/download"),

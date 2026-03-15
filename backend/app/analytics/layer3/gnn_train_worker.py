@@ -1301,6 +1301,8 @@ def run_once(
     model_version: str = "gnn-sage-v1",
     prediction_type: str = "risk_gnn",
     artifact_dir: str = "/app/artifacts/gnn",
+    allow_demo_real_data_override: bool = False,
+    allow_demo_fairness_override: bool = False,
 ) -> Dict[str, object]:
     _ensure_ai_tables()
 
@@ -1387,28 +1389,38 @@ def run_once(
             labels=dataset.labels,
             probabilities=train_result.probabilities,
         )
+        fairness_gate_override_applied = False
         if fairness.get("fairness_flag") == "FAIL":
             disparity = float(fairness.get("max_positive_rate_disparity") or 0.0)
             threshold = float(settings.fairness_disparity_threshold)
-            log.error(
-                "fairness_gate_BLOCKED model_version=%s max_positive_rate_disparity=%.3f threshold=%.3f",
-                model_version,
-                disparity,
-                threshold,
-            )
-            db.rollback()
-            return {
-                "status": "blocked",
-                "gate": "fairness",
-                "model_version": model_version,
-                "max_positive_rate_disparity": disparity,
-                "threshold": threshold,
-                "detail": (
-                    "Training run blocked by fairness governance gate. "
-                    "max_positive_rate_disparity exceeds FAIRNESS_DISPARITY_THRESHOLD. "
-                    "Investigate entity-type label imbalance before retraining."
-                ),
-            }
+            if allow_demo_fairness_override:
+                fairness_gate_override_applied = True
+                log.warning(
+                    "fairness_gate_OVERRIDE_APPLIED model_version=%s max_positive_rate_disparity=%.3f threshold=%.3f",
+                    model_version,
+                    disparity,
+                    threshold,
+                )
+            else:
+                log.error(
+                    "fairness_gate_BLOCKED model_version=%s max_positive_rate_disparity=%.3f threshold=%.3f",
+                    model_version,
+                    disparity,
+                    threshold,
+                )
+                db.rollback()
+                return {
+                    "status": "blocked",
+                    "gate": "fairness",
+                    "model_version": model_version,
+                    "max_positive_rate_disparity": disparity,
+                    "threshold": threshold,
+                    "detail": (
+                        "Training run blocked by fairness governance gate. "
+                        "max_positive_rate_disparity exceeds FAIRNESS_DISPARITY_THRESHOLD. "
+                        "Investigate entity-type label imbalance before retraining."
+                    ),
+                }
 
         provenance = _compute_provenance_metrics(
             node_meta=dataset.node_meta,
@@ -1418,26 +1430,36 @@ def run_once(
         min_real_ratio = max(0.0, min(1.0, float(settings.gnn_min_real_ratio)))
         real_ratio = float(provenance.get("real_ratio") or 0.0)
         real_data_gate_passed = real_ratio >= min_real_ratio
+        real_data_gate_override_applied = False
         if not real_data_gate_passed:
-            log.error(
-                "real_data_gate_BLOCKED model_version=%s real_ratio=%.3f min_required=%.3f",
-                model_version,
-                real_ratio,
-                min_real_ratio,
-            )
-            db.rollback()
-            return {
-                "status": "blocked",
-                "gate": "real_data",
-                "model_version": model_version,
-                "real_ratio": real_ratio,
-                "min_real_ratio": min_real_ratio,
-                "detail": (
-                    "Training run blocked by real-data governance gate. "
-                    "Insufficient proportion of real (non-synthetic) data. "
-                    "Ingest more real threat data before retraining."
-                ),
-            }
+            if allow_demo_real_data_override:
+                real_data_gate_override_applied = True
+                log.warning(
+                    "real_data_gate_OVERRIDE_APPLIED model_version=%s real_ratio=%.3f min_required=%.3f",
+                    model_version,
+                    real_ratio,
+                    min_real_ratio,
+                )
+            else:
+                log.error(
+                    "real_data_gate_BLOCKED model_version=%s real_ratio=%.3f min_required=%.3f",
+                    model_version,
+                    real_ratio,
+                    min_real_ratio,
+                )
+                db.rollback()
+                return {
+                    "status": "blocked",
+                    "gate": "real_data",
+                    "model_version": model_version,
+                    "real_ratio": real_ratio,
+                    "min_real_ratio": min_real_ratio,
+                    "detail": (
+                        "Training run blocked by real-data governance gate. "
+                        "Insufficient proportion of real (non-synthetic) data. "
+                        "Ingest more real threat data before retraining."
+                    ),
+                }
 
         run = GNNTrainingRun(
             model_version=model_version,
@@ -1479,6 +1501,8 @@ def run_once(
                 "seed": seed,
                 "uncertainty_abstain_threshold": uncertainty_abstain_threshold,
                 "min_real_ratio": min_real_ratio,
+                "allow_demo_real_data_override": bool(allow_demo_real_data_override),
+                "allow_demo_fairness_override": bool(allow_demo_fairness_override),
             },
             metrics_json={
                 **train_result.metrics,
@@ -1487,10 +1511,18 @@ def run_once(
                 "negative_count": dataset.negative_count,
                 "benign_negative_count": dataset.benign_negative_count,
                 "fairness": fairness,
+                "fairness_gate": {
+                    "passed": fairness.get("fairness_flag") != "FAIL",
+                    "override_applied": bool(fairness_gate_override_applied),
+                    "mode": "demo_override" if fairness_gate_override_applied else "strict",
+                },
                 "provenance": provenance,
                 "real_data_gate": {
                     "min_real_ratio": min_real_ratio,
                     "passed": bool(real_data_gate_passed),
+                    "effective_passed": bool(real_data_gate_passed or real_data_gate_override_applied),
+                    "override_applied": bool(real_data_gate_override_applied),
+                    "mode": "demo_override" if real_data_gate_override_applied else "strict",
                 },
                 "feedback": feedback_metrics,
                 "evaluation_protocol": {
@@ -1841,6 +1873,9 @@ def run_once(
         "campaign_indicators_updated": campaign_indicator_stats["updated"],
         "feedback_overrides_applied": feedback_metrics["override_count"],
         "feedback_consumed": consumed_feedback,
+        "fairness_gate_override_applied": bool(fairness_gate_override_applied),
+        "real_data_gate_passed": bool(real_data_gate_passed),
+        "real_data_gate_override_applied": bool(real_data_gate_override_applied),
         "model_based_explanations": int(len(attribution_map)),
         "metrics": train_result.metrics,
         "artifact_path": artifact_path,

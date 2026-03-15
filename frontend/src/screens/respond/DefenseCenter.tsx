@@ -6,6 +6,7 @@ import {
   fetchWebhooks,
   fetchWebhookDeliveries,
 } from "../../api/defense";
+import type { Principal } from "../../types/auth";
 import type {
   PlaybookRun,
   ContainmentActionRecord,
@@ -37,7 +38,7 @@ interface ConfirmState {
   target: string;
 }
 
-export default function DefenseCenter() {
+export default function DefenseCenter({ principal }: { principal: Principal }) {
   const [runs, setRuns] = useState<PlaybookRun[]>([]);
   const [actions, setActions] = useState<ContainmentActionRecord[]>([]);
   const [webhooks, setWebhooks] = useState<WebhookRecord[]>([]);
@@ -49,15 +50,34 @@ export default function DefenseCenter() {
   const [actionTypeInput, setActionTypeInput] = useState("block_ip");
   const [executing, setExecuting] = useState(false);
   const [execResult, setExecResult] = useState<string>("");
+  const [visibilityNote, setVisibilityNote] = useState<string | null>(null);
+  const canInspectWebhooks = principal.access_level === "central";
 
   const load = async () => {
     setLoading(true);
-    const [r, w, d] = await Promise.all([fetchPlaybookRuns(20), fetchWebhooks(), fetchWebhookDeliveries(40)]);
-    setRuns(r);
-    setWebhooks(w);
-    setDeliveries(d);
-    if (r.length > 0 && !selectedRun) {
-      setSelectedRun(r[0].id);
+    setVisibilityNote(null);
+    const runRows = await fetchPlaybookRuns(20);
+    setRuns(runRows);
+    if (canInspectWebhooks) {
+      try {
+        const [w, d] = await Promise.all([
+          fetchWebhooks({ strict: true }),
+          fetchWebhookDeliveries(40, { strict: true }),
+        ]);
+        setWebhooks(w);
+        setDeliveries(d);
+      } catch (err) {
+        setWebhooks([]);
+        setDeliveries([]);
+        setVisibilityNote(err instanceof Error ? err.message : "webhook_registry_unavailable");
+      }
+    } else {
+      setWebhooks([]);
+      setDeliveries([]);
+      setVisibilityNote("Webhook registry and delivery receipts are visible only to central command users.");
+    }
+    if (runRows.length > 0 && !selectedRun) {
+      setSelectedRun(runRows[0].id);
     }
     setLoading(false);
   };
@@ -98,8 +118,10 @@ export default function DefenseCenter() {
       setExecResult(`${result.status} — ${mappedActions.map((a) => `${a.action_type}:${a.status}`).join(", ")}`);
       const refreshedRuns = await fetchPlaybookRuns(20);
       setRuns(refreshedRuns);
-      const newDeliveries = await fetchWebhookDeliveries(40);
-      setDeliveries(newDeliveries);
+      if (canInspectWebhooks) {
+        const newDeliveries = await fetchWebhookDeliveries(40, { strict: true });
+        setDeliveries(newDeliveries);
+      }
     } catch (e) {
       setExecResult(`Failed: ${e instanceof Error ? e.message : "request_failed"}`);
     } finally {
@@ -163,6 +185,12 @@ export default function DefenseCenter() {
           <div className="metric-value">{deliveries.length}</div>
         </div>
       </div>
+
+      {visibilityNote && (
+        <div className="panel" style={{ marginBottom: 12, borderColor: "rgba(255,159,10,.3)" }}>
+          <span className="muted" style={{ fontSize: "0.82rem" }}>{visibilityNote}</span>
+        </div>
+      )}
 
       {execResult && (
         <div

@@ -136,6 +136,9 @@ async def _require_partner_api_key(
         raise HTTPException(status_code=403, detail="Unknown or inactive partner API key")
 
     # Verify HMAC-SHA256 body signature to prevent payload tampering
+    if hub_settings.federation_require_signed_requests and not x_signature:
+        raise HTTPException(status_code=401, detail="Missing X-Sentinel-Signature")
+
     if x_signature:
         expected = "sha256=" + hmac.new(
             x_api_key.encode(), request_body, hashlib.sha256
@@ -519,11 +522,15 @@ def register_partner(
         "warning":            "Store api_key and correlation_salt securely. Neither can be retrieved again.",
         "webhook_registered": reg.webhook_url is not None,
         "edge_agent_env": {
-            "IS_EDGE_NODE":         "true",
-            "EDGE_PARTNER_ID":      reg.partner_id,
-            "EDGE_HUB_URL":         hub_settings.edge_hub_url or "https://<set-EDGE_HUB_URL-in-env>",
-            "EDGE_HUB_API_KEY":     raw_key,
-            "EDGE_NATIONAL_SALT":   correlation_salt,
+            "PARTNER_ID":           reg.partner_id,
+            "PARTNER_NAME":         reg.partner_name,
+            "HUB_URL":              hub_settings.edge_hub_url or "https://<set-HUB_URL-in-env>",
+            "HUB_API_KEY":          raw_key,
+            "NATIONAL_SALT":        correlation_salt,
+            "HMAC_SALT":            "CHANGE_ME_PER_PARTNER",
+            "DATA_SOURCE":          "demo",
+            "RUN_INTERVAL_S":       "300",
+            "RETRAIN_EVERY":        "12",
         },
     }
 

@@ -14,6 +14,12 @@ import type {
 import { emptyThreatSummary } from "../types/domain";
 import { apiFetchJson } from "./client";
 import { endpoints } from "./endpoints";
+import {
+  canonicalEndpointKey,
+  canonicalServiceKey,
+  displayEntityLabel,
+  isCanonicalEntityKey,
+} from "../utils/entityKeys";
 
 type ReadyResponse = {
   status: "ok" | "degraded";
@@ -352,7 +358,7 @@ const deriveEntities = (events: EventRecord[], indicators: ServiceIndicator[]): 
     byService.set(ev.service_id, arr);
   });
 
-  return Array.from(byService.entries()).map(([serviceId, evs], idx) => {
+  return Array.from(byService.entries()).map(([serviceId, evs]) => {
     const indicator = indicators.find((i) => i.serviceId === serviceId);
     const risk = indicator
       ? indicator.ddosRisk[indicator.ddosRisk.length - 1] >= 0.8
@@ -363,7 +369,7 @@ const deriveEntities = (events: EventRecord[], indicators: ServiceIndicator[]): 
       : "low";
 
     return {
-      id: `entity-${idx + 1}`,
+      id: canonicalServiceKey(serviceId),
       label: serviceId,
       type: "Service",
       risk,
@@ -371,6 +377,7 @@ const deriveEntities = (events: EventRecord[], indicators: ServiceIndicator[]): 
       last_seen: evs[0]?.occurred_at ?? "-",
       sources: Array.from(new Set(evs.map((e) => e.source))),
       notes: [
+        `Entity key ${canonicalServiceKey(serviceId)}`,
         `${evs.length} events observed`,
         `Top endpoint ${evs[0]?.endpoint ?? "n/a"}`,
       ],
@@ -448,8 +455,8 @@ const buildGraphFromSnapshot = (
   };
 
   for (const event of events) {
-    const serviceNodeId = `service:${event.service_id}`;
-    const endpointNodeId = `endpoint:${event.service_id}:${event.endpoint}`;
+    const serviceNodeId = canonicalServiceKey(event.service_id);
+    const endpointNodeId = canonicalEndpointKey(event.endpoint);
     upsertNode(serviceNodeId, event.service_id, "Service");
     upsertNode(endpointNodeId, event.endpoint, "Endpoint");
 
@@ -521,11 +528,17 @@ const buildGraphFromSnapshot = (
       const label = entity.label.trim();
       if (!label || label.startsWith("events:")) continue;
       const linkedService = events.find((item) => item.service_id.toLowerCase() === label.toLowerCase());
-      const targetNodeId = linkedService
-        ? `service:${linkedService.service_id}`
-        : `campaign-entity:${campaign.id}:${label}`;
+      const targetNodeId = isCanonicalEntityKey(label)
+        ? label
+        : linkedService
+          ? canonicalServiceKey(linkedService.service_id)
+          : `campaign-entity:${campaign.id}:${label}`;
       if (!nodes.has(targetNodeId)) {
-        upsertNode(targetNodeId, label, linkedService ? "Service" : "Entity");
+        upsertNode(
+          targetNodeId,
+          isCanonicalEntityKey(label) ? displayEntityLabel(label) : label,
+          linkedService ? "Service" : "Entity",
+        );
       }
       upsertEdge(
         `edge:campaign-entity:${campaign.id}:${targetNodeId}`,
@@ -718,6 +731,29 @@ export async function createCasePacketFromCampaign(campaignId: string): Promise<
       `Stage ${asString(res.summary?.stage, "unknown")}`,
     ],
   };
+}
+
+function downloadJsonDocument(filename: string, payload: unknown): string {
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+  const url = window.URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.URL.revokeObjectURL(url);
+  return filename;
+}
+
+export async function downloadCasePacketFromCampaign(campaignId: string): Promise<string> {
+  const payload = await apiFetchJson<Record<string, unknown>>(endpoints.caseFromCampaign(campaignId), { method: "POST" });
+  return downloadJsonDocument(`sentinel-case-${campaignId}.json`, payload);
+}
+
+export async function downloadStixBundleForCampaign(campaignId: string): Promise<string> {
+  const payload = await apiFetchJson<Record<string, unknown>>(endpoints.stixCaseByCampaign(campaignId), { method: "GET" });
+  return downloadJsonDocument(`sentinel-case-${campaignId}.stix.json`, payload);
 }
 
 export async function fetchCampaignEvidenceForDrawer(campaignId: string): Promise<EvidenceItem[]> {

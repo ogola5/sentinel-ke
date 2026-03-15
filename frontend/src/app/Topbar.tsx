@@ -39,7 +39,9 @@ export default function Topbar({
   const normalizedQuery = entityQuery.trim().toLowerCase();
   const matchedEntity = normalizedQuery
     ? entities.find((item) => item.label.toLowerCase() === normalizedQuery)
+      ?? entities.find((item) => item.id.toLowerCase() === normalizedQuery)
       ?? entities.find((item) => item.label.toLowerCase().includes(normalizedQuery))
+      ?? entities.find((item) => item.id.toLowerCase().includes(normalizedQuery))
     : null;
 
   return (
@@ -116,7 +118,7 @@ export default function Topbar({
             </div>
             <datalist id="entity-options">
               {entities.map((entity) => (
-                <option key={entity.label} value={entity.label} />
+                <option key={entity.id} value={entity.id} label={entity.label} />
               ))}
             </datalist>
           </div>

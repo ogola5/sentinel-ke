@@ -75,6 +75,7 @@ export default function ActiveScreen({
   healthGnnLoaded,
   healthModelVersion,
   healthGnnMetrics,
+  healthPlatformStatus,
   leakageActionLabel,
   onNavigate,
   onSelectEvent,
@@ -84,10 +85,12 @@ export default function ActiveScreen({
   onSelectServiceId,
   onOpenEvidence,
   onGenerateCase,
+  onGenerateCaseForId,
   onOpenCampaignEvidence,
   onRunLeakage,
   onCaseExportJson,
   onCaseExportStix,
+  onInvestigateEntity,
 }: {
   activeScreen: ScreenId;
   principal: Principal;
@@ -113,6 +116,7 @@ export default function ActiveScreen({
   healthGnnLoaded: boolean;
   healthModelVersion: string | null;
   healthGnnMetrics: Record<string, unknown>;
+  healthPlatformStatus: Record<string, unknown>;
   leakageActionLabel: string;
   onNavigate: (id: ScreenId) => void;
   onSelectEvent: (event: EventRecord) => void;
@@ -122,10 +126,12 @@ export default function ActiveScreen({
   onSelectServiceId: (serviceId: string) => void;
   onOpenEvidence: (title: string, items: Array<{ event_hash: string; source: SourceType; detail: string }>) => void;
   onGenerateCase: () => void;
+  onGenerateCaseForId: (id: string) => void;
   onOpenCampaignEvidence: () => void;
   onRunLeakage: () => void;
   onCaseExportJson: () => void;
   onCaseExportStix: () => void;
+  onInvestigateEntity: (entityKey: string) => void;
 }) {
   return (
     <Suspense fallback={<ScreenFallback />}>
@@ -137,6 +143,7 @@ export default function ActiveScreen({
           activeEventCount={eventsData.length}
           healthGnnLoaded={healthGnnLoaded}
           healthModelVersion={healthModelVersion}
+          healthPlatformStatus={healthPlatformStatus}
           threatSummaryData={threatSummaryData}
           onNavigate={(screen) => onNavigate(screen as ScreenId)}
         />
@@ -187,6 +194,7 @@ export default function ActiveScreen({
             if (entity) onSelectEntity(entity);
           }}
           onSelectEdge={(edge: GraphEdge) => onOpenEvidence(`Edge: ${edge.source} → ${edge.target}`, edge.evidence)}
+          onInvestigateEntity={onInvestigateEntity}
         />
       )}
       {activeScreen === "gnn" && (
@@ -220,14 +228,24 @@ export default function ActiveScreen({
       )}
 
       {activeScreen === "cases" && (
-        <CasePackets packet={activeCase} onExportJson={onCaseExportJson} onExportStix={onCaseExportStix} />
+        <CasePackets
+          packet={activeCase}
+          onExportJson={onCaseExportJson}
+          onExportStix={onCaseExportStix}
+          onGenerateCaseForId={onGenerateCaseForId}
+        />
       )}
-      {activeScreen === "defense" && execute && <DefenseCenter />}
+      {activeScreen === "defense" && execute && <DefenseCenter principal={principal} />}
 
       {activeScreen === "ops" && (
-        <OperationsCenter data={operationsData} onRunLeakage={onRunLeakage} leakageActionLabel={leakageActionLabel} />
+        <OperationsCenter
+          data={operationsData}
+          onRunLeakage={onRunLeakage}
+          leakageActionLabel={leakageActionLabel}
+          onOpenCorruptionIntel={() => onNavigate("corruption")}
+        />
       )}
-      {activeScreen === "reports" && <ReportsCenter />}
+      {activeScreen === "reports" && <ReportsCenter principal={principal} />}
       {activeScreen === "corruption" && (
         <CorruptionIntel data={operationsData} onRunLeakage={onRunLeakage} leakageActionLabel={leakageActionLabel} />
       )}
@@ -235,8 +253,9 @@ export default function ActiveScreen({
       {activeScreen === "audit" && <AuditLog />}
       {activeScreen === "investigate" && (
         <EntityInvestigation
-          initialEntityKey={selectedEntity?.label ?? null}
+          initialEntityKey={selectedEntity?.id ?? null}
           analystId={principal.username}
+          principal={principal}
         />
       )}
     </Suspense>

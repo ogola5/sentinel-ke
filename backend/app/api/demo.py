@@ -58,6 +58,8 @@ class DemoBootstrapRequest(BaseModel):
     corruption_runs: int = 10
     benign_per_run: int = 100
     seed_sources: bool = True
+    allow_demo_real_data_override: bool = True
+    allow_demo_fairness_override: bool = True
 
 
 def _bootstrap_demo_environment(payload: DemoBootstrapRequest) -> dict:
@@ -72,6 +74,8 @@ def _bootstrap_demo_environment(payload: DemoBootstrapRequest) -> dict:
         "domain": payload.domain,
         "scenario": payload.scenario,
         "seed_sources": payload.seed_sources,
+        "allow_demo_real_data_override": bool(payload.allow_demo_real_data_override),
+        "allow_demo_fairness_override": bool(payload.allow_demo_fairness_override),
         "steps": [],
     }
 
@@ -87,6 +91,12 @@ def _bootstrap_demo_environment(payload: DemoBootstrapRequest) -> dict:
                 window_key="Wmid",
                 epochs=max(10, int(payload.epochs)),
                 model_version=settings.gnn_model_version,
+                allow_demo_real_data_override=bool(
+                    payload.allow_demo_real_data_override and settings.gnn_demo_allow_real_data_override
+                ),
+                allow_demo_fairness_override=bool(
+                    payload.allow_demo_fairness_override and settings.gnn_demo_allow_fairness_override
+                ),
             )
             summary["steps"].append({"stage": "cyber_train", **cyber_result})
         finally:
@@ -103,6 +113,12 @@ def _bootstrap_demo_environment(payload: DemoBootstrapRequest) -> dict:
                 window_key="Wcorruption",
                 epochs=max(10, int(payload.epochs)),
                 model_version="corruption-gnn-v1",
+                allow_demo_real_data_override=bool(
+                    payload.allow_demo_real_data_override and settings.gnn_demo_allow_real_data_override
+                ),
+                allow_demo_fairness_override=bool(
+                    payload.allow_demo_fairness_override and settings.gnn_demo_allow_fairness_override
+                ),
             )
             summary["steps"].append({"stage": "corruption_train", **corruption_result})
         finally:

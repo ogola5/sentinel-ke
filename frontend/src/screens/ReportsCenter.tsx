@@ -13,6 +13,7 @@ import {
 } from "../api/reports";
 import { fetchAIPredictions } from "../api/ai";
 import type { AIPrediction } from "../types/ai";
+import type { Principal } from "../types/auth";
 
 const DEFAULT_REQUEST: ReportRequest = {
   report_type: "incident_brief",
@@ -30,7 +31,11 @@ function requiresField(reportType: ReportType, field: keyof ReportRequest): bool
   return false;
 }
 
-export default function ReportsCenter() {
+function canAccessLegalReports(principal: Principal): boolean {
+  return principal.access_level === "central" || principal.scopes.includes("*") || principal.scopes.includes("legal.read") || principal.scopes.includes("legal.write");
+}
+
+export default function ReportsCenter({ principal }: { principal: Principal }) {
   const [catalog, setCatalog] = useState<ReportCatalog | null>(null);
   const [request, setRequest] = useState<ReportRequest>(DEFAULT_REQUEST);
   const [entitySuggestions, setEntitySuggestions] = useState<AIPrediction[]>([]);
@@ -73,6 +78,18 @@ export default function ReportsCenter() {
     () => catalog?.report_types.find((item) => item.report_type === request.report_type),
     [catalog, request.report_type],
   );
+  const allowLegalReports = canAccessLegalReports(principal);
+  const visibleReportTypes = useMemo(
+    () => (catalog?.report_types ?? []).filter((item) => allowLegalReports || item.report_type !== "legal_evidence_bundle"),
+    [allowLegalReports, catalog],
+  );
+
+  useEffect(() => {
+    if (allowLegalReports) return;
+    if (request.report_type === "legal_evidence_bundle") {
+      setRequest((current) => ({ ...current, report_type: "incident_brief" }));
+    }
+  }, [allowLegalReports, request.report_type]);
 
   const summary = (preview?.summary as Record<string, unknown> | undefined) ?? {};
   const findings = Array.isArray(preview?.findings) ? (preview?.findings as Array<Record<string, unknown>>) : [];
@@ -218,13 +235,22 @@ export default function ReportsCenter() {
                     report_type: event.target.value as ReportType,
                   }))}
                 >
-                  {catalog.report_types.map((item) => (
+                  {visibleReportTypes.map((item) => (
                     <option key={item.report_type} value={item.report_type}>
                       {item.title}
                     </option>
                   ))}
                 </select>
               </label>
+
+              {!allowLegalReports && (
+                <div className="info-note">
+                  <ShieldCheck size={13} style={{ flexShrink: 0 }} />
+                  <span>
+                    Legal evidence bundle reports are shown only to central or legal-scope users.
+                  </span>
+                </div>
+              )}
 
               {selectedType && (
                 <div className="workflow-summary-banner">

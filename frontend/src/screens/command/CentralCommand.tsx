@@ -36,6 +36,7 @@ interface Props {
   activeEventCount: number;
   healthGnnLoaded: boolean;
   healthModelVersion: string | null;
+  healthPlatformStatus: Record<string, unknown>;
   threatSummaryData: ThreatSummary;
   onNavigate: (screen: string) => void;
 }
@@ -85,6 +86,7 @@ export default function CentralCommand({
   activeEventCount,
   healthGnnLoaded,
   healthModelVersion,
+  healthPlatformStatus,
   threatSummaryData,
   onNavigate,
 }: Props) {
@@ -145,7 +147,11 @@ export default function CentralCommand({
     operationsData.predictions.filter((item) => isHighRisk(item.score)).length;
   const nationalThreat = threatLevel(criticalQueueCount, highQueueCount);
 
-  const onlinePartnerIds = new Set(partners.filter((item) => item.is_active).map((item) => item.partner_id.toUpperCase()));
+  const onlinePartnerIds = new Set(
+    partners
+      .filter((item) => item.status === "online")
+      .map((item) => item.partner_id.toUpperCase()),
+  );
   const agencyUserCounts = ALL_AGENCIES.map((code) => ({
     code,
     label: code,
@@ -171,6 +177,15 @@ export default function CentralCommand({
         : "var(--warning)";
   const cyberGovernance = trustSummary?.model_governance?.find((item) => item.prediction_type === "risk_gnn") ?? null;
   const corruptionGovernance = trustSummary?.model_governance?.find((item) => item.prediction_type === "corruption_risk") ?? null;
+  const hasPlatformHealth = Object.keys(healthPlatformStatus).length > 0;
+  const schemaContractOk = hasPlatformHealth && healthPlatformStatus.schema_contract_ok === true;
+  const schemaMissingCount = Number(healthPlatformStatus.schema_missing_count ?? 0);
+  const federationSignedRequired = hasPlatformHealth && healthPlatformStatus.federation_signed_requests_required === true;
+  const legalAnchorIntegrity = hasPlatformHealth ? String(healthPlatformStatus.legal_anchor_integrity ?? "unknown") : "unknown";
+  const legalAnchorModes =
+    healthPlatformStatus.legal_anchor_modes && typeof healthPlatformStatus.legal_anchor_modes === "object"
+      ? (healthPlatformStatus.legal_anchor_modes as Record<string, unknown>)
+      : {};
   const viewGuide =
     view === "brief"
       ? {
@@ -453,9 +468,9 @@ export default function CentralCommand({
             </div>
             <div className="agency-presence-grid">
               {ALL_AGENCIES.map((code) => {
+                const partner = partners.find((item) => item.partner_id.toUpperCase() === code);
                 const online = onlinePartnerIds.has(code);
                 const color = agencyColor(code);
-                const partner = partners.find((item) => item.partner_id.toUpperCase() === code);
                 return (
                   <div key={code} className={`agency-presence-card ${online ? "online" : "offline"}`}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -466,7 +481,9 @@ export default function CentralCommand({
                     </div>
                     <div style={{ fontSize: "0.72rem", opacity: 0.7, marginTop: 4 }}>{agencyName(code)}</div>
                     <div className="muted" style={{ marginTop: 6 }}>
-                      {partner?.last_seen_at ? `Last seen ${new Date(partner.last_seen_at).toLocaleDateString("en-KE")}` : "Not registered"}
+                      {partner
+                        ? `${partner.status.replace("_", " ")}${partner.last_seen_at ? ` · ${new Date(partner.last_seen_at).toLocaleDateString("en-KE")}` : ""}`
+                        : "Not registered"}
                     </div>
                   </div>
                 );
@@ -649,6 +666,55 @@ export default function CentralCommand({
             <button className="ghost" type="button" onClick={() => onNavigate("reports")}>
               Open Reports
             </button>
+          </div>
+
+          <div className="panel">
+            <div className="panel-header">
+              <h3>Platform integrity</h3>
+              <span className="muted">Schema, federation auth, evidence anchoring</span>
+            </div>
+            <div className="list">
+              <div className="list-item">
+                <strong style={{ color: schemaContractOk ? "var(--accent)" : "var(--risk-critical)" }}>
+                  {!hasPlatformHealth ? "Schema status loading" : schemaContractOk ? "Schema clean" : "Schema drift detected"}
+                </strong>
+                <p className="muted" style={{ marginTop: 4 }}>
+                  {!hasPlatformHealth
+                    ? "Waiting for platform health data."
+                    : schemaContractOk
+                      ? "No required columns are missing on startup health checks."
+                      : `${schemaMissingCount} required columns are missing.`}
+                </p>
+              </div>
+              <div className="list-item">
+                <strong>
+                  {!hasPlatformHealth
+                    ? "Federation policy loading"
+                    : federationSignedRequired
+                      ? "Signed federation requests required"
+                      : "Unsigned partner requests still allowed"}
+                </strong>
+                <p className="muted" style={{ marginTop: 4 }}>
+                  Edge payloads must include HMAC signatures before the hub accepts them.
+                </p>
+              </div>
+              <div className="list-item">
+                <strong>
+                  {legalAnchorIntegrity === "live"
+                    ? "Live evidence anchoring"
+                    : legalAnchorIntegrity === "simulated"
+                      ? "Simulated evidence anchoring"
+                      : legalAnchorIntegrity === "disabled"
+                        ? "Evidence anchoring disabled"
+                        : legalAnchorIntegrity === "partial"
+                          ? "Partial evidence anchoring"
+                          : "Anchoring status unknown"}
+                </strong>
+                <p className="muted" style={{ marginTop: 4 }}>
+                  MinIO {String(legalAnchorModes.minio ?? "unknown")} · immudb {String(legalAnchorModes.immudb ?? "unknown")}
+                </p>
+              </div>
+            </div>
           </div>
 
           <div className="panel">

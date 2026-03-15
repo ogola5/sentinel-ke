@@ -59,9 +59,6 @@ export default function Campaigns({
           <button className="ghost" type="button" onClick={onOpenGraph}>
             Open in Graph
           </button>
-          <button className="ghost" type="button" onClick={onGenerateCase}>
-            Generate Case Packet
-          </button>
         </div>
       </div>
 

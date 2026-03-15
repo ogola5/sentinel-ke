@@ -11,6 +11,7 @@ type OperationsCenterProps = {
   data: OperationsSnapshot;
   onRunLeakage: () => void;
   leakageActionLabel: string;
+  onOpenCorruptionIntel?: () => void;
 };
 
 const anomalyLabel = (score: number): "high" | "medium" | "low" => {
@@ -60,7 +61,7 @@ const VIEW_GUIDES: Record<OperationsView, {
   },
 };
 
-export default function OperationsCenter({ data, onRunLeakage, leakageActionLabel }: OperationsCenterProps) {
+export default function OperationsCenter({ data, onRunLeakage, leakageActionLabel, onOpenCorruptionIntel }: OperationsCenterProps) {
   const [view, setView] = useState<OperationsView>("overview");
   const [reviewQueue, setReviewQueue] = useState<ReviewQueue>("predictions");
 
@@ -391,6 +392,10 @@ export default function OperationsCenter({ data, onRunLeakage, leakageActionLabe
               <strong>{data.procurementAnomalies.length + data.integrityAlerts.length}</strong>
               <span className="muted">Priority integrity rows available for review</span>
             </div>
+            <div>
+              <strong>Use Corruption Intel</strong>
+              <span className="muted">Open the dedicated corruption workspace for full tables and charts</span>
+            </div>
           </div>
 
           <div className="grid-two">
@@ -453,8 +458,14 @@ export default function OperationsCenter({ data, onRunLeakage, leakageActionLabe
 
           <div className="panel workflow-stage-panel">
             <div className="panel-header">
-              <h3>Priority integrity rows</h3>
-              <span className="muted">Top anomalies first</span>
+              <h3>Priority integrity snapshot</h3>
+              <span className="muted">Short queue only</span>
+            </div>
+            <div className="info-note" style={{ marginBottom: 12 }}>
+              <FileWarning size={13} style={{ flexShrink: 0 }} />
+              <span>
+                This workspace keeps integrity pressure short. Use <strong>Corruption Intelligence</strong> for the full procurement, guardrail, and integrity investigation surfaces.
+              </span>
             </div>
             <table className="data-table">
               <thead>
@@ -493,6 +504,13 @@ export default function OperationsCenter({ data, onRunLeakage, leakageActionLabe
                 ))}
               </tbody>
             </table>
+            {onOpenCorruptionIntel && (
+              <div className="chip-row" style={{ marginTop: 12 }}>
+                <button className="ghost" type="button" onClick={onOpenCorruptionIntel}>
+                  Open Corruption Intelligence
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}

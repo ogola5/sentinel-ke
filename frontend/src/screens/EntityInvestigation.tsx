@@ -29,6 +29,7 @@ import {
 } from "../api/defense";
 import { downloadReport, generateReport } from "../api/reports";
 import type { AIPrediction, EntityTrustSummary } from "../types/ai";
+import type { Principal } from "../types/auth";
 import type { WebhookDeliveryRecord, WebhookRecord } from "../types/defense";
 import { formatPercent } from "../utils/formatters";
 import { clampRiskPercent, formatRiskScore, riskColor, riskSeverityLabel } from "../utils/risk";
@@ -36,6 +37,7 @@ import { clampRiskPercent, formatRiskScore, riskColor, riskSeverityLabel } from 
 type InvestigationProps = {
   initialEntityKey: string | null;
   analystId: string;
+  principal: Principal;
 };
 
 type ExplanationRecord = {
@@ -138,7 +140,7 @@ function suggestedActionType(entityKey: string): string {
   return "block_ip";
 }
 
-export default function EntityInvestigation({ initialEntityKey, analystId }: InvestigationProps) {
+export default function EntityInvestigation({ initialEntityKey, analystId, principal }: InvestigationProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState(initialEntityKey ?? "");
   const [entityKey, setEntityKey] = useState<string | null>(initialEntityKey);
@@ -161,6 +163,7 @@ export default function EntityInvestigation({ initialEntityKey, analystId }: Inv
   const [actionTarget, setActionTarget] = useState("");
   const [actionBusy, setActionBusy] = useState(false);
   const [actionStatus, setActionStatus] = useState<string | null>(null);
+  const [containmentAccessNote, setContainmentAccessNote] = useState<string | null>(null);
 
   const [copilotQuestion, setCopilotQuestion] = useState("");
   const [copilotAnswer, setCopilotAnswer] = useState<string | null>(null);
@@ -192,14 +195,23 @@ export default function EntityInvestigation({ initialEntityKey, analystId }: Inv
     setFeedbackStatus(null);
 
     try {
-      const directPredictions = await fetchEntityPredictions(trimmed, { limit: 1, predictionType: "risk_gnn" });
+      const directPredictions = await fetchEntityPredictions(trimmed, { limit: 1, predictionType: "risk_gnn", strict: true });
       const fallbackPredictions = directPredictions.length > 0
         ? directPredictions
-        : await fetchEntityPredictions(trimmed, { limit: 1, predictionType: "corruption_risk" });
+        : await fetchEntityPredictions(trimmed, { limit: 1, predictionType: "corruption_risk", strict: true });
       const latestPrediction = fallbackPredictions[0] ?? null;
       setPrediction(latestPrediction);
 
-      const [explanationPayload, toolPayload, pathPayload, fusionPayload, reportPayload, trustPayload, webhookRows, deliveryRows] = await Promise.all([
+      const webhookPromise =
+        principal.access_level === "central"
+          ? fetchWebhooks({ strict: true })
+          : Promise.resolve<WebhookRecord[]>([]);
+      const deliveryPromise =
+        principal.access_level === "central"
+          ? fetchWebhookDeliveries(50, { strict: true })
+          : Promise.resolve<WebhookDeliveryRecord[]>([]);
+
+      const [explanationPayload, toolPayload, pathPayload, fusionPayload, reportPayload, trustPayload, webhookResult, deliveryResult] = await Promise.allSettled([
         latestPrediction ? fetchPredictionExplanation(latestPrediction.id) : Promise.resolve(null),
         fetchToolAttribution(trimmed),
         fetchEntityPaths(trimmed),
@@ -213,18 +225,36 @@ export default function EntityInvestigation({ initialEntityKey, analystId }: Inv
           classification: "RESTRICTED",
         }).catch(() => null),
         fetchEntityTrustSummary(trimmed, latestPrediction?.prediction_type),
-        fetchWebhooks(),
-        fetchWebhookDeliveries(50),
+        webhookPromise,
+        deliveryPromise,
       ]);
 
-      setExplanation((explanationPayload as ExplanationRecord | null) ?? null);
-      setToolAttribution((toolPayload as ToolAttributionRecord | null) ?? null);
-      setPathScore(extractFirstItem<PathScoreRecord>(pathPayload));
-      setFusion(extractFirstItem<FusionRecord>(fusionPayload));
-      setReportPreview(reportPayload);
-      setTrustSummary(trustPayload);
-      setWebhooks(webhookRows);
-      setDeliveryReceipts(deliveryRows);
+      setExplanation(explanationPayload.status === "fulfilled" ? (explanationPayload.value as ExplanationRecord | null) ?? null : null);
+      setToolAttribution(toolPayload.status === "fulfilled" ? (toolPayload.value as ToolAttributionRecord | null) ?? null : null);
+      setPathScore(pathPayload.status === "fulfilled" ? extractFirstItem<PathScoreRecord>(pathPayload.value) : null);
+      setFusion(fusionPayload.status === "fulfilled" ? extractFirstItem<FusionRecord>(fusionPayload.value) : null);
+      setReportPreview(reportPayload.status === "fulfilled" ? reportPayload.value : null);
+      setTrustSummary(trustPayload.status === "fulfilled" ? trustPayload.value : null);
+
+      if (principal.access_level !== "central") {
+        setContainmentAccessNote("Webhook registry and delivery receipts are visible only to central command users.");
+        setWebhooks([]);
+        setDeliveryReceipts([]);
+      } else {
+        if (webhookResult.status === "fulfilled") {
+          setWebhooks(webhookResult.value);
+          setContainmentAccessNote(null);
+        } else {
+          setWebhooks([]);
+          setContainmentAccessNote(webhookResult.reason instanceof Error ? webhookResult.reason.message : "webhook_registry_unavailable");
+        }
+        if (deliveryResult.status === "fulfilled") {
+          setDeliveryReceipts(deliveryResult.value);
+        } else {
+          setDeliveryReceipts([]);
+          setContainmentAccessNote(deliveryResult.reason instanceof Error ? deliveryResult.reason.message : "delivery_receipts_unavailable");
+        }
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "investigation_failed");
       setPrediction(null);
@@ -236,6 +266,7 @@ export default function EntityInvestigation({ initialEntityKey, analystId }: Inv
       setTrustSummary(null);
       setWebhooks([]);
       setDeliveryReceipts([]);
+      setContainmentAccessNote(null);
     } finally {
       setLoading(false);
     }
@@ -280,12 +311,12 @@ export default function EntityInvestigation({ initialEntityKey, analystId }: Inv
         prediction_id: prediction.id,
       });
       setActionStatus(`${result.status} — ${actionType} requested for ${actionTarget.trim()}.`);
-      const [nextDeliveries, nextTrust] = await Promise.all([
-        fetchWebhookDeliveries(50),
-        fetchEntityTrustSummary(entityKey, prediction.prediction_type),
-      ]);
-      setDeliveryReceipts(nextDeliveries);
+      const nextTrust = await fetchEntityTrustSummary(entityKey, prediction.prediction_type);
       setTrustSummary(nextTrust);
+      if (principal.access_level === "central") {
+        const nextDeliveries = await fetchWebhookDeliveries(50, { strict: true });
+        setDeliveryReceipts(nextDeliveries);
+      }
     } catch (err) {
       setActionStatus(err instanceof Error ? err.message : "containment_action_failed");
     } finally {
@@ -642,6 +673,9 @@ export default function EntityInvestigation({ initialEntityKey, analystId }: Inv
               </div>
               {actionStatus && (
                 <p className="muted" style={{ marginTop: 10 }}>{actionStatus}</p>
+              )}
+              {containmentAccessNote && (
+                <p className="muted" style={{ marginTop: 10 }}>{containmentAccessNote}</p>
               )}
               <div className="panel-subsection">
                 <h4>Webhook delivery receipts</h4>

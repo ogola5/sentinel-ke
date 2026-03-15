@@ -70,22 +70,35 @@ export default function FederationDashboard() {
   const [correlations, setCorrelations] = useState<FederationCorrelation[]>([]);
   const [edgeSync, setEdgeSync] = useState<FederationEdgeSyncStatus | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [selectedPartner, setSelectedPartner] = useState<string>("");
 
   const load = async () => {
     setLoading(true);
-    const [p, pt, c, edge] = await Promise.all([
-      fetchFederationPartners(),
-      fetchFederationPatterns(60),
-      fetchFederationCorrelations(20),
-      fetchEdgeSyncStatus(),
-    ]);
-    setPartners(p);
-    setPatterns(pt);
-    setCorrelations(c);
-    setEdgeSync(edge);
-    if (p.length > 0) setSelectedPartner(p[0].partner_id);
-    setLoading(false);
+    setError(null);
+    try {
+      const [p, pt, c, edge] = await Promise.all([
+        fetchFederationPartners({ strict: true }),
+        fetchFederationPatterns(60, { strict: true }),
+        fetchFederationCorrelations(20, { strict: true }),
+        fetchEdgeSyncStatus(),
+      ]);
+      setPartners(p);
+      setPatterns(pt);
+      setCorrelations(c);
+      setEdgeSync(edge);
+      setSelectedPartner((current) => (
+        current && p.some((item) => item.partner_id === current) ? current : (p[0]?.partner_id ?? "")
+      ));
+    } catch (err) {
+      setPartners([]);
+      setPatterns([]);
+      setCorrelations([]);
+      setEdgeSync(null);
+      setError(err instanceof Error ? err.message : "federation_data_load_failed");
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => {
@@ -99,7 +112,7 @@ export default function FederationDashboard() {
   }));
 
   const selectedPartnerPatterns = patterns.filter((pt) => pt.partner_id === selectedPartner);
-  const activePartners = partners.filter((p) => p.is_active).length;
+  const activePartners = partners.filter((p) => p.status === "online").length;
   const stalePartners = partners.filter((p) => p.status === "stale").length;
   const offlinePartners = partners.filter((p) => p.status === "offline").length;
   const totalPatterns = patterns.length;
@@ -118,6 +131,15 @@ export default function FederationDashboard() {
           &nbsp;Refresh
         </button>
       </div>
+
+      {error && (
+        <div className="panel" style={{ marginBottom: 16, borderColor: "rgba(255,69,58,.28)", background: "rgba(255,69,58,.08)" }}>
+          <div className="info-note" style={{ color: "var(--risk-high)" }}>
+            <AlertTriangle size={13} style={{ flexShrink: 0 }} />
+            <span>{error}</span>
+          </div>
+        </div>
+      )}
 
       {/* Metric bar */}
       <div className="metric-grid" style={{ gridTemplateColumns: "repeat(6, 1fr)" }}>
