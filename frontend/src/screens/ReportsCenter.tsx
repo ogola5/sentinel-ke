@@ -11,6 +11,9 @@ import {
   fetchReportCatalog,
   generateReport,
 } from "../api/reports";
+import { fetchAIPredictions } from "../api/ai";
+import type { AIPrediction } from "../types/ai";
+import type { Principal } from "../types/auth";
 
 const DEFAULT_REQUEST: ReportRequest = {
   report_type: "incident_brief",
@@ -28,9 +31,14 @@ function requiresField(reportType: ReportType, field: keyof ReportRequest): bool
   return false;
 }
 
-export default function ReportsCenter() {
+function canAccessLegalReports(principal: Principal): boolean {
+  return principal.access_level === "central" || principal.scopes.includes("*") || principal.scopes.includes("legal.read") || principal.scopes.includes("legal.write");
+}
+
+export default function ReportsCenter({ principal }: { principal: Principal }) {
   const [catalog, setCatalog] = useState<ReportCatalog | null>(null);
   const [request, setRequest] = useState<ReportRequest>(DEFAULT_REQUEST);
+  const [entitySuggestions, setEntitySuggestions] = useState<AIPrediction[]>([]);
   const [preview, setPreview] = useState<Record<string, unknown> | null>(null);
   const [loading, setLoading] = useState(false);
   const [downloading, setDownloading] = useState(false);
@@ -47,21 +55,89 @@ export default function ReportsCenter() {
     })();
   }, []);
 
+  useEffect(() => {
+    void (async () => {
+      if (
+        request.report_type !== "entity_investigation" &&
+        request.report_type !== "ai_decision_explanation"
+      ) {
+        setEntitySuggestions([]);
+        return;
+      }
+      try {
+        const rows = await fetchAIPredictions(12);
+        const filtered = rows.filter((row) => row.prediction_type === (request.prediction_type ?? "risk_gnn"));
+        setEntitySuggestions(filtered);
+      } catch {
+        setEntitySuggestions([]);
+      }
+    })();
+  }, [request.report_type, request.prediction_type]);
+
   const selectedType = useMemo(
     () => catalog?.report_types.find((item) => item.report_type === request.report_type),
     [catalog, request.report_type],
   );
+  const allowLegalReports = canAccessLegalReports(principal);
+  const visibleReportTypes = useMemo(
+    () => (catalog?.report_types ?? []).filter((item) => allowLegalReports || item.report_type !== "legal_evidence_bundle"),
+    [allowLegalReports, catalog],
+  );
+
+  useEffect(() => {
+    if (allowLegalReports) return;
+    if (request.report_type === "legal_evidence_bundle") {
+      setRequest((current) => ({ ...current, report_type: "incident_brief" }));
+    }
+  }, [allowLegalReports, request.report_type]);
 
   const summary = (preview?.summary as Record<string, unknown> | undefined) ?? {};
   const findings = Array.isArray(preview?.findings) ? (preview?.findings as Array<Record<string, unknown>>) : [];
   const governance = (preview?.governance as Record<string, unknown> | undefined) ?? {};
 
+  function sanitizeRequest(current: ReportRequest): ReportRequest {
+    return {
+      ...current,
+      entity_key: current.entity_key?.trim() || undefined,
+      campaign_id: current.campaign_id?.trim() || undefined,
+      bundle_id: current.bundle_id?.trim() || undefined,
+      prediction_id: current.prediction_id?.trim() || undefined,
+      model_version: current.model_version?.trim() || undefined,
+      classification: current.classification?.trim() || "RESTRICTED",
+      prediction_type: current.prediction_type?.trim() || "risk_gnn",
+    };
+  }
+
+  function validateRequest(current: ReportRequest): string | null {
+    if (requiresField(current.report_type, "entity_key") && !current.entity_key?.trim()) {
+      return "Choose a real entity key from suggestions or enter one manually.";
+    }
+    if (requiresField(current.report_type, "campaign_id") && !current.campaign_id?.trim()) {
+      return "Campaign ID is required for this report.";
+    }
+    if (current.report_type === "legal_evidence_bundle" && !current.bundle_id?.trim() && !current.campaign_id?.trim()) {
+      return "Provide a bundle ID or campaign ID for the legal evidence bundle report.";
+    }
+    if (current.report_type === "ai_decision_explanation" && !current.prediction_id?.trim() && !current.entity_key?.trim()) {
+      return "Provide a prediction ID or entity key for the AI decision explanation report.";
+    }
+    return null;
+  }
+
   async function handlePreview() {
+    const nextRequest = sanitizeRequest(request);
+    const validationError = validateRequest(nextRequest);
+    if (validationError) {
+      setError(validationError);
+      setStatus(null);
+      setPreview(null);
+      return;
+    }
     setLoading(true);
     setError(null);
     setStatus(null);
     try {
-      const report = await generateReport({ ...request, format: "json" });
+      const report = await generateReport({ ...nextRequest, format: "json" });
       setPreview(report);
       setStatus("Preview generated.");
     } catch (err) {
@@ -73,10 +149,17 @@ export default function ReportsCenter() {
   }
 
   async function handleDownload() {
+    const nextRequest = sanitizeRequest(request);
+    const validationError = validateRequest(nextRequest);
+    if (validationError) {
+      setError(validationError);
+      setStatus(null);
+      return;
+    }
     setDownloading(true);
     setError(null);
     try {
-      const filename = await downloadReport(request);
+      const filename = await downloadReport(nextRequest);
       setStatus(`Downloaded ${filename}`);
     } catch (err) {
       setError(String(err));
@@ -97,11 +180,36 @@ export default function ReportsCenter() {
         </div>
       </div>
 
-      <div className="grid-two">
-        <div className="panel">
+      <div className="panel workflow-guide-panel" style={{ background: "rgba(var(--accent-rgb), 0.08)", borderColor: "rgba(var(--accent-rgb), 0.28)" }}>
+        <div className="panel-header">
+          <h3>How to use this page</h3>
+          <span className="muted">Build one report at a time</span>
+        </div>
+        <div className="detail-grid">
+          <div>
+            <p className="label">Step 1</p>
+            <p>Choose the report type first. That decides what subject fields matter.</p>
+          </div>
+          <div>
+            <p className="label">Step 2</p>
+            <p>Use a real entity, campaign, bundle, or prediction instead of a placeholder example.</p>
+          </div>
+          <div>
+            <p className="label">Step 3</p>
+            <p>Preview before download so the plain-English summary is checked first.</p>
+          </div>
+          <div>
+            <p className="label">Best use</p>
+            <p>Use entity reports for operators, campaign reports for escalation, decision explanations for oversight, and legal bundles for evidence handling.</p>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid-two reports-layout">
+        <div className="panel workflow-stage-panel">
           <div className="panel-header">
-            <h3>Report Builder</h3>
-            <span className="muted">HTML or JSON download</span>
+            <h3>1. Report Builder</h3>
+            <span className="muted">HTML, PDF, or JSON download</span>
           </div>
 
           {!catalog ? (
@@ -110,7 +218,13 @@ export default function ReportsCenter() {
               <p>Loading report catalog…</p>
             </div>
           ) : (
-            <div style={{ display: "grid", gap: 14 }}>
+            <div className="workflow-stack">
+              <div className="panel-subsection">
+                <h4>Choose the output</h4>
+                <p className="muted" style={{ marginTop: 6 }}>
+                  Start with the type, period, format, prediction family, and classification.
+                </p>
+              </div>
               <label>
                 <p className="label">Report type</p>
                 <select
@@ -121,13 +235,36 @@ export default function ReportsCenter() {
                     report_type: event.target.value as ReportType,
                   }))}
                 >
-                  {catalog.report_types.map((item) => (
+                  {visibleReportTypes.map((item) => (
                     <option key={item.report_type} value={item.report_type}>
                       {item.title}
                     </option>
                   ))}
                 </select>
               </label>
+
+              {!allowLegalReports && (
+                <div className="info-note">
+                  <ShieldCheck size={13} style={{ flexShrink: 0 }} />
+                  <span>
+                    Legal evidence bundle reports are shown only to central or legal-scope users.
+                  </span>
+                </div>
+              )}
+
+              {selectedType && (
+                <div className="workflow-summary-banner">
+                  <strong>{selectedType.title}</strong>
+                  <p className="muted" style={{ margin: "4px 0 0" }}>{selectedType.description}</p>
+                  <div className="chip-row" style={{ marginTop: 10 }}>
+                    {selectedType.audience.map((item) => (
+                      <span key={item} className="chip mono">
+                        {item}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               <label>
                 <p className="label">Period</p>
@@ -196,16 +333,43 @@ export default function ReportsCenter() {
                 </select>
               </label>
 
+              <div className="panel-subsection">
+                <h4>Choose the subject</h4>
+                <p className="muted" style={{ marginTop: 6 }}>
+                  Only fill the fields required for the selected report type.
+                </p>
+              </div>
+
               {(requiresField(request.report_type, "entity_key") || request.report_type === "ai_decision_explanation") && (
-                <label>
-                  <p className="label">Entity key</p>
-                  <input
-                    className="search"
-                    placeholder="ip:1.2.3.4 or account_h:..."
-                    value={request.entity_key ?? ""}
-                    onChange={(event) => setRequest((current) => ({ ...current, entity_key: event.target.value }))}
-                  />
-                </label>
+                <div style={{ display: "grid", gap: 8 }}>
+                  <label>
+                    <p className="label">Entity key</p>
+                    <input
+                      className="search"
+                      placeholder="Choose a live entity below or enter one manually"
+                      value={request.entity_key ?? ""}
+                      onChange={(event) => setRequest((current) => ({ ...current, entity_key: event.target.value }))}
+                    />
+                  </label>
+                  {entitySuggestions.length > 0 && (
+                    <div className="panel-subsection">
+                      <h4>Live suggestions</h4>
+                      <div className="chip-row">
+                        {entitySuggestions.slice(0, 8).map((item) => (
+                          <button
+                            key={`${item.id}-${item.entity_key}`}
+                            type="button"
+                            className="chip mono"
+                            onClick={() => setRequest((current) => ({ ...current, entity_key: item.entity_key }))}
+                            title={`Score ${Number(item.score ?? 0).toFixed(2)}`}
+                          >
+                            {item.entity_key}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
               )}
 
               {(requiresField(request.report_type, "campaign_id") || request.report_type === "legal_evidence_bundle") && (
@@ -256,6 +420,13 @@ export default function ReportsCenter() {
                 </label>
               )}
 
+              <div className="panel-subsection">
+                <h4>Preview or download</h4>
+                <p className="muted" style={{ marginTop: 6 }}>
+                  Preview is the safe first step. Download when the summary and findings look right.
+                </p>
+              </div>
+
               <div className="chip-row" style={{ marginTop: 4 }}>
                 <button className="ghost" type="button" onClick={() => void handlePreview()} disabled={loading}>
                   {loading ? "Generating…" : "Preview JSON"}
@@ -265,29 +436,15 @@ export default function ReportsCenter() {
                 </button>
               </div>
 
-              {selectedType && (
-                <div className="panel-subsection">
-                  <h4>{selectedType.title}</h4>
-                  <p className="muted">{selectedType.description}</p>
-                  <div className="chip-row">
-                    {selectedType.audience.map((item) => (
-                      <span key={item} className="chip mono">
-                        {item}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              )}
-
               {status && <p className="muted">{status}</p>}
               {error && <p className="muted" style={{ color: "var(--danger, #ef4444)" }}>{error}</p>}
             </div>
           )}
         </div>
 
-        <div className="panel">
+        <div className="panel workflow-stage-panel">
           <div className="panel-header">
-            <h3>Preview</h3>
+            <h3>2. Preview and findings</h3>
             <span className="muted">Non-technical first</span>
           </div>
 
@@ -297,12 +454,21 @@ export default function ReportsCenter() {
               <p>Generate a preview to inspect the plain-English summary.</p>
             </div>
           ) : (
-            <div style={{ display: "grid", gap: 14 }}>
+            <div className="workflow-stack">
+              <div className="workflow-summary-banner">
+                <div>
+                  <strong>{String(summary.headline ?? "Untitled report")}</strong>
+                  <p className="muted" style={{ margin: "4px 0 0" }}>{String(summary.overview ?? "No overview available.")}</p>
+                </div>
+                <div>
+                  <div className="label">Next step</div>
+                  <div>{String(summary.next_step ?? "Not stated.")}</div>
+                </div>
+              </div>
+
               <div className="panel-subsection">
-                <h4>{String(summary.headline ?? "Untitled report")}</h4>
-                <p>{String(summary.overview ?? "No overview available.")}</p>
+                <h4>Plain-English summary</h4>
                 <p><strong>Why it matters:</strong> {String(summary.why_it_matters ?? "Not stated.")}</p>
-                <p><strong>Next step:</strong> {String(summary.next_step ?? "Not stated.")}</p>
                 <p><strong>Confidence:</strong> {String(summary.confidence_statement ?? "Not stated.")}</p>
               </div>
 
@@ -341,22 +507,20 @@ export default function ReportsCenter() {
                   Reports are designed in three layers: plain-English summary, analyst detail, and evidence appendix.
                 </p>
               </div>
+
+              <details className="collapsible-panel">
+                <summary>
+                  <span>Raw preview payload</span>
+                  <span className="muted">Open only if you need the JSON structure</span>
+                </summary>
+                <pre style={{ margin: 0, whiteSpace: "pre-wrap", overflowX: "auto" }}>
+                  {JSON.stringify(preview, null, 2)}
+                </pre>
+              </details>
             </div>
           )}
         </div>
       </div>
-
-      {preview && (
-        <div className="panel" style={{ marginTop: 16 }}>
-          <div className="panel-header">
-            <h3>Raw Preview Payload</h3>
-            <span className="muted">JSON structure returned by the backend</span>
-          </div>
-          <pre style={{ margin: 0, whiteSpace: "pre-wrap", overflowX: "auto" }}>
-            {JSON.stringify(preview, null, 2)}
-          </pre>
-        </div>
-      )}
     </section>
   );
 }

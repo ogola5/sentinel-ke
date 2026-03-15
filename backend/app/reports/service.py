@@ -4,9 +4,15 @@ import html
 import json
 import re
 import uuid
+from io import BytesIO
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
 
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+from reportlab.lib.units import mm
+from reportlab.platypus import Paragraph, Preformatted, SimpleDocTemplate, Spacer
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -24,6 +30,7 @@ from app.analytics.ai_models import (
 )
 from app.analytics.layer3.ai_intel import techniques_to_tools
 from app.analytics.layer3.forecasting import build_risk_forecast
+from app.analytics.layer3.trust_service import build_campaign_trust_summary, build_entity_trust_summary
 from app.campaign.models import Campaign, CampaignEntity, CampaignEvent
 from app.cases.builders import build_case_packet
 from app.defense.models import ContainmentAction
@@ -66,7 +73,7 @@ REPORT_CATALOG: list[dict[str, Any]] = [
         "audience": ["soc", "section_commander", "agency_lead"],
         "description": "National or section-level situational brief in plain English with actions and evidence summary.",
         "required_fields": [],
-        "supported_formats": ["json", "html"],
+        "supported_formats": ["json", "html", "pdf"],
     },
     {
         "report_type": "entity_investigation",
@@ -74,7 +81,7 @@ REPORT_CATALOG: list[dict[str, Any]] = [
         "audience": ["analyst", "dfir", "investigator"],
         "description": "Explains one entity's score, graph links, evidence paths, techniques, tools, and actions.",
         "required_fields": ["entity_key"],
-        "supported_formats": ["json", "html"],
+        "supported_formats": ["json", "html", "pdf"],
     },
     {
         "report_type": "campaign_case",
@@ -82,7 +89,7 @@ REPORT_CATALOG: list[dict[str, Any]] = [
         "audience": ["investigator", "supervisor", "inter-agency"],
         "description": "Converts a campaign into a human-readable case report with timeline, entities, evidence, and legal readiness.",
         "required_fields": ["campaign_id"],
-        "supported_formats": ["json", "html"],
+        "supported_formats": ["json", "html", "pdf"],
     },
     {
         "report_type": "legal_evidence_bundle",
@@ -90,7 +97,7 @@ REPORT_CATALOG: list[dict[str, Any]] = [
         "audience": ["legal", "audit", "court_support"],
         "description": "Summarizes legal order, grants, chain hashes, anchors, and certificates for one evidence bundle.",
         "required_fields": ["bundle_id or campaign_id"],
-        "supported_formats": ["json", "html"],
+        "supported_formats": ["json", "html", "pdf"],
     },
     {
         "report_type": "ai_decision_explanation",
@@ -98,7 +105,7 @@ REPORT_CATALOG: list[dict[str, Any]] = [
         "audience": ["oversight", "analyst", "non_technical_reviewer"],
         "description": "Explains why an AI score was produced, what evidence supported it, and what would change the decision.",
         "required_fields": ["prediction_id or entity_key"],
-        "supported_formats": ["json", "html"],
+        "supported_formats": ["json", "html", "pdf"],
     },
     {
         "report_type": "model_governance",
@@ -106,7 +113,7 @@ REPORT_CATALOG: list[dict[str, Any]] = [
         "audience": ["cto", "oversight", "judges", "procurement_review"],
         "description": "Documents training provenance, fairness, drift, rollout, caveats, and model governance status.",
         "required_fields": [],
-        "supported_formats": ["json", "html"],
+        "supported_formats": ["json", "html", "pdf"],
     },
 ]
 
@@ -119,7 +126,7 @@ def report_catalog() -> dict[str, Any]:
     return {
         "report_types": REPORT_CATALOG,
         "periods": periods,
-        "formats": ["json", "html"],
+        "formats": ["json", "html", "pdf"],
     }
 
 
@@ -258,6 +265,14 @@ def _serialize_bundle(
     anchor: LegalEvidenceAnchor | None,
     certificate: LegalEvidenceCertificate | None,
 ) -> dict[str, Any]:
+    anchor_status = None
+    if anchor is not None:
+        anchor_status = anchor.anchor_status
+        if anchor_status == "anchored" and (
+            str(anchor.minio_backend or "").endswith("_stub")
+            or str(anchor.immudb_backend or "").endswith("_stub")
+        ):
+            anchor_status = "simulated"
     return {
         "bundle_id": bundle.bundle_id,
         "export_type": bundle.export_type,
@@ -302,7 +317,7 @@ def _serialize_bundle(
         ],
         "anchor": None if anchor is None else {
             "anchor_id": anchor.anchor_id,
-            "anchor_status": anchor.anchor_status,
+            "anchor_status": anchor_status,
             "minio_backend": anchor.minio_backend,
             "minio_bucket": anchor.minio_bucket,
             "minio_object_key": anchor.minio_object_key,
@@ -625,6 +640,7 @@ def _governance_from_run(run: GNNTrainingRun | None) -> dict[str, Any]:
         "f1": float(run.f1 or 0.0) if run.f1 is not None else None,
         "fairness": dict(metrics.get("fairness") or {}),
         "provenance": dict(metrics.get("provenance") or {}),
+        "feedback": dict(metrics.get("feedback") or {}),
         "real_data_gate": dict(metrics.get("real_data_gate") or {}),
         "label_strategy": dict(metrics.get("label_strategy") or {}),
         "evaluation_protocol": dict(metrics.get("evaluation_protocol") or {}),
@@ -824,6 +840,15 @@ def _build_entity_investigation(db: Session, payload: ReportRequest, period: Map
         prediction_type=payload.prediction_type,
         model_version=prediction.model_version if prediction else payload.model_version,
     )
+    trust_summary = (
+        build_entity_trust_summary(
+            db,
+            entity_key=str(payload.entity_key),
+            prediction_type=payload.prediction_type,
+        )
+        if prediction else None
+    )
+    trust_brief = dict((trust_summary or {}).get("operator_brief") or {})
 
     report = _base_report(
         report_type="entity_investigation",
@@ -856,19 +881,21 @@ def _build_entity_investigation(db: Session, payload: ReportRequest, period: Map
     reason_codes = list((prediction.reason_codes or [])[:5])
     controls = list((explanation.recommended_controls_json if explanation else []) or [])
     report["summary"] = {
-        "headline": (
+        "headline": trust_brief.get("headline") or (
             f"{payload.entity_key} is currently assessed as {_risk_label(float(prediction.score or 0.0))} risk."
         ),
         "overview": (
             f"The latest model score for this entity is {float(prediction.score or 0.0):.2f}. "
             f"The entity is in kill-chain stage '{prediction.kill_chain_stage or 'unknown'}'."
         ),
-        "why_it_matters": (
+        "why_it_matters": " ".join(str(item) for item in (trust_brief.get("why_it_matters") or [])) or (
             f"This entity is linked to {len(campaigns)} campaign records, {len(recent_events)} recent events, "
             f"and {len((explanation.evidence_hashes if explanation else []) or [])} evidence hashes."
         ),
         "next_step": (
-            "Review the evidence paths and event history, then decide whether analyst confirmation justifies containment."
+            str((trust_brief.get("next_actions") or [])[0])
+            if (trust_brief.get("next_actions") or [])
+            else "Review the evidence paths and event history, then decide whether analyst confirmation justifies containment."
         ),
         "confidence_statement": _confidence_statement(prediction.confidence, prediction.uncertainty),
     }
@@ -914,6 +941,7 @@ def _build_entity_investigation(db: Session, payload: ReportRequest, period: Map
         "plain_language": (
             "The AI score increased because this entity is connected to suspicious activity, not because of one isolated event."
         ),
+        "trust_brief": trust_brief,
         "reason_codes": reason_codes,
         "evidence_hash_count": len(list((explanation.evidence_hashes if explanation else []) or [])),
         "evidence_path_count": len(list((explanation.evidence_paths if explanation else []) or [])),
@@ -927,7 +955,11 @@ def _build_entity_investigation(db: Session, payload: ReportRequest, period: Map
         "Preserve the evidence hashes and graph paths for review.",
         "Escalate to containment only if the entity is operationally confirmed as hostile.",
     ]
-    report["governance"] = _governance_from_run(latest_run)
+    report["governance"] = {
+        **_governance_from_run(latest_run),
+        "trust_checks": list((trust_summary or {}).get("trust_checks") or []),
+        "evidence_summary": dict((trust_summary or {}).get("evidence_summary") or {}),
+    }
     report["evidence_appendix"] = {
         "prediction": _serialize_prediction(prediction),
         "explanation": _serialize_explanation(explanation),
@@ -977,6 +1009,8 @@ def _build_campaign_case(db: Session, payload: ReportRequest, period: Mapping[st
         .order_by(LegalEvidenceBundle.created_at.desc())
         .first()
     )
+    trust_summary = build_campaign_trust_summary(db, campaign_id=str(campaign.id))
+    trust_brief = dict(trust_summary.get("operator_brief") or {})
 
     report = _base_report(
         report_type="campaign_case",
@@ -987,15 +1021,17 @@ def _build_campaign_case(db: Session, payload: ReportRequest, period: Mapping[st
         subject={"campaign_id": str(campaign.id), "campaign_type": campaign.type},
     )
     report["summary"] = {
-        "headline": f"Campaign {campaign.type} remains {campaign.status} with score {float(campaign.score or 0.0):.2f}.",
+        "headline": trust_brief.get("headline") or f"Campaign {campaign.type} remains {campaign.status} with score {float(campaign.score or 0.0):.2f}.",
         "overview": (
             f"The campaign has {int(campaign.event_count or 0)} linked events and {len(entities)} linked entities."
         ),
-        "why_it_matters": (
+        "why_it_matters": " ".join(str(item) for item in (trust_brief.get("why_it_matters") or [])) or (
             "Campaign-level reporting is useful when many entities appear related and the response must be coordinated."
         ),
         "next_step": (
-            "Use this report to coordinate investigation, preserve evidence, and determine whether a legal bundle should be finalized."
+            str((trust_brief.get("next_actions") or [])[0])
+            if (trust_brief.get("next_actions") or [])
+            else "Use this report to coordinate investigation, preserve evidence, and determine whether a legal bundle should be finalized."
         ),
         "confidence_statement": (
             f"Latest campaign AI risk indicator is {float(indicator.score or 0.0):.2f}."
@@ -1033,6 +1069,7 @@ def _build_campaign_case(db: Session, payload: ReportRequest, period: Mapping[st
         "plain_language": (
             "This campaign report explains how multiple entities and events form one connected pattern, not isolated alerts."
         ),
+        "trust_brief": trust_brief,
         "network_summary": {
             "entity_count": len(entities),
             "event_count": len(events),
@@ -1049,6 +1086,8 @@ def _build_campaign_case(db: Session, payload: ReportRequest, period: Mapping[st
         "latest_bundle_id": latest_bundle.bundle_id if latest_bundle else None,
         "case_packet_integrity_available": bool(packet and packet.get("integrity")),
         "case_packet_generation_error": packet_error,
+        "trust_checks": list(trust_summary.get("trust_checks") or []),
+        "evidence_summary": dict(trust_summary.get("evidence_summary") or {}),
     }
     report["evidence_appendix"] = {
         "campaign": {
@@ -1157,7 +1196,7 @@ def _build_legal_bundle(db: Session, payload: ReportRequest, period: Mapping[str
         },
         {
             "title": "Anchor status",
-            "severity": "high" if anchor_status in {"failed", "stub"} else "info",
+            "severity": "high" if anchor_status in {"failed", "simulated", "skipped"} else "info",
             "plain_text": (
                 f"Anchor backend status is {anchor_status}."
                 if anchor_status else
@@ -1177,7 +1216,7 @@ def _build_legal_bundle(db: Session, payload: ReportRequest, period: Mapping[str
     }
     report["recommended_actions"] = [
         "Confirm that the order scope covers the target entities and actions.",
-        "Refresh or verify the anchor if the current status is stub or failed.",
+        "Refresh or verify the anchor if the current status is simulated, skipped, or failed.",
         "Retain the certificate and audit chain alongside any exported copy.",
     ]
     report["governance"] = {
@@ -1410,7 +1449,8 @@ def _build_model_governance(db: Session, payload: ReportRequest, period: Mapping
             "severity": "info",
             "plain_text": (
                 f"Latest run used source backend {latest_run.source_backend} with real-signal ratio "
-                f"{float(provenance.get('real_ratio') or 0.0):.3f}."
+                f"{float(provenance.get('real_ratio') or 0.0):.3f} and "
+                f"{int(((governance.get('feedback') or {}).get('override_count') or 0))} analyst feedback overrides."
             ),
         },
         {
@@ -1517,7 +1557,7 @@ def build_report(*, db: Session, payload: ReportRequest) -> dict[str, Any]:
 
     report["download"] = {
         "base_name": build_report_filename(report),
-        "available_formats": ["json", "html"],
+        "available_formats": ["json", "html", "pdf"],
     }
     return report
 
@@ -1680,3 +1720,159 @@ def render_report_html(report: Mapping[str, Any]) -> str:
   </div>
 </body>
 </html>"""
+
+
+def render_report_pdf(report: Mapping[str, Any]) -> bytes:
+    summary = dict(report.get("summary") or {})
+    findings = list(report.get("findings") or [])
+    explainability = dict(report.get("explainability") or {})
+    actions = list(report.get("recommended_actions") or [])
+    governance = dict(report.get("governance") or {})
+    appendix = dict(report.get("evidence_appendix") or {})
+    limitations = list(report.get("limitations") or [])
+    period = dict(report.get("period") or {})
+    subject = dict(report.get("subject") or {})
+
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=A4,
+        leftMargin=18 * mm,
+        rightMargin=18 * mm,
+        topMargin=18 * mm,
+        bottomMargin=18 * mm,
+        title=str(report.get("title") or "Sentinel Report"),
+        author="Sentinel-KE",
+    )
+    styles = getSampleStyleSheet()
+    styles.add(
+        ParagraphStyle(
+            name="SentinelTitle",
+            parent=styles["Title"],
+            fontName="Helvetica-Bold",
+            fontSize=20,
+            leading=24,
+            textColor=colors.HexColor("#0f172a"),
+            spaceAfter=10,
+        )
+    )
+    styles.add(
+        ParagraphStyle(
+            name="SentinelSection",
+            parent=styles["Heading2"],
+            fontName="Helvetica-Bold",
+            fontSize=13,
+            leading=16,
+            textColor=colors.HexColor("#134e4a"),
+            spaceBefore=8,
+            spaceAfter=6,
+        )
+    )
+    styles.add(
+        ParagraphStyle(
+            name="SentinelBody",
+            parent=styles["BodyText"],
+            fontName="Helvetica",
+            fontSize=10,
+            leading=14,
+            textColor=colors.HexColor("#111827"),
+            spaceAfter=6,
+        )
+    )
+    styles.add(
+        ParagraphStyle(
+            name="SentinelMeta",
+            parent=styles["BodyText"],
+            fontName="Helvetica",
+            fontSize=9,
+            leading=12,
+            textColor=colors.HexColor("#4b5563"),
+            spaceAfter=3,
+        )
+    )
+    code_style = ParagraphStyle(
+        "SentinelCode",
+        parent=styles["Code"],
+        fontName="Courier",
+        fontSize=7.5,
+        leading=9,
+        textColor=colors.HexColor("#111827"),
+        backColor=colors.HexColor("#f3f4f6"),
+        borderWidth=0.5,
+        borderColor=colors.HexColor("#d1d5db"),
+        borderPadding=6,
+        spaceBefore=3,
+        spaceAfter=8,
+    )
+
+    def para(text_value: Any, style_name: str = "SentinelBody") -> Paragraph:
+        text = html.escape("" if text_value is None else str(text_value)).replace("\n", "<br/>")
+        return Paragraph(text or "&nbsp;", styles[style_name])
+
+    story = [
+        Paragraph(html.escape(str(report.get("title") or "Sentinel Report")), styles["SentinelTitle"]),
+        para(summary.get("headline")),
+        para(f"Classification: {report.get('classification')}"),
+        para(f"Generated: {report.get('generated_at')}", "SentinelMeta"),
+        para(f"Period: {period.get('label')} ({period.get('start')} to {period.get('end')})", "SentinelMeta"),
+        para(f"Audience: {', '.join(report.get('audience') or [])}", "SentinelMeta"),
+        Spacer(1, 4 * mm),
+        Paragraph("Plain-English Summary", styles["SentinelSection"]),
+        para(f"What is happening: {summary.get('overview')}"),
+        para(f"Why it matters: {summary.get('why_it_matters')}"),
+        para(f"What to do next: {summary.get('next_step')}"),
+        para(f"Confidence: {summary.get('confidence_statement')}"),
+        Paragraph("Subject", styles["SentinelSection"]),
+        Preformatted(_short_json(subject), code_style),
+        Paragraph("Key Findings", styles["SentinelSection"]),
+    ]
+
+    if findings:
+        for item in findings:
+            title = f"{item.get('title') or 'Finding'} [{item.get('severity') or 'info'}]"
+            story.append(para(title))
+            story.append(para(item.get("plain_text")))
+    else:
+        story.append(para("No findings recorded.", "SentinelMeta"))
+
+    story.extend(
+        [
+            Paragraph("Explainability", styles["SentinelSection"]),
+            para(explainability.get("plain_language") or "No explainability summary recorded."),
+            Preformatted(_short_json(explainability), code_style),
+            Paragraph("Recommended Actions", styles["SentinelSection"]),
+        ]
+    )
+    if actions:
+        for action in actions:
+            story.append(para(f"- {action}"))
+    else:
+        story.append(para("No recommended actions recorded.", "SentinelMeta"))
+
+    story.extend(
+        [
+            Paragraph("Governance and Caveats", styles["SentinelSection"]),
+            Preformatted(_short_json(governance), code_style),
+            Paragraph("Limitations", styles["SentinelSection"]),
+        ]
+    )
+    if limitations:
+        for limitation in limitations:
+            story.append(para(f"- {limitation}"))
+    else:
+        story.append(para("No explicit limitations recorded.", "SentinelMeta"))
+
+    story.extend(
+        [
+            Paragraph("Evidence Appendix", styles["SentinelSection"]),
+            Preformatted(_short_json(appendix), code_style),
+            Spacer(1, 4 * mm),
+            para(
+                "Sentinel-KE generated report. AI outputs support prioritization and review; they do not replace human judgment or legal process.",
+                "SentinelMeta",
+            ),
+        ]
+    )
+
+    doc.build(story)
+    return buffer.getvalue()

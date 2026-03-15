@@ -43,6 +43,7 @@ class Settings:
         "FEDERATION_CORRELATION_SALT",
         "sentinel-ke-national-salt-CHANGE-IN-PRODUCTION",
     )
+    federation_require_signed_requests = env_bool("FEDERATION_REQUIRE_SIGNED_REQUESTS", True)
 
     # ---------------------------------------------------------
     # GNN / AI backbone
@@ -65,6 +66,14 @@ class Settings:
     gnn_split_policy = os.environ.get("GNN_SPLIT_POLICY", "entity_hash_holdout").strip().lower()
     gnn_val_ratio = float(os.environ.get("GNN_VAL_RATIO", "0.2"))
     gnn_min_real_ratio = float(os.environ.get("GNN_MIN_REAL_RATIO", "0.3"))
+    gnn_demo_allow_real_data_override = env_bool(
+        "GNN_DEMO_ALLOW_REAL_DATA_OVERRIDE",
+        app_env == "development",
+    )
+    gnn_demo_allow_fairness_override = env_bool(
+        "GNN_DEMO_ALLOW_FAIRNESS_OVERRIDE",
+        app_env == "development",
+    )
     gnn_threshold_min_samples = int(os.environ.get("GNN_THRESHOLD_MIN_SAMPLES", "10"))
     gnn_component_discovery_enabled = env_bool("GNN_COMPONENT_DISCOVERY_ENABLED", True)
     gnn_component_min_size = int(os.environ.get("GNN_COMPONENT_MIN_SIZE", "3"))

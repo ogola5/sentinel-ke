@@ -15,18 +15,19 @@ the GNN → publish pipeline every `run_interval_s` seconds.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
-import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException
 
 from app.config import settings
 from app.connector import get_connector
-from app.gnn_runner import GNNResult, run_gnn
-from app.publisher import publish
+from app.gnn_runner import GNNResult, current_artifact_info, run_gnn
+from app.publisher import check_hub_connectivity, publish, send_heartbeat
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s — %(message)s")
 logger = logging.getLogger(__name__)
@@ -44,6 +45,14 @@ _state: Dict[str, Any] = {
     "last_scored":      0,
     "run_count":        0,
     "last_results":     [],  # List[GNNResult] — most recent run
+    "is_running":       False,  # True while _run_pipeline() is executing
+    "hub_reachable":    None,
+    "hub_last_checked_at": None,
+    "hub_last_error":   None,
+    "last_publish_status": "never",
+    "last_heartbeat_at": None,
+    "last_heartbeat_status": "never",
+    "startup_warning":  None,
 }
 
 
@@ -51,41 +60,178 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _state_path() -> Path:
+    return Path(settings.state_path).expanduser()
+
+
+def _serializable_state() -> Dict[str, Any]:
+    return {
+        "last_run_at": _state["last_run_at"],
+        "last_run_status": _state["last_run_status"],
+        "last_error": _state["last_error"],
+        "last_accepted": _state["last_accepted"],
+        "last_high_risk": _state["last_high_risk"],
+        "last_scored": _state["last_scored"],
+        "run_count": _state["run_count"],
+        "hub_reachable": _state["hub_reachable"],
+        "hub_last_checked_at": _state["hub_last_checked_at"],
+        "hub_last_error": _state["hub_last_error"],
+        "last_publish_status": _state["last_publish_status"],
+        "last_heartbeat_at": _state["last_heartbeat_at"],
+        "last_heartbeat_status": _state["last_heartbeat_status"],
+        "startup_warning": _state["startup_warning"],
+    }
+
+
+def _load_state_from_disk() -> None:
+    path = _state_path()
+    if not path.exists():
+        return
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("edge_agent_state_load_failed path=%s error=%s", path, exc)
+        return
+    if not isinstance(payload, dict):
+        return
+    for key, value in payload.items():
+        if key in _state and key not in {"last_results", "is_running"}:
+            _state[key] = value
+
+
+def _save_state_to_disk() -> None:
+    path = _state_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(_serializable_state(), indent=2, sort_keys=True), encoding="utf-8")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("edge_agent_state_save_failed path=%s error=%s", path, exc)
+
+
+def _mark_hub_status(*, reachable: bool, error: Optional[str] = None) -> None:
+    _state["hub_reachable"] = reachable
+    _state["hub_last_checked_at"] = _utcnow().isoformat()
+    _state["hub_last_error"] = error
+
+
+def _heartbeat_payload() -> Dict[str, Any]:
+    artifact = current_artifact_info()
+    metadata = dict(artifact.get("metadata") or {})
+    return {
+        "partner_id": settings.partner_id,
+        "agent_version": settings.agent_version,
+        "model_version": metadata.get("model_version") or settings.model_version,
+        "artifact": artifact,
+        "last_run_at": _state["last_run_at"],
+        "last_run_status": _state["last_run_status"],
+        "run_count": _state["run_count"],
+        "data_source": settings.data_source,
+        "hub_reachable": _state["hub_reachable"],
+        "last_publish_status": _state["last_publish_status"],
+        "capabilities": [
+            "local_gnn",
+            "pattern_publish",
+            "signed_heartbeat",
+            f"data_source:{settings.data_source}",
+        ],
+    }
+
+
+def _probe_hub_on_startup() -> None:
+    try:
+        payload = check_hub_connectivity(timeout_s=settings.startup_health_timeout_s)
+        _mark_hub_status(reachable=True)
+        _state["startup_warning"] = None
+        logger.info(
+            "Edge agent startup hub connectivity OK: status=%s hub=%s",
+            payload.get("status"),
+            settings.hub_url,
+        )
+    except Exception as exc:  # noqa: BLE001
+        detail = f"hub_unreachable: {exc}"
+        _mark_hub_status(reachable=False, error=detail)
+        _state["startup_warning"] = (
+            f"Hub is unreachable at {settings.hub_url}. "
+            "Check HUB_URL / API key / network before expecting pattern submission."
+        )
+        logger.warning(_state["startup_warning"])
+
+
+def _emit_heartbeat() -> None:
+    if not settings.heartbeat_enabled:
+        return
+    try:
+        send_heartbeat(_heartbeat_payload(), timeout_s=settings.startup_health_timeout_s)
+        _state["last_heartbeat_at"] = _utcnow().isoformat()
+        _state["last_heartbeat_status"] = "accepted"
+        _mark_hub_status(reachable=True)
+    except Exception as exc:  # noqa: BLE001
+        detail = f"heartbeat_failed: {exc}"
+        _state["last_heartbeat_status"] = "error"
+        _mark_hub_status(reachable=False, error=detail)
+        logger.warning("Edge heartbeat failed: %s", exc)
+
+
 # ---------------------------------------------------------------------------
 # Core pipeline
 # ---------------------------------------------------------------------------
 
-def _run_pipeline() -> Dict[str, Any]:
+def _run_pipeline(*, force_retrain: bool = False) -> Dict[str, Any]:
     """Fetch → GNN → publish. Returns summary dict."""
-    window_end   = _utcnow()
-    window_start = window_end - timedelta(hours=settings.window_hours)
+    _state["is_running"] = True
+    try:
+        window_end   = _utcnow()
+        window_start = window_end - timedelta(hours=settings.window_hours)
 
-    connector = get_connector()
-    records   = connector.fetch(window_start, window_end)
-    logger.info("Fetched %d entity records for window [%s → %s]", len(records), window_start.isoformat(), window_end.isoformat())
+        connector = get_connector()
+        records   = connector.fetch(window_start, window_end)
+        logger.info("Fetched %d entity records for window [%s → %s]", len(records), window_start.isoformat(), window_end.isoformat())
 
-    results = run_gnn(records, window_start, window_end)
-    logger.info("GNN scored %d entities", len(results))
+        results = run_gnn(
+            records,
+            window_start,
+            window_end,
+            force_retrain=force_retrain,
+            run_index=int(_state.get("run_count") or 0) + 1,
+        )
+        logger.info("GNN scored %d entities", len(results))
 
-    hub_resp = publish(results, window_start, window_end)
+        hub_resp = publish(results, window_start, window_end)
+        if hub_resp.get("skipped"):
+            _state["last_publish_status"] = "skipped"
+        else:
+            _state["last_publish_status"] = "ok"
+            _mark_hub_status(reachable=True)
 
-    high_risk = [r for r in results if r.risk_score >= settings.risk_threshold]
-    _state["last_run_at"]     = _utcnow().isoformat()
-    _state["last_run_status"] = "ok"
-    _state["last_error"]      = None
-    _state["last_accepted"]   = hub_resp.get("accepted", 0)
-    _state["last_high_risk"]  = len(high_risk)
-    _state["last_scored"]     = len(results)
-    _state["run_count"]      += 1
-    _state["last_results"]    = results
+        high_risk = [r for r in results if r.risk_score >= settings.risk_threshold]
+        _state["last_run_at"]     = _utcnow().isoformat()
+        _state["last_run_status"] = "ok"
+        _state["last_error"]      = None
+        _state["last_accepted"]   = hub_resp.get("accepted", 0)
+        _state["last_high_risk"]  = len(high_risk)
+        _state["last_scored"]     = len(results)
+        _state["run_count"]      += 1
+        _state["last_results"]    = results
+        _emit_heartbeat()
 
-    return {
-        "entities_scored":  len(results),
-        "high_risk_count":  len(high_risk),
-        "hub_accepted":     hub_resp.get("accepted", 0),
-        "window_start":     window_start.isoformat(),
-        "window_end":       window_end.isoformat(),
-    }
+        return {
+            "entities_scored":  len(results),
+            "high_risk_count":  len(high_risk),
+            "hub_accepted":     hub_resp.get("accepted", 0),
+            "window_start":     window_start.isoformat(),
+            "window_end":       window_end.isoformat(),
+        }
+    except Exception as exc:
+        _state["last_run_status"] = "error"
+        _state["last_error"] = str(exc)
+        if _state["last_publish_status"] != "ok":
+            _state["last_publish_status"] = "error"
+        if any(token in str(exc).lower() for token in ("connect", "timed out", "refused", "network", "host")):
+            _mark_hub_status(reachable=False, error=f"pipeline_failed: {exc}")
+        raise
+    finally:
+        _state["is_running"] = False
+        _save_state_to_disk()
 
 
 # ---------------------------------------------------------------------------
@@ -111,6 +257,10 @@ async def _scheduler_loop():
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
+    _load_state_from_disk()
+    _probe_hub_on_startup()
+    _emit_heartbeat()
+    _save_state_to_disk()
     task = asyncio.create_task(_scheduler_loop())
     yield
     task.cancel()
@@ -134,12 +284,16 @@ app = FastAPI(
 @app.get("/status", summary="Agent liveness and last-run summary")
 def status() -> Dict[str, Any]:
     return {
+        "status":            "busy" if _state["is_running"] else "idle",
         "partner_id":        settings.partner_id,
+        "partner_name":      settings.partner_name,
         "hub_url":           settings.hub_url,
         "data_source":       settings.data_source,
         "run_interval_s":    settings.run_interval_s,
+        "retrain_every":     settings.retrain_every,
         "risk_threshold":    settings.risk_threshold,
         "model_version":     settings.model_version,
+        "agent_version":     settings.agent_version,
         "last_run_at":       _state["last_run_at"],
         "last_run_status":   _state["last_run_status"],
         "last_error":        _state["last_error"],
@@ -147,17 +301,29 @@ def status() -> Dict[str, Any]:
         "last_high_risk":    _state["last_high_risk"],
         "last_accepted":     _state["last_accepted"],
         "run_count":         _state["run_count"],
+        "hub_reachable":     _state["hub_reachable"],
+        "hub_last_checked_at": _state["hub_last_checked_at"],
+        "hub_last_error":    _state["hub_last_error"],
+        "last_publish_status": _state["last_publish_status"],
+        "last_heartbeat_at": _state["last_heartbeat_at"],
+        "last_heartbeat_status": _state["last_heartbeat_status"],
+        "startup_warning":   _state["startup_warning"],
+        "artifact":          current_artifact_info(),
     }
 
 
 @app.post("/run", summary="Trigger an immediate GNN run and publish cycle", status_code=200)
-def trigger_run() -> Dict[str, Any]:
+async def trigger_run(force_retrain: bool = False) -> Dict[str, Any]:
+    if _state["is_running"]:
+        raise HTTPException(status_code=409, detail="A GNN run is already in progress")
     try:
-        summary = _run_pipeline()
+        summary = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: _run_pipeline(force_retrain=force_retrain),
+        )
         return {"status": "ok", **summary}
     except Exception as exc:
-        _state["last_run_status"] = "error"
-        _state["last_error"]      = str(exc)
+        _state["last_error"] = str(exc)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 

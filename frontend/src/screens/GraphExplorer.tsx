@@ -15,6 +15,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { GraphData, GraphEdge, GraphNode } from "../types/domain";
 import DetailPanel from "../components/DetailPanel";
 import { useEventStream } from "../hooks/useEventStream";
+import { fetchGraphNeighbours, fetchGraphPath } from "../api/graph";
+import type { GraphNeighboursResponse, GraphPathResponse } from "../api/graph";
+import { canonicalServiceKey, isCanonicalEntityKey } from "../utils/entityKeys";
 
 const LIVE_WINDOW_MS = 12_000;
 
@@ -100,15 +103,26 @@ type GraphExplorerProps = {
   graph: GraphData;
   onSelectNode: (node: GraphNode) => void;
   onSelectEdge: (edge: GraphEdge) => void;
+  onInvestigateEntity?: (entityKey: string) => void;
 };
 
-export default function GraphExplorer({ graph, onSelectNode, onSelectEdge }: GraphExplorerProps) {
-  const [selectedEdge, setSelectedEdge] = useState<GraphEdge | null>(null);
-  const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null);
-  const [pinned,       setPinned]       = useState<GraphNode[]>([]);
-  const [showPath,     setShowPath]     = useState(false);
-  const [nodePanel,    setNodePanel]    = useState(false);
-  const [showGuide,    setShowGuide]    = useState(false);
+export default function GraphExplorer({ graph, onSelectNode, onSelectEdge, onInvestigateEntity }: GraphExplorerProps) {
+  const [selectedEdge,      setSelectedEdge]      = useState<GraphEdge | null>(null);
+  const [selectedNode,      setSelectedNode]      = useState<GraphNode | null>(null);
+  const [pinned,            setPinned]            = useState<GraphNode[]>([]);
+  const [showPath,          setShowPath]          = useState(false);
+  const [nodePanel,         setNodePanel]         = useState(false);
+  const [showGuide,         setShowGuide]         = useState(false);
+  // Live graph data from Neo4j
+  const [liveNeighbours,    setLiveNeighbours]    = useState<GraphNeighboursResponse | null>(null);
+  const [neighboursLoading, setNeighboursLoading] = useState(false);
+  const [liveGraphNotice,   setLiveGraphNotice]   = useState("");
+  // Path finder
+  const [pathFromKey,       setPathFromKey]       = useState("");
+  const [pathToKey,         setPathToKey]         = useState("");
+  const [pathResult,        setPathResult]        = useState<GraphPathResponse | null>(null);
+  const [pathLoading,       setPathLoading]       = useState(false);
+  const [pathError,         setPathError]         = useState("");
 
   const [liveServiceIds, setLiveServiceIds] = useState<Set<string>>(new Set());
   const liveTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
@@ -122,7 +136,7 @@ export default function GraphExplorer({ graph, onSelectNode, onSelectEdge }: Gra
     if (!svcId) return;
 
     const matchingNode = graph.nodes.find(
-      (n) => n.id === svcId || n.label.toLowerCase().includes(svcId.toLowerCase()),
+      (n) => n.id === canonicalServiceKey(svcId) || n.label.toLowerCase().includes(svcId.toLowerCase()),
     );
     if (!matchingNode) return;
 
@@ -144,10 +158,56 @@ export default function GraphExplorer({ graph, onSelectNode, onSelectEdge }: Gra
     liveTimers.current.set(key, timer);
   }, [liveEvents, graph.nodes]);
 
-  const pathEdges = useMemo(
-    () => new Set(graph.edges.slice(0, Math.min(4, graph.edges.length)).map((e) => e.id)),
-    [graph.edges],
-  );
+  // ── Live graph fetch when a node is selected ───────────────────────────
+  async function loadLiveNeighbours(node: GraphNode) {
+    if (!isCanonicalEntityKey(node.id)) {
+      setLiveNeighbours(null);
+      setLiveGraphNotice("Live neighbour lookup is available only for canonical backend entity keys.");
+      setNeighboursLoading(false);
+      return;
+    }
+    setNeighboursLoading(true);
+    setLiveNeighbours(null);
+    setLiveGraphNotice("");
+    const result = await fetchGraphNeighbours(node.id);
+    setLiveNeighbours(result);
+    if (!result) {
+      setLiveGraphNotice("Live graph lookup failed for this entity.");
+    }
+    setNeighboursLoading(false);
+  }
+
+  // ── Path finder ─────────────────────────────────────────────────────────
+  async function runPathFinder() {
+    if (!pathFromKey.trim() || !pathToKey.trim()) return;
+    setPathLoading(true);
+    setPathError("");
+    setPathResult(null);
+    const result = await fetchGraphPath(pathFromKey.trim(), pathToKey.trim());
+    if (!result) {
+      setPathError("Path query failed — check entity keys");
+    } else if (!result.found) {
+      setPathError(`No path found between "${pathFromKey}" and "${pathToKey}" within 4 hops`);
+    } else {
+      setPathResult(result);
+    }
+    setPathLoading(false);
+  }
+
+  const edgePairKey = (source: string, target: string) =>
+    source < target ? `${source}::${target}` : `${target}::${source}`;
+
+  const pathEdges = useMemo(() => {
+    if (!showPath || !pathResult?.found) return new Set<string>();
+    if (pathResult.edges.length > 0) {
+      return new Set(pathResult.edges.map((edge) => edgePairKey(edge.source, edge.target)));
+    }
+    const derived = new Set<string>();
+    for (let index = 1; index < pathResult.path.length; index += 1) {
+      derived.add(edgePairKey(pathResult.path[index - 1].id, pathResult.path[index].id));
+    }
+    return derived;
+  }, [showPath, pathResult]);
 
   const nodeById = useMemo(
     () => new Map(graph.nodes.map((n) => [n.id, n])),
@@ -226,8 +286,8 @@ export default function GraphExplorer({ graph, onSelectNode, onSelectEdge }: Gra
               ⚡ {liveServiceIds.size} active node{liveServiceIds.size !== 1 ? "s" : ""}
             </span>
           )}
-          <button className="ghost" type="button" onClick={() => setShowPath(p => !p)}>
-            {showPath ? "Hide hottest links" : "Show hottest links"}
+          <button className="ghost" type="button" onClick={() => { setShowPath(p => !p); setPathResult(null); setPathError(""); }}>
+            {showPath ? "Close path finder" : "🔗 Find path"}
           </button>
           <button className="ghost" type="button" onClick={() => setShowGuide(g => !g)}>
             {showGuide ? "Hide guide" : "❓ How to read this"}
@@ -266,6 +326,73 @@ export default function GraphExplorer({ graph, onSelectNode, onSelectEdge }: Gra
               </div>
             ))}
           </div>
+        </div>
+      )}
+
+      {/* ── Path finder panel ──────────────────────────────────────────────── */}
+      {showPath && (
+        <div className="panel" style={{
+          background: "rgba(47,214,125,0.04)",
+          border: "1px solid rgba(47,214,125,0.2)",
+        }}>
+          <p style={{ fontWeight: 700, marginBottom: 10, fontSize: "0.88rem" }}>
+            Path Finder — shortest route between two entities (Neo4j)
+          </p>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end" }}>
+            <div style={{ flex: 1, minWidth: 160 }}>
+              <p className="label" style={{ marginBottom: 4 }}>From entity key</p>
+              <input
+                className="input"
+                placeholder="e.g. ip:1.2.3.4 or service_id:kplc-auth"
+                value={pathFromKey}
+                onChange={e => setPathFromKey(e.target.value)}
+                onKeyDown={e => { if (e.key === "Enter") void runPathFinder(); }}
+              />
+            </div>
+            <div style={{ flex: 1, minWidth: 160 }}>
+              <p className="label" style={{ marginBottom: 4 }}>To entity key</p>
+              <input
+                className="input"
+                placeholder="e.g. endpoint:/login or ip:154.72.10.5"
+                value={pathToKey}
+                onChange={e => setPathToKey(e.target.value)}
+                onKeyDown={e => { if (e.key === "Enter") void runPathFinder(); }}
+              />
+            </div>
+            <button
+              className="ghost"
+              type="button"
+              disabled={pathLoading || !pathFromKey.trim() || !pathToKey.trim()}
+              onClick={() => void runPathFinder()}
+            >
+              {pathLoading ? "Searching…" : "Find path"}
+            </button>
+          </div>
+          {pathError && (
+            <p style={{ color: "var(--warning)", fontSize: "0.8rem", marginTop: 8 }}>{pathError}</p>
+          )}
+          {pathResult && (
+            <div style={{ marginTop: 12 }}>
+              <p style={{ fontSize: "0.8rem", fontWeight: 600, marginBottom: 6 }}>
+                Path found — {pathResult.hop_count} hop{pathResult.hop_count !== 1 ? "s" : ""}
+              </p>
+              <div style={{ display: "flex", gap: 4, flexWrap: "wrap", alignItems: "center" }}>
+                {pathResult.path.map((node, idx) => (
+                  <span key={node.id} style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                    <span className="chip" style={{
+                      background: (COMMUNITY_HEX[node.community ?? ""] ?? "#abc7b6") + "22",
+                      borderColor: (COMMUNITY_HEX[node.community ?? ""] ?? "#abc7b6") + "55",
+                    }}>
+                      {node.label}
+                    </span>
+                    {idx < pathResult.path.length - 1 && (
+                      <span style={{ color: "var(--ink-muted)" }}>→</span>
+                    )}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -354,7 +481,7 @@ export default function GraphExplorer({ graph, onSelectNode, onSelectEdge }: Gra
             const tgt = nodeById.get(edge.target);
             if (!src || !tgt) return null;
 
-            const isHot      = showPath && pathEdges.has(edge.id);
+            const isHot      = showPath && pathEdges.has(edgePairKey(edge.source, edge.target));
             const isSelected = selectedEdge?.id === edge.id;
             const weight     = Math.min(5, 1 + Math.log2(edge.count + 1));
             const mx         = (src.x + tgt.x) / 2;
@@ -418,6 +545,7 @@ export default function GraphExplorer({ graph, onSelectNode, onSelectEdge }: Gra
                   setSelectedNode(node);
                   setNodePanel(true);
                   onSelectNode(node);
+                  void loadLiveNeighbours(node);
                 }}
               >
                 <title>{`${node.label}\nRole: ${COMMUNITY_DESC[node.community] ?? node.community}\nType: ${node.type}\nConnections: ${degree}${isLiveNode ? "\n⚡ LIVE — threat event in last 12s" : ""}`}</title>
@@ -702,6 +830,44 @@ export default function GraphExplorer({ graph, onSelectNode, onSelectEdge }: Gra
                 </div>
               )}
 
+              {/* Live Neo4j neighbours */}
+              {neighboursLoading && (
+                <p className="muted" style={{ fontSize: "0.76rem", marginTop: 4, marginBottom: 8 }}>
+                  Loading live connections from graph…
+                </p>
+              )}
+              {!neighboursLoading && liveGraphNotice && (
+                <p className="muted" style={{ fontSize: "0.76rem", marginTop: 4, marginBottom: 8 }}>
+                  {liveGraphNotice}
+                </p>
+              )}
+              {liveNeighbours && liveNeighbours.neighbours.length > 0 && (
+                <div style={{ marginBottom: 12 }}>
+                  <p className="label" style={{ marginBottom: 6 }}>
+                    Live graph connections — {liveNeighbours.neighbours.length} neighbour{liveNeighbours.neighbours.length !== 1 ? "s" : ""} (Neo4j)
+                  </p>
+                  <div className="list" style={{ maxHeight: 130, overflowY: "auto" }}>
+                    {liveNeighbours.neighbours.map(n => (
+                      <div key={n.id} className="list-item" style={{ fontSize: "0.78rem", padding: "5px 10px", display: "flex", justifyContent: "space-between" }}>
+                        <span>
+                          <span style={{
+                            display: "inline-block", width: 7, height: 7, borderRadius: "50%",
+                            background: COMMUNITY_HEX[n.community ?? "support"] ?? "#abc7b6",
+                            marginRight: 7,
+                          }} />
+                          {n.label}
+                        </span>
+                        {n.risk_score != null && (
+                          <span className="muted" style={{ fontSize: "0.7rem" }}>
+                            risk {Math.round(n.risk_score)}
+                          </span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               {/* Pin / compare */}
               <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
                 <button
@@ -715,6 +881,21 @@ export default function GraphExplorer({ graph, onSelectNode, onSelectEdge }: Gra
                 >
                   {pinned.find(n => n.id === selectedNode.id) ? "Unpin" : "📌 Pin for comparison"}
                 </button>
+                {onInvestigateEntity && isCanonicalEntityKey(selectedNode.id) && (
+                  <button
+                    className="ghost"
+                    type="button"
+                    style={{ color: "var(--accent)" }}
+                    onClick={() => onInvestigateEntity(selectedNode.id)}
+                  >
+                    🔍 Investigate in depth →
+                  </button>
+                )}
+                {onInvestigateEntity && !isCanonicalEntityKey(selectedNode.id) && (
+                  <p className="muted" style={{ marginTop: 4 }}>
+                    This visual helper node does not map to a direct investigation key.
+                  </p>
+                )}
               </div>
 
               {pinned.length > 0 && (
@@ -762,35 +943,54 @@ export default function GraphExplorer({ graph, onSelectNode, onSelectEdge }: Gra
         onClose={() => setNodePanel(false)}
       >
         {selectedNode && (
-          <div className="dp-field-grid">
-            <div>
-              <p className="label">What is this?</p>
-              <p>{COMMUNITY_DESC[selectedNode.community] ?? selectedNode.community}</p>
+          <>
+            <div className="dp-field-grid">
+              <div>
+                <p className="label">What is this?</p>
+                <p>{COMMUNITY_DESC[selectedNode.community] ?? selectedNode.community}</p>
+              </div>
+              <div>
+                <p className="label">Node type</p>
+                <p>{selectedNode.type}</p>
+              </div>
+              <div>
+                <p className="label">Connections</p>
+                <p style={{ fontWeight: 700, color: "var(--accent)" }}>
+                  {nodeDegree.get(selectedNode.id) ?? 0} linked entities
+                </p>
+              </div>
+              <div>
+                <p className="label">Live threat activity</p>
+                <p>{liveServiceIds.has(selectedNode.id)
+                  ? "⚡ Threat event detected in the last 12 seconds"
+                  : "No recent activity detected"}
+                </p>
+              </div>
+              <div>
+                <p className="label">Entity ID</p>
+                <p className="mono" style={{ fontSize: "0.72rem", wordBreak: "break-all" }}>
+                  {selectedNode.id}
+                </p>
+              </div>
             </div>
-            <div>
-              <p className="label">Node type</p>
-              <p>{selectedNode.type}</p>
-            </div>
-            <div>
-              <p className="label">Connections</p>
-              <p style={{ fontWeight: 700, color: "var(--accent)" }}>
-                {nodeDegree.get(selectedNode.id) ?? 0} linked entities
+            {onInvestigateEntity && isCanonicalEntityKey(selectedNode.id) && (
+              <div style={{ marginTop: 14 }}>
+                <button
+                  className="ghost"
+                  type="button"
+                  style={{ color: "var(--accent)" }}
+                  onClick={() => { setNodePanel(false); onInvestigateEntity(selectedNode.id); }}
+                >
+                  🔍 Investigate in depth →
+                </button>
+              </div>
+            )}
+            {onInvestigateEntity && !isCanonicalEntityKey(selectedNode.id) && (
+              <p className="muted" style={{ marginTop: 14 }}>
+                This node is derived for graph context only and does not open a direct investigation record.
               </p>
-            </div>
-            <div>
-              <p className="label">Live threat activity</p>
-              <p>{liveServiceIds.has(selectedNode.id)
-                ? "⚡ Threat event detected in the last 12 seconds"
-                : "No recent activity detected"}
-              </p>
-            </div>
-            <div>
-              <p className="label">Entity ID</p>
-              <p className="mono" style={{ fontSize: "0.72rem", wordBreak: "break-all" }}>
-                {selectedNode.id}
-              </p>
-            </div>
-          </div>
+            )}
+          </>
         )}
       </DetailPanel>
 

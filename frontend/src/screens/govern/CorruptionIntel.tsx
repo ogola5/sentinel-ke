@@ -60,6 +60,25 @@ export default function CorruptionIntel({ data, onRunLeakage, leakageActionLabel
         </button>
       </div>
 
+      <div className="panel workflow-guide-panel" style={{ marginBottom: 16, background: "rgba(var(--warning-rgb), 0.08)", borderColor: "rgba(var(--warning-rgb), 0.24)" }}>
+        <div className="detail-grid">
+          <div>
+            <strong>This is the deep-dive corruption workspace.</strong>
+            <p className="workflow-stage-copy" style={{ marginTop: 6 }}>
+              Use Operations for a short integrity summary. Use this page when you need the full procurement, guardrail, leakage, and integrity evidence surfaces.
+            </p>
+          </div>
+          <div>
+            <strong>Best flow</strong>
+            <ul className="inspector-compact-list" style={{ marginTop: 8 }}>
+              <li>Read the leakage banner first.</li>
+              <li>Review procurement and guardrail tables next.</li>
+              <li>Use integrity alerts last for deeper investigator follow-up.</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+
       {/* Leakage summary banner */}
       {ls && (
         <div className="panel" style={{ marginBottom: 16, borderColor: "rgba(255,209,71,.32)" }}>

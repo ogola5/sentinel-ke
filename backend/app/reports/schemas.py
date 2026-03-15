@@ -24,7 +24,7 @@ ReportPeriod = Literal[
     "annual",
 ]
 
-ReportFormat = Literal["json", "html"]
+ReportFormat = Literal["json", "html", "pdf"]
 
 
 class ReportRequest(BaseModel):

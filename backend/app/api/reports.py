@@ -8,7 +8,13 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import AuthPrincipal, get_db, require_request_principal
 from app.reports.schemas import ReportRequest
-from app.reports.service import build_report, build_report_filename, render_report_html, report_catalog
+from app.reports.service import (
+    build_report,
+    build_report_filename,
+    render_report_html,
+    render_report_pdf,
+    report_catalog,
+)
 
 
 router = APIRouter(prefix="/v1/reports", tags=["reports"])
@@ -63,6 +69,13 @@ def download_report(
                 content=content,
                 media_type="text/html; charset=utf-8",
                 headers={"Content-Disposition": f'attachment; filename="{filename}.html"'},
+            )
+        if payload.format == "pdf":
+            content = render_report_pdf(report)
+            return Response(
+                content=content,
+                media_type="application/pdf",
+                headers={"Content-Disposition": f'attachment; filename="{filename}.pdf"'},
             )
         body = json.dumps(report, indent=2, sort_keys=False, default=str)
         return Response(

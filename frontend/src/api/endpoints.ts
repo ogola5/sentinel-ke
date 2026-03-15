@@ -97,17 +97,35 @@ export const endpoints = {
     withQuery("/v1/economy/leakage/run", { window_days: windowDays }),
   caseFromCampaign: (campaignId: string) =>
     withBase(`/v1/cases/from-campaign/${encodeURIComponent(campaignId)}`),
+  casesRecent: (limit = 20) => withQuery("/v1/cases/recent", { limit }),
   stixCaseByCampaign: (campaignId: string) =>
     withBase(`/v1/stix/case/${encodeURIComponent(campaignId)}`),
 
+  // Graph traversal (Neo4j-backed)
+  graphEntity: (entityKey: string) =>
+    withBase(`/v1/graph/entity/${encodeURIComponent(entityKey)}`),
+  graphNeighbors: (entityKey: string, limit = 20) =>
+    withQuery(`/v1/graph/neighbors/${encodeURIComponent(entityKey)}`, { limit }),
+  graphPath: (fromKey: string, toKey: string, maxHops = 4) =>
+    withQuery("/v1/graph/path", { from: fromKey, to: toKey, max_hops: maxHops }),
+  graphEvidence: (eventHash: string) =>
+    withBase(`/v1/graph/evidence/${encodeURIComponent(eventHash)}`),
+
   // Defense & Containment
   defenseIncidents: (limit = 20, offset = 0) => withQuery("/v1/defense/incidents/runs", { limit, offset }),
+  defenseIncidentsCreate: () => withBase("/v1/defense/incidents/runs"),
   defenseWebhooks: (section_code?: string) =>
     withQuery("/v1/defense/webhooks", section_code ? { section_code } : {}),
-  defenseWebhookDeliveries: (limit = 50, offset = 0) =>
-    withQuery("/v1/defense/webhooks/deliveries", { limit, offset }),
+  defenseWebhookDeliveries: (limit = 50, offset = 0, sectionCode?: string, status?: string) =>
+    withQuery("/v1/defense/webhooks/deliveries", { limit, offset, section_code: sectionCode, status }),
   defenseVulnerabilities: (limit = 20, status?: string) =>
     withQuery("/v1/defense/vulnerabilities", { limit, ...(status ? { status } : {}) }),
+  defenseBackupAttestList: (limit = 20, offset = 0, sectionCode?: string) =>
+    withQuery("/v1/defense/backups/attest", { limit, offset, section_code: sectionCode }),
+  defenseBackupAttestCreate: () => withBase("/v1/defense/backups/attest"),
+  defenseRestoreDrillsList: (limit = 20, offset = 0, sectionCode?: string) =>
+    withQuery("/v1/defense/backups/restore-drills", { limit, offset, section_code: sectionCode }),
+  defenseRestoreDrillsCreate: () => withBase("/v1/defense/backups/restore-drills"),
 
   // Federation
   federationPartners: (limit = 50) => withQuery("/v1/federation/partners", { limit }),
@@ -121,10 +139,14 @@ export const endpoints = {
   aiTrainingRuns: (limit = 10, offset = 0) => withQuery("/v1/ai/gnn/runs", { limit, offset }),
   aiGNNTrain: () => withBase("/v1/ai/gnn/train"),
   aiIndicatorsSummary: (days = 7) => withQuery("/v1/ai/indicators/summary", { days }),
+  aiDriftReports: (limit = 20, offset = 0, predictionType?: string, status?: string) =>
+    withQuery("/v1/ai/drift-reports", { limit, offset, prediction_type: predictionType, status }),
+  aiDriftRun: () => withBase("/v1/ai/drift-reports/run"),
 
   // Demo data seeding
   demoIngestCyber: () => withBase("/v1/demo/ingest-synthetic-gnn-data"),
   demoIngestCorruption: () => withBase("/v1/demo/ingest-corruption-data"),
+  demoBootstrap: () => withBase("/v1/demo/bootstrap"),
 
   // Crypto posture
   cryptoPosture: () => withBase("/v1/crypto/posture"),
@@ -140,7 +162,22 @@ export const endpoints = {
     withQuery("/v1/ai/path-scores", { entity_key: entityKey, window_key: windowKey }),
   aiFusion: (entityKey: string, windowKey?: string) =>
     withQuery("/v1/ai/decision-fusions", { entity_key: entityKey, window_key: windowKey }),
+  aiTrustEntity: (entityKey: string, predictionType?: string) =>
+    withQuery("/v1/ai/trust/entity", { entity_key: entityKey, prediction_type: predictionType }),
+  aiTrustSummary: () => withBase("/v1/ai/trust/summary"),
   aiQuery: () => withBase("/v1/ai/query"),
+  // Previously unreachable AI endpoints — now wired
+  aiLinkPredictions: (entityKey?: string, limit = 20) =>
+    withQuery("/v1/ai/link-predictions", { entity_key: entityKey, limit }),
+  aiBaselines: (entityKey?: string) =>
+    withQuery("/v1/ai/baselines", { entity_key: entityKey }),
+  aiRollouts: (limit = 20) => withQuery("/v1/ai/rollouts", { limit }),
+  aiInputAnomalies: (limit = 20) => withQuery("/v1/ai/input-anomalies", { limit }),
+  aiThresholds: () => withBase("/v1/ai/thresholds"),
+  aiCampaignIndicators: (campaignId?: string, limit = 20) =>
+    withQuery("/v1/ai/campaign-indicators", { campaign_id: campaignId, limit }),
+  aiTechniques: (limit = 50) => withQuery("/v1/ai/techniques", { limit }),
+  aiThreatIntel: (limit = 20) => withQuery("/v1/ai/threat-intel", { limit }),
   reportsCatalog: () => withBase("/v1/reports/catalog"),
   reportsGenerate: () => withBase("/v1/reports/generate"),
   reportsDownload: () => withBase("/v1/reports/download"),

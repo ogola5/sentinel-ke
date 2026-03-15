@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.analytics.ai_models import (
     AIExplanation,
+    AIFeedbackLabel,
     AIPrediction,
     AICampaignRiskIndicator,
     AIRiskThreshold,
@@ -114,6 +115,138 @@ def _event_hashes(
         },
     ).fetchall()
     return [str(r[0]) for r in rows]
+
+
+def _latest_feedback_overrides(
+    db: Session,
+    *,
+    entity_keys: Sequence[str],
+    prediction_type: str,
+) -> Dict[str, Dict[str, object]]:
+    if not entity_keys:
+        return {}
+    rows = (
+        db.query(AIFeedbackLabel, AIPrediction)
+        .join(AIPrediction, AIPrediction.id == AIFeedbackLabel.prediction_id)
+        .filter(AIFeedbackLabel.entity_key.in_(list(entity_keys)))
+        .filter(AIFeedbackLabel.feedback_label.in_([0, 1]))
+        .filter(AIPrediction.prediction_type == prediction_type)
+        .order_by(AIFeedbackLabel.entity_key.asc(), AIFeedbackLabel.created_at.desc())
+        .all()
+    )
+    out: Dict[str, Dict[str, object]] = {}
+    for feedback, prediction in rows:
+        key = str(feedback.entity_key)
+        if key in out:
+            continue
+        out[key] = {
+            "feedback_id": feedback.id,
+            "feedback_label": int(feedback.feedback_label),
+            "analyst_id": str(feedback.analyst_id),
+            "created_at": feedback.created_at.isoformat(),
+            "used_in_training": bool(feedback.used_in_training),
+            "prediction_id": prediction.id,
+        }
+    return out
+
+
+def _apply_feedback_overrides(
+    dataset: GNNDataset,
+    *,
+    feedback_overrides: Mapping[str, Mapping[str, object]],
+) -> tuple[GNNDataset, Dict[str, int], list[object]]:
+    if not feedback_overrides:
+        return (
+            dataset,
+            {
+                "override_count": 0,
+                "positive_override_count": 0,
+                "negative_override_count": 0,
+                "new_feedback_count": 0,
+            },
+            [],
+        )
+
+    labels: List[int] = []
+    node_meta: List[Dict[str, Any]] = []
+    feedback_ids: list[object] = []
+    positive_override_count = 0
+    negative_override_count = 0
+    new_feedback_count = 0
+
+    for index, entity_key in enumerate(dataset.entity_keys):
+        meta = dict(dataset.node_meta[index] if index < len(dataset.node_meta) else {})
+        current_label = int(dataset.labels[index]) if index < len(dataset.labels) else 0
+        override = dict(feedback_overrides.get(entity_key) or {})
+        if override:
+            current_label = int(override.get("feedback_label") or 0)
+            meta["label_source"] = "analyst_feedback"
+            meta["feedback_override"] = True
+            meta["feedback_label"] = current_label
+            meta["feedback_id"] = str(override.get("feedback_id") or "")
+            meta["feedback_analyst_id"] = str(override.get("analyst_id") or "")
+            meta["feedback_created_at"] = str(override.get("created_at") or "")
+            if override.get("feedback_id") is not None:
+                feedback_ids.append(override.get("feedback_id"))
+            if not bool(override.get("used_in_training")):
+                new_feedback_count += 1
+            if current_label == 1:
+                positive_override_count += 1
+            else:
+                negative_override_count += 1
+        else:
+            meta["label_source"] = meta.get("label_source") or "weak_label"
+            meta["feedback_override"] = False
+        labels.append(current_label)
+        node_meta.append(meta)
+
+    positive_count = sum(int(v) for v in labels)
+    negative_count = max(0, len(labels) - positive_count)
+    benign_negative_count = sum(
+        1
+        for idx, label in enumerate(labels)
+        if int(label) == 0 and bool((node_meta[idx] or {}).get("is_benign_negative"))
+    )
+
+    return (
+        GNNDataset(
+            window_key=dataset.window_key,
+            window_start=dataset.window_start,
+            window_end=dataset.window_end,
+            entity_keys=list(dataset.entity_keys),
+            entity_types=list(dataset.entity_types),
+            feature_matrix=list(dataset.feature_matrix),
+            labels=labels,
+            edges=list(dataset.edges),
+            node_meta=node_meta,
+            source_backend_used=dataset.source_backend_used,
+            edge_source_counts=dict(dataset.edge_source_counts),
+            positive_count=positive_count,
+            negative_count=negative_count,
+            benign_negative_count=benign_negative_count,
+        ),
+        {
+            "override_count": positive_override_count + negative_override_count,
+            "positive_override_count": positive_override_count,
+            "negative_override_count": negative_override_count,
+            "new_feedback_count": new_feedback_count,
+        },
+        [feedback_id for feedback_id in feedback_ids if feedback_id is not None],
+    )
+
+
+def _mark_feedback_consumed(db: Session, *, feedback_ids: Sequence[object]) -> int:
+    if not feedback_ids:
+        return 0
+    rows = (
+        db.query(AIFeedbackLabel)
+        .filter(AIFeedbackLabel.id.in_(list(feedback_ids)))
+        .all()
+    )
+    for row in rows:
+        row.used_in_training = True
+        row.status = "consumed"
+    return len(rows)
 
 
 def _severity_from_score(score: float) -> str:
@@ -1168,6 +1301,8 @@ def run_once(
     model_version: str = "gnn-sage-v1",
     prediction_type: str = "risk_gnn",
     artifact_dir: str = "/app/artifacts/gnn",
+    allow_demo_real_data_override: bool = False,
+    allow_demo_fairness_override: bool = False,
 ) -> Dict[str, object]:
     _ensure_ai_tables()
 
@@ -1189,6 +1324,25 @@ def run_once(
         return {"status": "no_data", "created": 0, "updated": 0}
     if not dataset.feature_matrix or not dataset.feature_matrix[0]:
         return {"status": "no_features", "created": 0, "updated": 0}
+
+    feedback_overrides = _latest_feedback_overrides(
+        db,
+        entity_keys=dataset.entity_keys,
+        prediction_type=prediction_type,
+    )
+    dataset, feedback_metrics, feedback_ids = _apply_feedback_overrides(
+        dataset,
+        feedback_overrides=feedback_overrides,
+    )
+    if feedback_metrics["override_count"] > 0:
+        log.info(
+            "gnn_feedback_overrides_applied prediction_type=%s total=%d positive=%d negative=%d new=%d",
+            prediction_type,
+            feedback_metrics["override_count"],
+            feedback_metrics["positive_override_count"],
+            feedback_metrics["negative_override_count"],
+            feedback_metrics["new_feedback_count"],
+        )
 
     try:
         train_result = train_graphsage(
@@ -1235,28 +1389,38 @@ def run_once(
             labels=dataset.labels,
             probabilities=train_result.probabilities,
         )
+        fairness_gate_override_applied = False
         if fairness.get("fairness_flag") == "FAIL":
             disparity = float(fairness.get("max_positive_rate_disparity") or 0.0)
             threshold = float(settings.fairness_disparity_threshold)
-            log.error(
-                "fairness_gate_BLOCKED model_version=%s max_positive_rate_disparity=%.3f threshold=%.3f",
-                model_version,
-                disparity,
-                threshold,
-            )
-            db.rollback()
-            return {
-                "status": "blocked",
-                "gate": "fairness",
-                "model_version": model_version,
-                "max_positive_rate_disparity": disparity,
-                "threshold": threshold,
-                "detail": (
-                    "Training run blocked by fairness governance gate. "
-                    "max_positive_rate_disparity exceeds FAIRNESS_DISPARITY_THRESHOLD. "
-                    "Investigate entity-type label imbalance before retraining."
-                ),
-            }
+            if allow_demo_fairness_override:
+                fairness_gate_override_applied = True
+                log.warning(
+                    "fairness_gate_OVERRIDE_APPLIED model_version=%s max_positive_rate_disparity=%.3f threshold=%.3f",
+                    model_version,
+                    disparity,
+                    threshold,
+                )
+            else:
+                log.error(
+                    "fairness_gate_BLOCKED model_version=%s max_positive_rate_disparity=%.3f threshold=%.3f",
+                    model_version,
+                    disparity,
+                    threshold,
+                )
+                db.rollback()
+                return {
+                    "status": "blocked",
+                    "gate": "fairness",
+                    "model_version": model_version,
+                    "max_positive_rate_disparity": disparity,
+                    "threshold": threshold,
+                    "detail": (
+                        "Training run blocked by fairness governance gate. "
+                        "max_positive_rate_disparity exceeds FAIRNESS_DISPARITY_THRESHOLD. "
+                        "Investigate entity-type label imbalance before retraining."
+                    ),
+                }
 
         provenance = _compute_provenance_metrics(
             node_meta=dataset.node_meta,
@@ -1266,26 +1430,36 @@ def run_once(
         min_real_ratio = max(0.0, min(1.0, float(settings.gnn_min_real_ratio)))
         real_ratio = float(provenance.get("real_ratio") or 0.0)
         real_data_gate_passed = real_ratio >= min_real_ratio
+        real_data_gate_override_applied = False
         if not real_data_gate_passed:
-            log.error(
-                "real_data_gate_BLOCKED model_version=%s real_ratio=%.3f min_required=%.3f",
-                model_version,
-                real_ratio,
-                min_real_ratio,
-            )
-            db.rollback()
-            return {
-                "status": "blocked",
-                "gate": "real_data",
-                "model_version": model_version,
-                "real_ratio": real_ratio,
-                "min_real_ratio": min_real_ratio,
-                "detail": (
-                    "Training run blocked by real-data governance gate. "
-                    "Insufficient proportion of real (non-synthetic) data. "
-                    "Ingest more real threat data before retraining."
-                ),
-            }
+            if allow_demo_real_data_override:
+                real_data_gate_override_applied = True
+                log.warning(
+                    "real_data_gate_OVERRIDE_APPLIED model_version=%s real_ratio=%.3f min_required=%.3f",
+                    model_version,
+                    real_ratio,
+                    min_real_ratio,
+                )
+            else:
+                log.error(
+                    "real_data_gate_BLOCKED model_version=%s real_ratio=%.3f min_required=%.3f",
+                    model_version,
+                    real_ratio,
+                    min_real_ratio,
+                )
+                db.rollback()
+                return {
+                    "status": "blocked",
+                    "gate": "real_data",
+                    "model_version": model_version,
+                    "real_ratio": real_ratio,
+                    "min_real_ratio": min_real_ratio,
+                    "detail": (
+                        "Training run blocked by real-data governance gate. "
+                        "Insufficient proportion of real (non-synthetic) data. "
+                        "Ingest more real threat data before retraining."
+                    ),
+                }
 
         run = GNNTrainingRun(
             model_version=model_version,
@@ -1327,6 +1501,8 @@ def run_once(
                 "seed": seed,
                 "uncertainty_abstain_threshold": uncertainty_abstain_threshold,
                 "min_real_ratio": min_real_ratio,
+                "allow_demo_real_data_override": bool(allow_demo_real_data_override),
+                "allow_demo_fairness_override": bool(allow_demo_fairness_override),
             },
             metrics_json={
                 **train_result.metrics,
@@ -1335,11 +1511,20 @@ def run_once(
                 "negative_count": dataset.negative_count,
                 "benign_negative_count": dataset.benign_negative_count,
                 "fairness": fairness,
+                "fairness_gate": {
+                    "passed": fairness.get("fairness_flag") != "FAIL",
+                    "override_applied": bool(fairness_gate_override_applied),
+                    "mode": "demo_override" if fairness_gate_override_applied else "strict",
+                },
                 "provenance": provenance,
                 "real_data_gate": {
                     "min_real_ratio": min_real_ratio,
                     "passed": bool(real_data_gate_passed),
+                    "effective_passed": bool(real_data_gate_passed or real_data_gate_override_applied),
+                    "override_applied": bool(real_data_gate_override_applied),
+                    "mode": "demo_override" if real_data_gate_override_applied else "strict",
                 },
+                "feedback": feedback_metrics,
                 "evaluation_protocol": {
                     "temporal_policy": "window_ordered",
                     "holdout_policy": split_policy,
@@ -1351,12 +1536,23 @@ def run_once(
                     },
                 },
                 "label_strategy": {
-                    "label_source": "heuristic_risk_flags",
-                    "label_quality": "weak",
+                    "label_source": (
+                        "weak_plus_analyst_feedback"
+                        if feedback_metrics["override_count"] > 0
+                        else "heuristic_risk_flags"
+                    ),
+                    "label_quality": (
+                        "weak_with_feedback_overrides"
+                        if feedback_metrics["override_count"] > 0
+                        else "weak"
+                    ),
+                    "feedback_override_count": feedback_metrics["override_count"],
+                    "new_feedback_count": feedback_metrics["new_feedback_count"],
                     "positive_definition": (
                         "Entity has at least one risk flag (ddos_alert, campaign_entity, "
                         "vpn_cluster_member, ddos_cluster_member) or exceeds event-count threshold. "
-                        "These are NOT confirmed incident labels from ground-truth investigations."
+                        "Analyst-confirmed feedback overrides the weak label when available. "
+                        "These are NOT confirmed incident labels from full ground-truth investigations."
                     ),
                     "eval_caveat": (
                         "AUC/F1/Precision/Recall metrics are computed on a holdout split of the "
@@ -1624,6 +1820,18 @@ def run_once(
             thresholds=thresholds,
         )
 
+        consumed_feedback = _mark_feedback_consumed(db, feedback_ids=feedback_ids)
+        run.metrics_json = {
+            **dict(run.metrics_json or {}),
+            "feedback": {
+                **feedback_metrics,
+                "consumed_count": consumed_feedback,
+            },
+            "label_strategy": {
+                **dict((run.metrics_json or {}).get("label_strategy") or {}),
+                "consumed_feedback_count": consumed_feedback,
+            },
+        }
         db.commit()
     except Exception as exc:
         db.rollback()
@@ -1663,6 +1871,11 @@ def run_once(
         "components_considered": component_stats["components_considered"],
         "campaign_indicators_created": campaign_indicator_stats["created"],
         "campaign_indicators_updated": campaign_indicator_stats["updated"],
+        "feedback_overrides_applied": feedback_metrics["override_count"],
+        "feedback_consumed": consumed_feedback,
+        "fairness_gate_override_applied": bool(fairness_gate_override_applied),
+        "real_data_gate_passed": bool(real_data_gate_passed),
+        "real_data_gate_override_applied": bool(real_data_gate_override_applied),
         "model_based_explanations": int(len(attribution_map)),
         "metrics": train_result.metrics,
         "artifact_path": artifact_path,

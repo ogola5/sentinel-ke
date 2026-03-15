@@ -326,12 +326,14 @@ services:
     <<: *backend-env
     environment:
       PYTHONPATH: /app
-    command: >
-      /bin/sh -c "while true; do
-        python -m app.analytics.layer3.path_risk_worker
-          --window-key Wmid;
-        sleep 600;
-      done"
+    command:
+      - /bin/sh
+      - -c
+      - |
+        while true; do
+          python -m app.analytics.layer3.path_risk_worker --window-key Wmid
+          sleep 600
+        done
     depends_on:
       postgres:
         condition: service_healthy
@@ -344,12 +346,14 @@ services:
     <<: *backend-env
     environment:
       PYTHONPATH: /app
-    command: >
-      /bin/sh -c "while true; do
-        python -m app.analytics.layer3.decision_fusion_worker
-          --window-key Wmid;
-        sleep 600;
-      done"
+    command:
+      - /bin/sh
+      - -c
+      - |
+        while true; do
+          python -m app.analytics.layer3.decision_fusion_worker --window-key Wmid
+          sleep 600
+        done
     depends_on:
       postgres:
         condition: service_healthy
@@ -362,12 +366,14 @@ services:
     <<: *backend-env
     environment:
       PYTHONPATH: /app
-    command: >
-      /bin/sh -c "while true; do
-        python -m app.analytics.layer3.drift_worker
-          --window-key Wmid;
-        sleep 1800;
-      done"
+    command:
+      - /bin/sh
+      - -c
+      - |
+        while true; do
+          python -m app.analytics.layer3.drift_worker --window-key Wmid
+          sleep 1800
+        done
     depends_on:
       postgres:
         condition: service_healthy
@@ -401,13 +407,14 @@ services:
     <<: *backend-env
     environment:
       PYTHONPATH: /app
-    command: >
-      /bin/sh -c "while true; do
-        python -m app.analytics.layer3.auto_containment_worker
-          --prediction-type risk_gnn
-          --window-key Wmid;
-        sleep 300;
-      done"
+    command:
+      - /bin/sh
+      - -c
+      - |
+        while true; do
+          python -m app.analytics.layer3.auto_containment_worker --prediction-type risk_gnn --window-key Wmid
+          sleep 300
+        done
     depends_on:
       postgres:
         condition: service_healthy
@@ -420,14 +427,14 @@ services:
     <<: *backend-env
     environment:
       PYTHONPATH: /app
-    command: >
-      /bin/sh -c "while true; do
-        python -m app.legal.bundle_seed_worker
-          --exported-by legal-bundle-worker
-          --include-stix
-          --limit ${LEGAL_AUTO_BUNDLE_LIMIT:-50};
-        sleep 900;
-      done"
+    command:
+      - /bin/sh
+      - -c
+      - |
+        while true; do
+          python -m app.legal.bundle_seed_worker --exported-by legal-bundle-worker --include-stix --limit "${LEGAL_AUTO_BUNDLE_LIMIT:-50}"
+          sleep 900
+        done
     depends_on:
       postgres:
         condition: service_healthy

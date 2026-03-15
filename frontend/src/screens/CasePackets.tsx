@@ -1,25 +1,116 @@
+import { useEffect, useState } from "react";
 import type { CasePacket } from "../types/domain";
 import { formatConfidence } from "../utils/formatters";
+import { fetchRecentCases } from "../api/graph";
+
+type RecentCase = {
+  campaign_id: string;
+  type: string;
+  primary_key: string;
+  status: string;
+  score: number;
+  event_count: number;
+  last_seen: string | null;
+};
 
 type CasePacketsProps = {
   packet?: CasePacket;
   onExportJson: () => void;
   onExportStix: () => void;
+  onGenerateCaseForId: (id: string) => void;
 };
 
-export default function CasePackets({ packet, onExportJson, onExportStix }: CasePacketsProps) {
+export default function CasePackets({ packet, onExportJson, onExportStix, onGenerateCaseForId }: CasePacketsProps) {
+  const [recentCases, setRecentCases] = useState<RecentCase[]>([]);
+  const [loadingRecent, setLoadingRecent] = useState(false);
+  const [generatingId, setGeneratingId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!packet) {
+      setLoadingRecent(true);
+      fetchRecentCases(20)
+        .then((items) => setRecentCases(items as RecentCase[]))
+        .catch(() => setRecentCases([]))
+        .finally(() => setLoadingRecent(false));
+    }
+  }, [packet]);
+
+  const handleGenerate = (id: string) => {
+    setGeneratingId(id);
+    onGenerateCaseForId(id);
+  };
+
   if (!packet) {
     return (
       <section className="screen">
         <div className="screen-header">
           <div>
-            <p className="eyebrow">S6</p>
+            <p className="eyebrow">S5</p>
             <h2>Case Packet + STIX Export</h2>
-            <p className="subtle">Generate operational outputs from a campaign.</p>
+            <p className="subtle">Select a campaign below to generate its case packet.</p>
           </div>
         </div>
+
+        <div className="panel" style={{ background: "rgba(var(--accent-rgb), 0.08)", borderColor: "rgba(var(--accent-rgb), 0.24)" }}>
+          <div className="panel-header">
+            <h3>How to use this page</h3>
+            <span className="muted">Pick a campaign, generate, inspect, export</span>
+          </div>
+          <div className="detail-grid">
+            <div>
+              <p className="label">Step 1</p>
+              <p>Select a recent campaign from the list below and click Generate.</p>
+            </div>
+            <div>
+              <p className="label">Step 2</p>
+              <p>Check evidence paths and AI rationale before export.</p>
+            </div>
+            <div>
+              <p className="label">Step 3</p>
+              <p>Use recommended actions and only then export JSON or STIX.</p>
+            </div>
+          </div>
+        </div>
+
         <div className="panel">
-          <p className="muted">No case packet generated yet.</p>
+          <div className="panel-header">
+            <h3>Recent campaigns</h3>
+            <span className="muted">
+              {loadingRecent ? "Loading…" : `${recentCases.length} available`}
+            </span>
+          </div>
+          {loadingRecent ? (
+            <p className="muted" style={{ padding: "16px 0" }}>Loading campaigns…</p>
+          ) : recentCases.length === 0 ? (
+            <p className="muted">No campaigns found. Ingest events first, or generate a case from the Campaigns screen.</p>
+          ) : (
+            <div className="list">
+              {recentCases.map((c) => (
+                <div
+                  key={c.campaign_id}
+                  className="list-item"
+                  style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 12px" }}
+                >
+                  <div>
+                    <p style={{ fontWeight: 600, fontSize: "0.85rem" }}>{c.primary_key || c.campaign_id}</p>
+                    <p className="muted" style={{ fontSize: "0.74rem" }}>
+                      {c.type} · score {Math.round(c.score)} · {c.event_count} events
+                      {c.last_seen ? ` · ${new Date(c.last_seen).toLocaleDateString("en-KE")}` : ""}
+                    </p>
+                  </div>
+                  <button
+                    className="ghost"
+                    type="button"
+                    disabled={generatingId === c.campaign_id}
+                    onClick={() => handleGenerate(c.campaign_id)}
+                    style={{ flexShrink: 0 }}
+                  >
+                    {generatingId === c.campaign_id ? "Generating…" : "Generate case →"}
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </section>
     );
@@ -29,7 +120,7 @@ export default function CasePackets({ packet, onExportJson, onExportStix }: Case
     <section className="screen">
       <div className="screen-header">
         <div>
-          <p className="eyebrow">S6</p>
+          <p className="eyebrow">S5</p>
           <h2>Case Packet + STIX Export</h2>
           <p className="subtle">Operational readiness, ready for tomorrow.</p>
         </div>
@@ -43,9 +134,30 @@ export default function CasePackets({ packet, onExportJson, onExportStix }: Case
         </div>
       </div>
 
+      <div className="panel" style={{ background: "rgba(var(--accent-rgb), 0.08)", borderColor: "rgba(var(--accent-rgb), 0.24)" }}>
+        <div className="panel-header">
+          <h3>How to use this page</h3>
+          <span className="muted">Read, verify, then export</span>
+        </div>
+        <div className="detail-grid">
+          <div>
+            <p className="label">Step 1</p>
+            <p>Read the executive summary first so the case objective is clear.</p>
+          </div>
+          <div>
+            <p className="label">Step 2</p>
+            <p>Check evidence paths and AI rationale before export.</p>
+          </div>
+          <div>
+            <p className="label">Step 3</p>
+            <p>Use recommended actions and only then export JSON or STIX.</p>
+          </div>
+        </div>
+      </div>
+
       <div className="panel">
         <div className="panel-header">
-          <h3>Executive summary</h3>
+          <h3>1. Executive summary</h3>
           <span className="muted">{packet.id}</span>
         </div>
         <p>{packet.summary}</p>
@@ -82,7 +194,7 @@ export default function CasePackets({ packet, onExportJson, onExportStix }: Case
       <div className="grid-two">
         <div className="panel">
           <div className="panel-header">
-            <h3>Evidence paths</h3>
+            <h3>2. Evidence paths</h3>
             <span className="muted">Explainable chain</span>
           </div>
           <div className="list">
@@ -119,7 +231,7 @@ export default function CasePackets({ packet, onExportJson, onExportStix }: Case
 
         <div className="panel">
           <div className="panel-header">
-            <h3>Recommended actions</h3>
+            <h3>3. Recommended actions and export</h3>
             <span className="muted">Stakeholder-specific</span>
           </div>
           <div className="action-grid">

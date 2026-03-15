@@ -13,9 +13,12 @@ REQUIRED_COLUMNS: Mapping[str, tuple[str, ...]] = {
     "source_registry": ("section_code", "api_key_lookup"),
     "event_log": ("section_code",),
     "audit_log": ("section_code",),
+    "event_entity_index": ("entity_type",),
     "entity_embedding": ("embedding_type",),
     "infra_cluster": ("cluster_key",),
     "containment_webhook": ("secret_enc",),
+    "federation_partner": ("correlation_salt", "webhook_url", "webhook_secret_hash", "metadata_json"),
+    "legal_authorization_grant": ("policy_version", "model_action_scope_json"),
 }
 
 
@@ -52,12 +55,21 @@ def apply_schema_contract(engine: Engine) -> Dict[str, int]:
         "CREATE UNIQUE INDEX IF NOT EXISTS ux_source_registry_api_key_lookup ON source_registry (api_key_lookup)",
         "ALTER TABLE event_log ADD COLUMN IF NOT EXISTS section_code VARCHAR",
         "ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS section_code VARCHAR",
+        "ALTER TABLE event_entity_index ADD COLUMN IF NOT EXISTS entity_type VARCHAR",
+        "UPDATE event_entity_index SET entity_type = split_part(entity_key, ':', 1) WHERE COALESCE(entity_type, '') = '' AND position(':' in entity_key) > 0",
+        "CREATE INDEX IF NOT EXISTS ix_event_entity_type ON event_entity_index (entity_type)",
         "ALTER TABLE entity_embedding ADD COLUMN IF NOT EXISTS embedding_type VARCHAR DEFAULT 'gnn'",
         "ALTER TABLE infra_cluster ADD COLUMN IF NOT EXISTS cluster_key TEXT",
         "UPDATE infra_cluster SET cluster_key = concat('legacy:', cluster_id::text) WHERE COALESCE(cluster_key, '') = ''",
         "CREATE UNIQUE INDEX IF NOT EXISTS ux_infra_cluster_cluster_key ON infra_cluster (cluster_key)",
         "ALTER TABLE containment_webhook ADD COLUMN IF NOT EXISTS secret_enc TEXT",
         "ALTER TABLE containment_webhook DROP COLUMN IF EXISTS secret_hash",
+        "ALTER TABLE federation_partner ADD COLUMN IF NOT EXISTS correlation_salt VARCHAR(64) DEFAULT ''",
+        "ALTER TABLE federation_partner ADD COLUMN IF NOT EXISTS webhook_url VARCHAR(512)",
+        "ALTER TABLE federation_partner ADD COLUMN IF NOT EXISTS webhook_secret_hash VARCHAR(64)",
+        "ALTER TABLE federation_partner ADD COLUMN IF NOT EXISTS metadata_json JSONB DEFAULT '{}'::jsonb",
+        "ALTER TABLE legal_authorization_grant ADD COLUMN IF NOT EXISTS policy_version VARCHAR DEFAULT 'v1'",
+        "ALTER TABLE legal_authorization_grant ADD COLUMN IF NOT EXISTS model_action_scope_json JSONB DEFAULT '{}'::jsonb",
     )
 
     applied = 0

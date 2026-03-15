@@ -51,6 +51,34 @@ export interface WebhookDeliveryRecord {
   created_at: string;
 }
 
+export interface BackupAttestationRecord {
+  id: string;
+  section_code: string | null;
+  asset_id: string;
+  backup_id: string;
+  immutable: boolean;
+  backup_hash?: string | null;
+  storage_tier?: string | null;
+  status: string;
+  rpo_hours?: number | null;
+  attested_at: string;
+  created_at?: string;
+}
+
+export interface RestoreDrillRecord {
+  id: string;
+  section_code: string | null;
+  asset_id: string;
+  backup_id: string;
+  success: boolean;
+  rto_target_minutes: number;
+  rto_actual_minutes?: number | null;
+  operator_id?: string | null;
+  notes?: string | null;
+  completed_at?: string | null;
+  created_at: string;
+}
+
 export interface VulnFinding {
   id: string;
   section_code: string | null;

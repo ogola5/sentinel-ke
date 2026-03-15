@@ -3,8 +3,10 @@ import {
   Bot,
   FileText,
   GitBranch,
+  RefreshCw,
   Search,
   Shield,
+  ShieldAlert,
   Sparkles,
   Wrench,
 } from "lucide-react";
@@ -13,17 +15,29 @@ import {
   fetchEntityFusion,
   fetchEntityPaths,
   fetchEntityPredictions,
+  fetchEntityTrustSummary,
   fetchPredictionExplanation,
+  submitFeedback,
   fetchToolAttribution,
   queryAICopilot,
 } from "../api/ai";
+import {
+  createIncidentRun,
+  executeContainmentAction,
+  fetchWebhookDeliveries,
+  fetchWebhooks,
+} from "../api/defense";
 import { downloadReport, generateReport } from "../api/reports";
-import type { AIPrediction } from "../types/ai";
+import type { AIPrediction, EntityTrustSummary } from "../types/ai";
+import type { Principal } from "../types/auth";
+import type { WebhookDeliveryRecord, WebhookRecord } from "../types/defense";
 import { formatPercent } from "../utils/formatters";
 import { clampRiskPercent, formatRiskScore, riskColor, riskSeverityLabel } from "../utils/risk";
 
 type InvestigationProps = {
   initialEntityKey: string | null;
+  analystId: string;
+  principal: Principal;
 };
 
 type ExplanationRecord = {
@@ -104,7 +118,29 @@ function extractFirstItem<T>(payload: Record<string, unknown> | null): T | null 
   return rows[0] ?? null;
 }
 
-export default function EntityInvestigation({ initialEntityKey }: InvestigationProps) {
+function trustTone(status: "pass" | "warn" | "fail"): string {
+  if (status === "pass") return "var(--accent)";
+  if (status === "fail") return "var(--risk-critical)";
+  return "var(--warning)";
+}
+
+function rawEntityTarget(entityKey: string): string {
+  const idx = entityKey.indexOf(":");
+  return idx >= 0 ? entityKey.slice(idx + 1) : entityKey;
+}
+
+function suggestedActionType(entityKey: string): string {
+  if (entityKey.startsWith("ip:")) return "block_ip";
+  if (entityKey.startsWith("host:") || entityKey.startsWith("endpoint:") || entityKey.startsWith("service_id:")) {
+    return "isolate_host";
+  }
+  if (entityKey.startsWith("account_h:") || entityKey.startsWith("user:") || entityKey.startsWith("email:")) {
+    return "revoke_user";
+  }
+  return "block_ip";
+}
+
+export default function EntityInvestigation({ initialEntityKey, analystId, principal }: InvestigationProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState(initialEntityKey ?? "");
   const [entityKey, setEntityKey] = useState<string | null>(initialEntityKey);
@@ -117,6 +153,17 @@ export default function EntityInvestigation({ initialEntityKey }: InvestigationP
   const [pathScore, setPathScore] = useState<PathScoreRecord | null>(null);
   const [fusion, setFusion] = useState<FusionRecord | null>(null);
   const [reportPreview, setReportPreview] = useState<Record<string, unknown> | null>(null);
+  const [trustSummary, setTrustSummary] = useState<EntityTrustSummary | null>(null);
+  const [webhooks, setWebhooks] = useState<WebhookRecord[]>([]);
+  const [deliveryReceipts, setDeliveryReceipts] = useState<WebhookDeliveryRecord[]>([]);
+  const [feedbackNotes, setFeedbackNotes] = useState("");
+  const [feedbackBusy, setFeedbackBusy] = useState(false);
+  const [feedbackStatus, setFeedbackStatus] = useState<string | null>(null);
+  const [actionType, setActionType] = useState("block_ip");
+  const [actionTarget, setActionTarget] = useState("");
+  const [actionBusy, setActionBusy] = useState(false);
+  const [actionStatus, setActionStatus] = useState<string | null>(null);
+  const [containmentAccessNote, setContainmentAccessNote] = useState<string | null>(null);
 
   const [copilotQuestion, setCopilotQuestion] = useState("");
   const [copilotAnswer, setCopilotAnswer] = useState<string | null>(null);
@@ -142,16 +189,29 @@ export default function EntityInvestigation({ initialEntityKey }: InvestigationP
     setError(null);
     setEntityKey(trimmed);
     setCopilotAnswer(null);
+    setActionType(suggestedActionType(trimmed));
+    setActionTarget(rawEntityTarget(trimmed));
+    setActionStatus(null);
+    setFeedbackStatus(null);
 
     try {
-      const directPredictions = await fetchEntityPredictions(trimmed, { limit: 1, predictionType: "risk_gnn" });
+      const directPredictions = await fetchEntityPredictions(trimmed, { limit: 1, predictionType: "risk_gnn", strict: true });
       const fallbackPredictions = directPredictions.length > 0
         ? directPredictions
-        : await fetchEntityPredictions(trimmed, { limit: 1, predictionType: "corruption_risk" });
+        : await fetchEntityPredictions(trimmed, { limit: 1, predictionType: "corruption_risk", strict: true });
       const latestPrediction = fallbackPredictions[0] ?? null;
       setPrediction(latestPrediction);
 
-      const [explanationPayload, toolPayload, pathPayload, fusionPayload, reportPayload] = await Promise.all([
+      const webhookPromise =
+        principal.access_level === "central"
+          ? fetchWebhooks({ strict: true })
+          : Promise.resolve<WebhookRecord[]>([]);
+      const deliveryPromise =
+        principal.access_level === "central"
+          ? fetchWebhookDeliveries(50, { strict: true })
+          : Promise.resolve<WebhookDeliveryRecord[]>([]);
+
+      const [explanationPayload, toolPayload, pathPayload, fusionPayload, reportPayload, trustPayload, webhookResult, deliveryResult] = await Promise.allSettled([
         latestPrediction ? fetchPredictionExplanation(latestPrediction.id) : Promise.resolve(null),
         fetchToolAttribution(trimmed),
         fetchEntityPaths(trimmed),
@@ -164,13 +224,37 @@ export default function EntityInvestigation({ initialEntityKey }: InvestigationP
           entity_key: trimmed,
           classification: "RESTRICTED",
         }).catch(() => null),
+        fetchEntityTrustSummary(trimmed, latestPrediction?.prediction_type),
+        webhookPromise,
+        deliveryPromise,
       ]);
 
-      setExplanation((explanationPayload as ExplanationRecord | null) ?? null);
-      setToolAttribution((toolPayload as ToolAttributionRecord | null) ?? null);
-      setPathScore(extractFirstItem<PathScoreRecord>(pathPayload));
-      setFusion(extractFirstItem<FusionRecord>(fusionPayload));
-      setReportPreview(reportPayload);
+      setExplanation(explanationPayload.status === "fulfilled" ? (explanationPayload.value as ExplanationRecord | null) ?? null : null);
+      setToolAttribution(toolPayload.status === "fulfilled" ? (toolPayload.value as ToolAttributionRecord | null) ?? null : null);
+      setPathScore(pathPayload.status === "fulfilled" ? extractFirstItem<PathScoreRecord>(pathPayload.value) : null);
+      setFusion(fusionPayload.status === "fulfilled" ? extractFirstItem<FusionRecord>(fusionPayload.value) : null);
+      setReportPreview(reportPayload.status === "fulfilled" ? reportPayload.value : null);
+      setTrustSummary(trustPayload.status === "fulfilled" ? trustPayload.value : null);
+
+      if (principal.access_level !== "central") {
+        setContainmentAccessNote("Webhook registry and delivery receipts are visible only to central command users.");
+        setWebhooks([]);
+        setDeliveryReceipts([]);
+      } else {
+        if (webhookResult.status === "fulfilled") {
+          setWebhooks(webhookResult.value);
+          setContainmentAccessNote(null);
+        } else {
+          setWebhooks([]);
+          setContainmentAccessNote(webhookResult.reason instanceof Error ? webhookResult.reason.message : "webhook_registry_unavailable");
+        }
+        if (deliveryResult.status === "fulfilled") {
+          setDeliveryReceipts(deliveryResult.value);
+        } else {
+          setDeliveryReceipts([]);
+          setContainmentAccessNote(deliveryResult.reason instanceof Error ? deliveryResult.reason.message : "delivery_receipts_unavailable");
+        }
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "investigation_failed");
       setPrediction(null);
@@ -179,8 +263,64 @@ export default function EntityInvestigation({ initialEntityKey }: InvestigationP
       setPathScore(null);
       setFusion(null);
       setReportPreview(null);
+      setTrustSummary(null);
+      setWebhooks([]);
+      setDeliveryReceipts([]);
+      setContainmentAccessNote(null);
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function recordFeedback(feedbackLabel: 0 | 1 | 2) {
+    if (!prediction || !entityKey) return;
+    setFeedbackBusy(true);
+    setFeedbackStatus(null);
+    try {
+      await submitFeedback(
+        prediction.id,
+        feedbackLabel,
+        analystId,
+        feedbackNotes.trim() || undefined,
+      );
+      const updatedTrust = await fetchEntityTrustSummary(entityKey, prediction.prediction_type);
+      setTrustSummary(updatedTrust);
+      setFeedbackStatus("Analyst review saved.");
+      setFeedbackNotes("");
+    } catch (err) {
+      setFeedbackStatus(err instanceof Error ? err.message : "feedback_submit_failed");
+    } finally {
+      setFeedbackBusy(false);
+    }
+  }
+
+  async function triggerContainment() {
+    if (!prediction || !entityKey || !actionTarget.trim()) return;
+    setActionBusy(true);
+    setActionStatus(null);
+    try {
+      const severity =
+        prediction.score >= 90 ? "critical" : prediction.score >= 75 ? "high" : prediction.score >= 55 ? "medium" : "low";
+      const run = await createIncidentRun(`investigation:${entityKey}`, severity, {
+        entity_key: entityKey,
+        prediction_id: prediction.id,
+        source: "entity_investigation",
+      });
+      const result = await executeContainmentAction(run.id, actionType, actionTarget.trim(), {
+        entity_key: entityKey,
+        prediction_id: prediction.id,
+      });
+      setActionStatus(`${result.status} — ${actionType} requested for ${actionTarget.trim()}.`);
+      const nextTrust = await fetchEntityTrustSummary(entityKey, prediction.prediction_type);
+      setTrustSummary(nextTrust);
+      if (principal.access_level === "central") {
+        const nextDeliveries = await fetchWebhookDeliveries(50, { strict: true });
+        setDeliveryReceipts(nextDeliveries);
+      }
+    } catch (err) {
+      setActionStatus(err instanceof Error ? err.message : "containment_action_failed");
+    } finally {
+      setActionBusy(false);
     }
   }
 
@@ -197,6 +337,10 @@ export default function EntityInvestigation({ initialEntityKey }: InvestigationP
         fused_score: fusion?.fused_score,
         decision: fusion?.decision,
         tools: toolAttribution?.tools?.map((item) => item.name) ?? [],
+        trust_checks: trustSummary?.trust_checks?.map((item) => ({
+          label: item.label,
+          status: item.status,
+        })) ?? [],
       });
       setCopilotAnswer(typeof response?.answer === "string" ? response.answer : "No answer returned.");
     } finally {
@@ -229,6 +373,19 @@ export default function EntityInvestigation({ initialEntityKey }: InvestigationP
   const uncertaintyValue = Math.max(0, Math.min(100, (prediction?.uncertainty ?? 0) * 100));
   const reportSummary = (reportPreview?.summary as Record<string, unknown> | undefined) ?? {};
   const reportFindings = Array.isArray(reportPreview?.findings) ? (reportPreview?.findings as Array<Record<string, unknown>>) : [];
+  const trustBrief = trustSummary?.operator_brief;
+  const trustChecks = trustSummary?.trust_checks ?? [];
+  const rawTarget = entityKey ? rawEntityTarget(entityKey) : "";
+  const relatedDeliveries = useMemo(
+    () =>
+      deliveryReceipts.filter((item) => {
+        const target = item.target.trim();
+        if (!target) return false;
+        return target === rawTarget || target === entityKey;
+      }),
+    [deliveryReceipts, entityKey, rawTarget],
+  );
+  const activeWebhooks = webhooks.filter((item) => item.is_active);
 
   return (
     <section className="screen">
@@ -239,6 +396,38 @@ export default function EntityInvestigation({ initialEntityKey }: InvestigationP
           <p className="subtle">
             One entity, one explanation flow: score, evidence, graph paths, tool attribution, and downloadable reports.
           </p>
+        </div>
+      </div>
+
+      <div className="panel" style={{ background: "rgba(var(--accent-rgb), 0.08)", borderColor: "rgba(var(--accent-rgb), 0.28)" }}>
+        <div className="panel-header">
+          <h3>How to use this page</h3>
+          <span className="muted">One entity, one decision flow</span>
+        </div>
+        <div className="detail-grid">
+          <div>
+            <p className="label">Step 1</p>
+            <p>Search one real entity key, not a broad keyword.</p>
+          </div>
+          <div>
+            <p className="label">Step 2</p>
+            <p>Read the trust brief and trust checks before taking action.</p>
+          </div>
+          <div>
+            <p className="label">Step 3</p>
+            <p>Use analyst review to mark malicious, benign, or uncertain.</p>
+          </div>
+          <div>
+            <p className="label">Step 4</p>
+            <p>Use containment only after review, then confirm webhook receipts.</p>
+          </div>
+        </div>
+        <div className="chip-row" style={{ marginTop: 14 }}>
+          <span className="chip">Start: search box</span>
+          <span className="chip">Review: trust brief</span>
+          <span className="chip">Label: analyst review</span>
+          <span className="chip">Act: containment state</span>
+          <span className="chip">Export: reports</span>
         </div>
       </div>
 
@@ -299,6 +488,49 @@ export default function EntityInvestigation({ initialEntityKey }: InvestigationP
             </div>
           </div>
 
+          {trustBrief && (
+            <div className="grid-two">
+              <div className="panel">
+                <div className="panel-header">
+                  <h3>What the system saw</h3>
+                  <span className="muted">Operator trust brief</span>
+                </div>
+                <div className="list">
+                  <div className="list-item">
+                    <strong>{trustBrief.headline}</strong>
+                    <p className="muted" style={{ marginTop: 4 }}>{trustBrief.caveat}</p>
+                  </div>
+                  {trustBrief.what_system_saw.map((item) => (
+                    <div key={item} className="list-item">
+                      <p style={{ margin: 0 }}>{item}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="panel">
+                <div className="panel-header">
+                  <h3>What to do next</h3>
+                  <span className="muted">Actionable without flooding the analyst</span>
+                </div>
+                <div className="list">
+                  {trustBrief.next_actions.map((item) => (
+                    <div key={item} className="list-item">
+                      <strong>Next action</strong>
+                      <p className="muted" style={{ marginTop: 4 }}>{item}</p>
+                    </div>
+                  ))}
+                  {trustBrief.why_it_matters.map((item) => (
+                    <div key={item} className="list-item">
+                      <strong>Why it matters</strong>
+                      <p className="muted" style={{ marginTop: 4 }}>{item}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
           <div className="panel">
             <div className="panel-header">
               <h3>Decision posture</h3>
@@ -326,6 +558,145 @@ export default function EntityInvestigation({ initialEntityKey }: InvestigationP
               <div>
                 <p className="label">Window end</p>
                 <p className="mono">{prediction.window_end ?? "—"}</p>
+              </div>
+            </div>
+          </div>
+
+          {trustChecks.length > 0 && (
+            <div className="panel">
+              <div className="panel-header">
+                <h3>Trust checks</h3>
+                <span className="muted">Why an operator should or should not trust this score</span>
+              </div>
+              <div className="list">
+                {trustChecks.map((item) => (
+                  <div key={`${item.label}-${item.status}`} className="list-item">
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
+                      <strong>{item.label}</strong>
+                      <span className="chip" style={{ color: trustTone(item.status), borderColor: `${trustTone(item.status)}55` }}>
+                        {item.status.toUpperCase()}
+                      </span>
+                    </div>
+                    <p className="muted" style={{ marginTop: 6 }}>{item.detail}</p>
+                    {item.action && (
+                      <p style={{ marginTop: 8, color: "var(--ink)" }}>
+                        <strong>Recommended follow-up:</strong> {item.action}
+                      </p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div className="grid-two">
+            <div className="panel">
+              <div className="panel-header">
+                <h3><Shield size={14} /> Analyst review</h3>
+                <span className="muted">
+                  {trustSummary?.feedback?.count ?? 0} prior reviews
+                </span>
+              </div>
+              <div className="detail-grid" style={{ marginBottom: 12 }}>
+                <div>
+                  <p className="label">Analyst</p>
+                  <p className="mono">{analystId}</p>
+                </div>
+                <div>
+                  <p className="label">Latest feedback</p>
+                  <p>
+                    {trustSummary?.feedback?.latest_label != null
+                      ? `${trustSummary.feedback.latest_label} · ${trustSummary.feedback.latest_status ?? "recorded"}`
+                      : "No analyst review yet"}
+                  </p>
+                </div>
+              </div>
+              <textarea
+                className="search"
+                style={{ minHeight: 90, resize: "vertical" }}
+                placeholder="Add plain-English review notes for the next training cycle or case packet."
+                value={feedbackNotes}
+                onChange={(event) => setFeedbackNotes(event.target.value)}
+              />
+              <div className="chip-row" style={{ marginTop: 12 }}>
+                <button className="chip active" type="button" disabled={feedbackBusy} onClick={() => void recordFeedback(1)}>
+                  Mark malicious
+                </button>
+                <button className="chip ghost" type="button" disabled={feedbackBusy} onClick={() => void recordFeedback(0)}>
+                  Mark benign
+                </button>
+                <button className="chip ghost" type="button" disabled={feedbackBusy} onClick={() => void recordFeedback(2)}>
+                  Mark uncertain
+                </button>
+              </div>
+              {feedbackStatus && (
+                <p className="muted" style={{ marginTop: 10 }}>{feedbackStatus}</p>
+              )}
+            </div>
+
+            <div className="panel">
+              <div className="panel-header">
+                <h3><ShieldAlert size={14} /> Containment and delivery state</h3>
+                <span className="muted">{activeWebhooks.length} active hooks</span>
+              </div>
+              <div className="detail-grid" style={{ marginBottom: 12 }}>
+                <div>
+                  <p className="label">Suggested target</p>
+                  <p className="mono">{rawTarget || "—"}</p>
+                </div>
+                <div>
+                  <p className="label">Recent receipts</p>
+                  <p>{relatedDeliveries.length}</p>
+                </div>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1.4fr auto", gap: 10, alignItems: "end" }}>
+                <div>
+                  <p className="label" style={{ marginBottom: 6 }}>Action</p>
+                  <select value={actionType} onChange={(event) => setActionType(event.target.value)} style={{ width: "100%" }}>
+                    <option value="block_ip">block_ip</option>
+                    <option value="isolate_host">isolate_host</option>
+                    <option value="revoke_user">revoke_user</option>
+                  </select>
+                </div>
+                <div>
+                  <p className="label" style={{ marginBottom: 6 }}>Target</p>
+                  <input
+                    className="search"
+                    value={actionTarget}
+                    onChange={(event) => setActionTarget(event.target.value)}
+                    placeholder="Containment target"
+                  />
+                </div>
+                <button className="chip active" type="button" disabled={actionBusy || !actionTarget.trim()} onClick={() => void triggerContainment()}>
+                  {actionBusy ? <RefreshCw size={13} className="spin" /> : "Execute"}
+                </button>
+              </div>
+              {actionStatus && (
+                <p className="muted" style={{ marginTop: 10 }}>{actionStatus}</p>
+              )}
+              {containmentAccessNote && (
+                <p className="muted" style={{ marginTop: 10 }}>{containmentAccessNote}</p>
+              )}
+              <div className="panel-subsection">
+                <h4>Webhook delivery receipts</h4>
+                {relatedDeliveries.length ? (
+                  <div className="list">
+                    {relatedDeliveries.slice(0, 4).map((item) => (
+                      <div key={item.id} className="list-item">
+                        <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
+                          <strong>{item.action_type}</strong>
+                          <span className="chip">{item.status}</span>
+                        </div>
+                        <p className="muted" style={{ marginTop: 4 }}>
+                          {item.target} · HTTP {item.http_status_code ?? "—"} · attempts {item.attempt_count}
+                        </p>
+                        {item.error_message ? <p className="muted" style={{ marginTop: 4 }}>{item.error_message}</p> : null}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="muted">No containment webhook deliveries are recorded yet for this entity target.</p>
+                )}
               </div>
             </div>
           </div>
@@ -363,7 +734,7 @@ export default function EntityInvestigation({ initialEntityKey }: InvestigationP
             <div className="panel">
               <div className="panel-header">
                 <h3><GitBranch size={14} /> Graph and evidence</h3>
-                <span className="muted">{explanation?.evidence_hashes?.length ?? 0} evidence hashes</span>
+                <span className="muted">{trustSummary?.evidence_summary?.linked_campaign_count ?? 0} linked campaigns</span>
               </div>
               <div className="detail-grid">
                 <div>
@@ -373,6 +744,14 @@ export default function EntityInvestigation({ initialEntityKey }: InvestigationP
                 <div>
                   <p className="label">Hop count</p>
                   <p>{pathScore?.hop_count ?? "—"}</p>
+                </div>
+                <div>
+                  <p className="label">Evidence hashes</p>
+                  <p>{trustSummary?.evidence_summary?.evidence_hash_count ?? explanation?.evidence_hashes?.length ?? 0}</p>
+                </div>
+                <div>
+                  <p className="label">Counterfactual</p>
+                  <p>{trustSummary?.evidence_summary?.counterfactual_available ? "Available" : "Missing"}</p>
                 </div>
               </div>
               <div className="panel-subsection">
@@ -392,6 +771,21 @@ export default function EntityInvestigation({ initialEntityKey }: InvestigationP
                   <p className="muted">No graph paths are attached to this explanation yet.</p>
                 )}
               </div>
+              {trustSummary?.linked_campaigns?.length ? (
+                <div className="panel-subsection">
+                  <h4>Linked campaigns</h4>
+                  <div className="list">
+                    {trustSummary.linked_campaigns.slice(0, 4).map((item) => (
+                      <div key={item.campaign_id} className="list-item">
+                        <strong className="mono">{item.campaign_id.slice(0, 8)}…</strong>
+                        <p className="muted" style={{ marginTop: 4 }}>
+                          {item.severity} · {formatRiskScore(item.score)} / 100 · {item.flagged_entity_count} flagged entities
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
             </div>
           </div>
 
@@ -484,6 +878,20 @@ export default function EntityInvestigation({ initialEntityKey }: InvestigationP
                     >
                       Download JSON
                     </button>
+                    <button
+                      className="chip ghost"
+                      type="button"
+                      onClick={() => void downloadReport({
+                        report_type: "entity_investigation",
+                        period: "daily",
+                        format: "pdf",
+                        entity_key: entityKey ?? undefined,
+                        prediction_type: prediction.prediction_type,
+                        classification: "RESTRICTED",
+                      })}
+                    >
+                      Download PDF
+                    </button>
                   </div>
                 </div>
 
@@ -522,6 +930,21 @@ export default function EntityInvestigation({ initialEntityKey }: InvestigationP
                       })}
                     >
                       Download JSON
+                    </button>
+                    <button
+                      className="chip ghost"
+                      type="button"
+                      onClick={() => void downloadReport({
+                        report_type: "ai_decision_explanation",
+                        period: "daily",
+                        format: "pdf",
+                        entity_key: entityKey ?? undefined,
+                        prediction_id: prediction.id,
+                        prediction_type: prediction.prediction_type,
+                        classification: "RESTRICTED",
+                      })}
+                    >
+                      Download PDF
                     </button>
                   </div>
                 </div>

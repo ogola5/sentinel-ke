@@ -22,6 +22,16 @@ def _coerce_text(value: Any) -> str:
     return "request_failed"
 
 
+def _json_safe(value: Any) -> Any:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_json_safe(v) for v in value]
+    return str(value)
+
+
 def normalize_error_code(*, detail: Any, status_code: int) -> str:
     if isinstance(detail, str):
         code = detail.strip().lower().replace(" ", "_")
@@ -63,7 +73,7 @@ def build_error_payload(
     msg = (message or _coerce_text(detail)).strip() or "request_failed"
     code = normalize_error_code(detail=detail, status_code=status_code)
     return {
-        "detail": detail,
+        "detail": _json_safe(detail),
         "error": {
             "code": code,
             "message": msg,

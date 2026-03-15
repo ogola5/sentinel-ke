@@ -13,6 +13,7 @@ from app.api.deps import (
     pagination_params,
     require_central_access,
     require_request_principal,
+    require_section_access,
     require_scope,
     require_step_up,
 )
@@ -43,7 +44,10 @@ def _map_error(detail: str) -> HTTPException:
     return HTTPException(status_code=422, detail=detail)
 
 
-@router.post("/vulnerabilities", dependencies=[Depends(require_scope("defense.write"))])
+@router.post(
+    "/vulnerabilities",
+    dependencies=[Depends(require_section_access), Depends(require_scope("defense.write"))],
+)
 def upsert_vulnerability(
     payload: VulnerabilityUpsertRequest,
     principal: AuthPrincipal = Depends(require_request_principal),
@@ -58,7 +62,10 @@ def upsert_vulnerability(
         raise HTTPException(status_code=500, detail="internal_error")
 
 
-@router.get("/vulnerabilities", dependencies=[Depends(require_scope("defense.read"))])
+@router.get(
+    "/vulnerabilities",
+    dependencies=[Depends(require_section_access), Depends(require_scope("defense.read"))],
+)
 def list_vulnerabilities(
     pagination: dict = Depends(pagination_params),
     status: str | None = Query(default=None),
@@ -81,7 +88,10 @@ def list_vulnerabilities(
         raise HTTPException(status_code=500, detail="internal_error")
 
 
-@router.post("/vulnerabilities/score-sla", dependencies=[Depends(require_scope("defense.write"))])
+@router.post(
+    "/vulnerabilities/score-sla",
+    dependencies=[Depends(require_section_access), Depends(require_scope("defense.write"))],
+)
 def score_patch_sla(
     section_code: str | None = Query(default=None),
     principal: AuthPrincipal = Depends(require_request_principal),
@@ -96,7 +106,10 @@ def score_patch_sla(
         raise HTTPException(status_code=500, detail="internal_error")
 
 
-@router.post("/backups/attest", dependencies=[Depends(require_scope("defense.write"))])
+@router.post(
+    "/backups/attest",
+    dependencies=[Depends(require_section_access), Depends(require_scope("defense.write"))],
+)
 def upsert_backup_attestation(
     payload: BackupAttestationRequest,
     principal: AuthPrincipal = Depends(require_request_principal),
@@ -111,7 +124,10 @@ def upsert_backup_attestation(
         raise HTTPException(status_code=500, detail="internal_error")
 
 
-@router.get("/backups/attest", dependencies=[Depends(require_scope("defense.read"))])
+@router.get(
+    "/backups/attest",
+    dependencies=[Depends(require_section_access), Depends(require_scope("defense.read"))],
+)
 def list_backup_attestations(
     pagination: dict = Depends(pagination_params),
     section_code: str | None = Query(default=None),
@@ -132,7 +148,10 @@ def list_backup_attestations(
         raise HTTPException(status_code=500, detail="internal_error")
 
 
-@router.post("/backups/restore-drills", dependencies=[Depends(require_scope("defense.write"))])
+@router.post(
+    "/backups/restore-drills",
+    dependencies=[Depends(require_section_access), Depends(require_scope("defense.write"))],
+)
 def create_restore_drill(
     payload: RestoreDrillRequest,
     principal: AuthPrincipal = Depends(require_request_principal),
@@ -147,7 +166,10 @@ def create_restore_drill(
         raise HTTPException(status_code=500, detail="internal_error")
 
 
-@router.get("/backups/restore-drills", dependencies=[Depends(require_scope("defense.read"))])
+@router.get(
+    "/backups/restore-drills",
+    dependencies=[Depends(require_section_access), Depends(require_scope("defense.read"))],
+)
 def list_restore_drills(
     pagination: dict = Depends(pagination_params),
     section_code: str | None = Query(default=None),
@@ -168,7 +190,10 @@ def list_restore_drills(
         raise HTTPException(status_code=500, detail="internal_error")
 
 
-@router.post("/incidents/runs", dependencies=[Depends(require_scope("defense.write"))])
+@router.post(
+    "/incidents/runs",
+    dependencies=[Depends(require_section_access), Depends(require_scope("defense.write"))],
+)
 def create_incident_run(
     payload: IncidentRunCreateRequest,
     principal: AuthPrincipal = Depends(require_request_principal),
@@ -183,7 +208,10 @@ def create_incident_run(
         raise HTTPException(status_code=500, detail="internal_error")
 
 
-@router.get("/incidents/runs", dependencies=[Depends(require_scope("defense.read"))])
+@router.get(
+    "/incidents/runs",
+    dependencies=[Depends(require_section_access), Depends(require_scope("defense.read"))],
+)
 def list_incident_runs(
     pagination: dict = Depends(pagination_params),
     section_code: str | None = Query(default=None),
@@ -204,7 +232,10 @@ def list_incident_runs(
         raise HTTPException(status_code=500, detail="internal_error")
 
 
-@router.post("/incidents/runs/{run_id}/actions", dependencies=[Depends(require_scope("defense.write"))])
+@router.post(
+    "/incidents/runs/{run_id}/actions",
+    dependencies=[Depends(require_section_access), Depends(require_scope("defense.write"))],
+)
 @limiter.limit("30/minute")
 def execute_incident_actions(
     request: Request,
@@ -222,7 +253,10 @@ def execute_incident_actions(
         raise HTTPException(status_code=500, detail="internal_error")
 
 
-@router.get("/threat-alerts", dependencies=[Depends(require_scope("defense.read"))])
+@router.get(
+    "/threat-alerts",
+    dependencies=[Depends(require_section_access), Depends(require_scope("defense.read"))],
+)
 def list_threat_alerts(
     pagination: dict = Depends(pagination_params),
     alert_type: str | None = Query(default=None),
@@ -247,7 +281,10 @@ def list_threat_alerts(
         raise HTTPException(status_code=500, detail="internal_error")
 
 
-@router.post("/threat-alerts/refresh", dependencies=[Depends(require_scope("defense.write"))])
+@router.post(
+    "/threat-alerts/refresh",
+    dependencies=[Depends(require_section_access), Depends(require_scope("defense.write"))],
+)
 def refresh_threat_alerts(
     payload: ThreatAlertRefreshRequest,
     principal: AuthPrincipal = Depends(require_request_principal),
@@ -262,7 +299,10 @@ def refresh_threat_alerts(
         raise HTTPException(status_code=500, detail="internal_error")
 
 
-@router.get("/crypto/posture", dependencies=[Depends(require_scope("defense.read"))])
+@router.get(
+    "/crypto/posture",
+    dependencies=[Depends(require_section_access), Depends(require_scope("defense.read"))],
+)
 def current_crypto_posture(
     principal: AuthPrincipal = Depends(require_request_principal),
     db: Session = Depends(get_db),

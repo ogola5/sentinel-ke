@@ -23,13 +23,16 @@ Output: list of GNNResult with risk_score ∈ [0,1], uncertainty ∈ [0,1].
 """
 from __future__ import annotations
 
+import json
 import logging
 import math
 import random
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from app.config import settings
 from app.connector import EntityRecord
 from app.feature_builder import FEATURE_DIM, build_feature_vector
 
@@ -117,6 +120,89 @@ class GNNResult:
     risk_flags:   List[str] = field(default_factory=list)
 
 
+def _artifact_dir() -> Path:
+    return Path(settings.artifact_dir).expanduser()
+
+
+def _artifact_path() -> Path:
+    return Path(settings.artifact_path).expanduser()
+
+
+def _artifact_metadata_path() -> Path:
+    return Path(settings.artifact_metadata_path).expanduser()
+
+
+def load_artifact_metadata() -> Dict[str, Any]:
+    path = _artifact_metadata_path()
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        return payload if isinstance(payload, dict) else {}
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("edge_agent_artifact_metadata_read_failed path=%s error=%s", path, exc)
+        return {}
+
+
+def current_artifact_info() -> Dict[str, Any]:
+    path = _artifact_path()
+    metadata = load_artifact_metadata()
+    return {
+        "artifact_available": path.exists(),
+        "artifact_path": str(path),
+        "artifact_metadata_path": str(_artifact_metadata_path()),
+        "metadata": metadata,
+    }
+
+
+def _should_retrain(*, run_index: Optional[int], force_retrain: bool) -> tuple[bool, str]:
+    artifact_available = _artifact_path().exists()
+    if force_retrain:
+        return True, "forced_retrain"
+    if not artifact_available:
+        return True, "missing_artifact"
+
+    interval = max(1, int(settings.retrain_every))
+    if interval <= 1:
+        return True, "train_every_run"
+    if run_index is None or run_index <= 0:
+        return False, "inference_only"
+    if ((int(run_index) - 1) % interval) == 0:
+        return True, "scheduled_retrain"
+    return False, "inference_only"
+
+
+def _load_model_weights(model, device) -> Dict[str, Any]:
+    path = _artifact_path()
+    payload = torch.load(str(path), map_location=device)
+    metadata: Dict[str, Any] = {}
+    state = payload
+    if isinstance(payload, dict) and "model_state" in payload:
+        state = payload.get("model_state") or {}
+        maybe_metadata = payload.get("metadata")
+        if isinstance(maybe_metadata, dict):
+            metadata = dict(maybe_metadata)
+    if not metadata:
+        metadata = load_artifact_metadata()
+    model.load_state_dict(state)
+    return metadata
+
+
+def _write_artifact(*, model_state: Dict[str, Any], metadata: Dict[str, Any]) -> None:
+    out_dir = _artifact_dir()
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    payload = {
+        "model_state": model_state,
+        "metadata": metadata,
+    }
+    torch.save(payload, str(_artifact_path()))
+    _artifact_metadata_path().write_text(
+        json.dumps(metadata, indent=2, sort_keys=True, default=str),
+        encoding="utf-8",
+    )
+
+
 # ---------------------------------------------------------------------------
 # Edge builder
 # ---------------------------------------------------------------------------
@@ -175,6 +261,8 @@ def run_gnn(
     mc_passes:  int = 20,
     drop:       float = 0.3,
     device_str: str = "cpu",
+    force_retrain: bool = False,
+    run_index: Optional[int] = None,
 ) -> List[GNNResult]:
     """
     Train a GNN on the current window's entity graph and return per-entity
@@ -240,23 +328,65 @@ def run_gnn(
 
     data = Data(x=X, edge_index=edge_index, y=y)
 
-    # ------------------------------------------------------------------
-    # Train
-    # ------------------------------------------------------------------
     model = _AttentionSAGE(in_dim=FEATURE_DIM, drop=drop).to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-    pos_weight = torch.tensor([max(1.0, (len(y_list) - sum(y_list)) / max(1, sum(y_list)))], device=device)
-    criterion  = nn.BCELoss(weight=None)
+    train_model, execution_mode = _should_retrain(run_index=run_index, force_retrain=force_retrain)
 
-    model.train()
-    for epoch in range(epochs):
-        optimizer.zero_grad()
-        preds = model(data.x, data.edge_index)
-        loss  = criterion(preds, data.y)
-        loss.backward()
-        optimizer.step()
-        if (epoch + 1) % 10 == 0:
-            logger.debug("edge-agent GNN epoch %d/%d  loss=%.4f", epoch + 1, epochs, loss.item())
+    if not train_model:
+        try:
+            metadata = _load_model_weights(model, device)
+            logger.info(
+                "Loaded persisted GNN weights from %s mode=%s trained_at=%s",
+                _artifact_path(),
+                execution_mode,
+                metadata.get("trained_at"),
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "edge_agent_artifact_load_failed path=%s error=%s; retraining instead",
+                _artifact_path(),
+                exc,
+            )
+            train_model = True
+            execution_mode = "retrain_after_load_failure"
+
+    if train_model:
+        # ------------------------------------------------------------------
+        # Train
+        # ------------------------------------------------------------------
+        logger.info("Starting GNN training (epochs=%d, mode=%s)...", epochs, execution_mode)
+        optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+        criterion  = nn.BCELoss(weight=None)
+
+        model.train()
+        for epoch in range(epochs):
+            optimizer.zero_grad()
+            preds = model(data.x, data.edge_index)
+            loss  = criterion(preds, data.y)
+            loss.backward()
+            optimizer.step()
+            if (epoch + 1) % 10 == 0:
+                logger.debug("edge-agent GNN epoch %d/%d  loss=%.4f", epoch + 1, epochs, loss.item())
+
+        metadata = {
+            "artifact_format": "edge_gnn_v2",
+            "trained_at": datetime.now(timezone.utc).isoformat(),
+            "agent_version": settings.agent_version,
+            "model_version": settings.model_version,
+            "feature_dim": FEATURE_DIM,
+            "epochs": int(epochs),
+            "dropout": float(drop),
+            "learning_rate": float(lr),
+            "entity_count": len(records),
+            "positive_count": int(sum(int(v) for v in y_list)),
+            "negative_count": int(len(y_list) - sum(int(v) for v in y_list)),
+            "window_start": window_start.isoformat(),
+            "window_end": window_end.isoformat(),
+            "run_index": int(run_index or 0),
+            "execution_mode": execution_mode,
+            "retrain_every": int(settings.retrain_every),
+        }
+        _write_artifact(model_state=model.state_dict(), metadata=metadata)
+        logger.info("Persisted GNN artifact to %s", _artifact_path())
 
     # ------------------------------------------------------------------
     # MC-Dropout inference

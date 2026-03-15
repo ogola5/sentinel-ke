@@ -8,6 +8,7 @@ from fastapi.routing import APIRouter
 
 from app.api.ai import router as ai_router
 from app.api.demo import router as demo_router
+from app.demo.scenario_controller import router as demo_scenario_router
 from app.api.anomalies import router as anomalies_router
 from app.api.auth import router as auth_router
 from app.api.crypto_posture import router as crypto_posture_router
@@ -134,7 +135,7 @@ def build_router_mounts(*, ai_enabled: bool) -> list[RouterMount]:
                 Depends(require_step_up()),
             ),
         ),
-        RouterMount(defense_router, (Depends(require_section_access),)),
+        RouterMount(defense_router, ()),
         # Federation router manages its own per-endpoint auth:
         #   POST /patterns  → partner API key (edge agents)
         #   GET  /partners, /stream, /correlations → section access (analysts)
@@ -142,6 +143,7 @@ def build_router_mounts(*, ai_enabled: bool) -> list[RouterMount]:
         RouterMount(federation_router, ()),
         # Demo/seed endpoints — central access only; gated by DEMO_ENDPOINTS_ENABLED
         RouterMount(demo_router, ()),
+        RouterMount(demo_scenario_router, ()),
     ]
 
     if ai_enabled:

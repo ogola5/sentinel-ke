@@ -73,24 +73,6 @@ function computeThreatLevel(
   };
 }
 
-// ── Plain-English action label ─────────────────────────────────────────────
-
-function humanAction(actionType: string, status: string): string {
-  const map: Record<string, string> = {
-    block_ip:             "Block malicious network connection",
-    isolate_host:         "Disconnect compromised computer from network",
-    revoke_user:          "Suspend compromised user account",
-    disable_source_key:   "Revoke data feed access",
-    force_password_reset: "Force password change for affected accounts",
-  };
-  const label = map[actionType] ?? actionType.replace(/_/g, " ");
-  const statusLabel =
-    status === "queued"   ? "— awaiting approval" :
-    status === "executed" ? "— completed"          :
-    status === "failed"   ? "— FAILED, needs review" : "";
-  return `${label} ${statusLabel}`.trim();
-}
-
 // ── Agency status ──────────────────────────────────────────────────────────
 
 const ALL_AGENCY_CODES = Object.keys(KENYA_AGENCIES);
@@ -102,8 +84,8 @@ export default function ExecBrief({ principal }: Props) {
   const [loading, setLoading]           = useState(true);
   const [threat, setThreat]             = useState<ThreatSummary | null>(null);
   const [partners, setPartners]         = useState<FederationPartner[]>([]);
-  const [actions, setActions]           = useState<
-    { id: string; action_type: string; status: string; created_at: string }[]
+  const [incidentRuns, setIncidentRuns] = useState<
+    { id: string; incident_key: string; severity: string; status: string; started_at: string | null; section_code: string | null }[]
   >([]);
   const [situationLines, setSituation]  = useState<string[]>([]);
   const [lastRefresh, setLastRefresh]   = useState<Date>(new Date());
@@ -114,12 +96,12 @@ export default function ExecBrief({ principal }: Props) {
     setError(null);
     try {
       const [partnersData, runsData, incidentsData] = await Promise.all([
-        fetchFederationPartners().catch(() => [] as FederationPartner[]),
+        fetchFederationPartners({ strict: true }).catch(() => [] as FederationPartner[]),
         apiFetchJson<{ items: { positive_count: number; node_count: number; prediction_type: string }[] }>(
           endpoints.aiTrainingRuns(1, 0),
           { method: "GET" },
         ).catch(() => ({ items: [] })),
-        apiFetchJson<{ items: { action_type: string; status: string; created_at: string; id: string }[] }>(
+        apiFetchJson<{ items: { incident_key: string; status: string; started_at: string | null; id: string; severity: string; section_code: string | null }[] }>(
           endpoints.defenseIncidents(10, 0),
           { method: "GET" },
         ).catch(() => ({ items: [] })),
@@ -127,16 +109,16 @@ export default function ExecBrief({ principal }: Props) {
 
       const latestRun = runsData.items?.[0] ?? null;
       const highRiskCount = latestRun?.positive_count ?? 0;
-      const partnerAlerts = (partnersData ?? []).length;
+      const partnerAlerts = (partnersData ?? []).filter((partner) => partner.status === "online").length;
 
-      const pending = (incidentsData.items ?? []).filter(
-        (a) => a.status === "queued" || a.status === "failed",
+      const activeRuns = (incidentsData.items ?? []).filter(
+        (run) => run.status === "running" || run.status === "failed",
       );
-      const topActions = (incidentsData.items ?? []).slice(0, 3);
+      const topRuns = (incidentsData.items ?? []).slice(0, 3);
 
       setPartners(partnersData ?? []);
-      setActions(topActions);
-      setThreat(computeThreatLevel(highRiskCount, partnerAlerts, pending.length));
+      setIncidentRuns(topRuns);
+      setThreat(computeThreatLevel(highRiskCount, partnerAlerts, activeRuns.length));
 
       // Build situation lines in plain English
       const lines: string[] = [];
@@ -153,9 +135,9 @@ export default function ExecBrief({ principal }: Props) {
           `${partnerAlerts} partner organisations (banks, telcos) are reporting correlated threats.`,
         );
       }
-      if (pending.length > 0) {
+      if (activeRuns.length > 0) {
         lines.push(
-          `${pending.length} containment action${pending.length > 1 ? "s" : ""} pending authorisation or review.`,
+          `${activeRuns.length} incident response run${activeRuns.length > 1 ? "s" : ""} still need operator follow-through.`,
         );
       }
       if (lines.length === 0) {
@@ -223,19 +205,19 @@ export default function ExecBrief({ principal }: Props) {
 
         {/* ── Immediate Actions ───────────────────────────────────────── */}
         <section className="exec-section">
-          <h2 className="exec-section-title">Immediate Actions Required</h2>
-          {actions.length === 0 ? (
-            <p className="exec-none">No pending actions — security teams are monitoring.</p>
+          <h2 className="exec-section-title">Incident Response Queue</h2>
+          {incidentRuns.length === 0 ? (
+            <p className="exec-none">No active incident runs — security teams are monitoring.</p>
           ) : (
             <ol className="exec-action-list">
-              {actions.map((a) => (
-                <li key={a.id} className={`exec-action-item exec-action-${a.status}`}>
+              {incidentRuns.map((run) => (
+                <li key={run.id} className={`exec-action-item exec-action-${run.status}`}>
                   <span className="exec-action-label">
-                    {humanAction(a.action_type, a.status)}
+                    {`${run.incident_key} · ${run.severity.toUpperCase()} · ${run.status.replace("_", " ")}`}
                   </span>
                   <span className="exec-action-time">
                     <Clock size={12} />
-                    {new Date(a.created_at).toLocaleTimeString()}
+                    {run.started_at ? new Date(run.started_at).toLocaleTimeString() : "No start time"}
                   </span>
                 </li>
               ))}

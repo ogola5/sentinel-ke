@@ -7,6 +7,9 @@ No sensitive values are hard-coded.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -32,10 +35,22 @@ class Settings(BaseSettings):
     window_hours:   int   = 1
     # Run full GNN train + inference every N seconds (default: 300 = 5 min)
     run_interval_s: int   = 300
+    # Retrain on the first run, then every N runs after that; other runs reuse the artifact.
+    retrain_every: int    = 12
     # Only report entities with risk_score >= this threshold
     risk_threshold: float = 0.60
     # GNN model version tag embedded in every batch
     model_version:  str   = "edge-gnn-v1.0"
+    # Edge agent software version exposed through heartbeat + /status
+    agent_version:  str   = "edge-agent-v1.1"
+    # Local artifact/state persistence
+    artifact_dir: str = "/app/artifacts/gnn"
+    artifact_filename: str = "edge_gnn_weights.pt"
+    artifact_metadata_filename: str = "edge_gnn_metadata.json"
+    state_filename: str = "edge_agent_state.json"
+    # Startup and heartbeat behaviour
+    startup_health_timeout_s: int = 8
+    heartbeat_enabled: bool = True
 
     # -----------------------------------------------------------------------
     # Local data source  (demo mode uses built-in synthetic data)
@@ -100,6 +115,25 @@ class Settings(BaseSettings):
     # -----------------------------------------------------------------------
     national_salt: str = "REPLACE_WITH_CORRELATION_SALT_FROM_HUB_REGISTRATION"
     hmac_salt: str     = "CHANGE_ME_PER_PARTNER"
+
+    @field_validator("national_salt", "hmac_salt", "hub_api_key")
+    @classmethod
+    def ensure_secrets_are_configured(cls, v: str) -> str:
+        if any(p in v for p in ["REPLACE", "CHANGE_ME"]):
+            raise ValueError("Security credential or salt must be updated from default placeholder.")
+        return v
+
+    @property
+    def artifact_path(self) -> str:
+        return str(Path(self.artifact_dir).expanduser() / self.artifact_filename)
+
+    @property
+    def artifact_metadata_path(self) -> str:
+        return str(Path(self.artifact_dir).expanduser() / self.artifact_metadata_filename)
+
+    @property
+    def state_path(self) -> str:
+        return str(Path(self.artifact_dir).expanduser() / self.state_filename)
 
 
 settings = Settings()

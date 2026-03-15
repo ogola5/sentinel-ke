@@ -289,7 +289,7 @@ export default function AgencyOnboarding() {
               <p style={{ fontSize: "0.8rem", marginBottom: 8, fontWeight: 600 }}>To test each agency:</p>
               <ol style={{ fontSize: "0.78rem", lineHeight: 1.8, margin: 0, paddingLeft: 20, opacity: 0.75 }}>
                 <li>Click <strong>Logout</strong> (bottom of sidebar)</li>
-                <li>On the login screen, click the agency chip (e.g. <strong>KPS</strong>) to pre-fill the username</li>
+                <li>On the login screen, enter the agency username manually (for example <span className="mono-inline">kps_test</span>)</li>
                 <li>Password: <span className="mono-inline">{DEFAULT_TEST_PASSWORD}</span> (unless you changed it)</li>
                 <li>You will see only <strong>that agency&apos;s data</strong> — scoped by section_code</li>
                 <li>Log out, log back in as <strong>admin</strong> to see everything</li>
@@ -359,14 +359,23 @@ export default function AgencyOnboarding() {
   -H "Content-Type: application/json" \\
   -H "X-API-Key: $INGEST_API_KEY" \\
   -d '{
-    "section_code": "${sel.code}",
-    "event_type": "SUSPICIOUS_LOGIN",
-    "source_type": "gov",
-    "service_id": "${sel.code.toLowerCase()}-auth",
-    "endpoint": "/login",
-    "status_code": 401,
-    "entity_id": "user-abc123",
-    "metadata": { "ip": "41.89.x.x", "attempts": 12 }
+    "event_type": "LOGIN_EVENT",
+    "occurred_at": "2026-03-15T08:30:00Z",
+    "classification": "RESTRICTED",
+    "payload": {
+      "service_id": "${sel.code.toLowerCase()}-auth",
+      "endpoint": "/login",
+      "status_code": 401,
+      "user_id": "user-abc123",
+      "ip": "41.89.10.24",
+      "attempts": 12,
+      "section_code": "${sel.code}"
+    },
+    "anchors": {
+      "service_id": "${sel.code.toLowerCase()}-auth",
+      "endpoint": "/login",
+      "ip": "41.89.10.24"
+    }
   }'`}
                   />
                   <CodeBlock
@@ -374,14 +383,21 @@ export default function AgencyOnboarding() {
                     code={`curl -X POST ${API_BASE}/v1/ingest/batch \\
   -H "Content-Type: application/json" \\
   -H "X-API-Key: $INGEST_API_KEY" \\
-  -d '{ "events": [ /* array of event objects */ ] }'`}
+  -d '[
+    {
+      "event_type": "LOGIN_EVENT",
+      "occurred_at": "2026-03-15T08:30:00Z",
+      "payload": { "service_id": "${sel.code.toLowerCase()}-auth", "endpoint": "/login", "status_code": 401, "section_code": "${sel.code}" },
+      "anchors": { "service_id": "${sel.code.toLowerCase()}-auth", "endpoint": "/login" }
+    }
+  ]'`}
                   />
                   <div className="info-note">
                     <Info size={13} style={{ flexShrink: 0 }} />
                     <span>
                       Find your <span className="mono-inline">INGEST_API_KEY</span> in your <span className="mono-inline">.env</span> file.
-                      Each event must include <span className="mono-inline">section_code: "{sel.code}"</span> so
-                      the data appears under {sel.name} when their users log in.
+                      Use the canonical envelope: <span className="mono-inline">event_type</span>, <span className="mono-inline">occurred_at</span>, <span className="mono-inline">payload</span>, and <span className="mono-inline">anchors</span>.
+                      Put <span className="mono-inline">section_code: "{sel.code}"</span> inside the payload so the event remains attributable to {sel.name}.
                     </span>
                   </div>
                 </div>
@@ -428,39 +444,54 @@ export default function AgencyOnboarding() {
                     label="Step 1 — Register as a federation partner (curl alternative)"
                     code={`curl -X POST ${API_BASE}/v1/federation/register \\
   -H "Content-Type: application/json" \\
-  -H "X-API-Key: $FRONTEND_API_KEY" \\
+  -H "Authorization: Bearer <CENTRAL_ACCESS_TOKEN>" \\
   -d '{
-    "partner_id": "${sel.code}",
+    "partner_id": "${sel.code.toLowerCase()}",
     "partner_name": "${sel.name}",
-    "sector": "gov",
+    "partner_type": "government",
     "webhook_url": "https://${sel.code.toLowerCase()}-soc.go.ke/sentinel/webhook",
     "webhook_secret": "your-shared-secret-here"
   }'`}
                   />
                   <CodeBlock
                     label="Step 2 — Submit anonymised entity patterns"
-                    code={`curl -X POST ${API_BASE}/v1/federation/patterns \\
+                    code={`BODY='{
+  "partner_id": "${sel.code.toLowerCase()}",
+  "schema_version": "1.0",
+  "window_start": "2026-03-15T08:00:00Z",
+  "window_end": "2026-03-15T09:00:00Z",
+  "gnn_model_version": "edge-gnn-v1",
+  "high_risk_entities": [
+    {
+      "entity_key_hash": "HMAC-SHA256(phone_h:+254700000111, NATIONAL_SALT)",
+      "entity_type": "phone_h",
+      "risk_score": 0.87,
+      "uncertainty": 0.12,
+      "fraud_family": "sim_swap_chain",
+      "chain_score": 0.76,
+      "risk_flags": ["AML_FLAG", "VELOCITY_SPIKE"]
+    }
+  ],
+  "summary": {
+    "total_entities_scored": 120,
+    "high_risk_count": 4,
+    "mean_risk_score": 0.18
+  }
+}'
+SIG=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$PARTNER_API_KEY" -hex | sed 's/^.* //')
+
+curl -X POST ${API_BASE}/v1/federation/patterns \\
   -H "Content-Type: application/json" \\
-  -H "X-API-Key: $FRONTEND_API_KEY" \\
-  -d '{
-    "partner_id": "${sel.code}",
-    "patterns": [
-      {
-        "entity_key_hash": "HMAC-SHA256(phone_number, NATIONAL_SALT)",
-        "pattern_type": "SUSPICIOUS_TRANSACTION",
-        "confidence": 0.87,
-        "risk_flags": ["AML_FLAG", "VELOCITY_SPIKE"]
-      }
-    ]
-  }'`}
+  -H "X-API-Key: $PARTNER_API_KEY" \\
+  -H "X-Sentinel-Signature: sha256=$SIG" \\
+  -d "$BODY"`}
                   />
                   <div className="info-note">
                     <Info size={13} style={{ flexShrink: 0 }} />
                     <span>
-                      The <span className="mono-inline">NATIONAL_SALT</span> (in your env as{" "}
-                      <span className="mono-inline">FEDERATION_CORRELATION_SALT</span>) must be shared
-                      securely with each partner. All partners hash entity identifiers with the same salt
-                      — this allows correlation without exposing raw data.
+                      The <span className="mono-inline">NATIONAL_SALT</span> must be shared securely with each partner,
+                      and every federation submission must include a valid <span className="mono-inline">X-Sentinel-Signature</span>.
+                      The hub correlates on <span className="mono-inline">entity_key_hash</span>, not on raw identifiers.
                     </span>
                   </div>
                 </div>
@@ -478,13 +509,15 @@ export default function AgencyOnboarding() {
                     code={`sentinel-edge:
   image: sentinelke/edge-agent:latest
   environment:
-    SENTINEL_HUB_URL: "${API_BASE}"
-    SENTINEL_INGEST_API_KEY: "\${INGEST_API_KEY}"
-    SENTINEL_SECTION_CODE: "${sel.code}"
-    NATIONAL_SALT: "\${FEDERATION_CORRELATION_SALT}"
-    LOCAL_HMAC_SALT: "generate-a-unique-salt-per-agency"
-    KAFKA_BROKERS: "localhost:9092"   # agency's own Kafka
-    KAFKA_TOPIC: "agency.security.events"
+    PARTNER_ID: "${sel.code.toLowerCase()}"
+    PARTNER_NAME: "${sel.name}"
+    HUB_URL: "${API_BASE}"
+    HUB_API_KEY: "\${PARTNER_API_KEY}"
+    NATIONAL_SALT: "\${NATIONAL_SALT_FROM_HUB}"
+    HMAC_SALT: "\${GENERATE_UNIQUE_HMAC_SALT}"
+    DATA_SOURCE: "demo"
+    RUN_INTERVAL_S: "300"
+    RETRAIN_EVERY: "12"
   restart: unless-stopped`}
                   />
                   <CodeBlock
@@ -498,7 +531,8 @@ X-API-Key: <INGEST_API_KEY>
                     <AlertTriangle size={13} style={{ flexShrink: 0 }} color="var(--warning)" />
                     <span>
                       The edge agent Docker image is <em>not yet published</em> — this shows the intended
-                      deployment pattern. For now, use the direct ingest API or write a simple forwarder
+                      deployment pattern. The live registration flow now returns a copy-paste <span className="mono-inline">.env</span> block
+                      with the exact keys the edge agent reads. For now, use the direct ingest API or write a simple forwarder
                       script that calls <span className="mono-inline">POST /v1/ingest/event</span>.
                     </span>
                   </div>
@@ -581,35 +615,54 @@ Authorization: Bearer <central-admin-token>
           <div style={{ marginTop: 14 }}>
             <p style={{ fontSize: "0.83rem", marginBottom: 14, opacity: 0.75, lineHeight: 1.6 }}>
               As a solo developer you won&apos;t have real agency feeds. Use the backend&apos;s built-in
-              synthetic data generators to populate the platform with realistic Kenyan security scenarios.
+              bootstrap route to populate the platform with realistic Kenyan security scenarios and write usable predictions in one flow.
             </p>
             <CodeBlock
-              label="Ingest cyber synthetic data (269 nodes, 7 threat families)"
-              code={`curl -X POST ${API_BASE}/v1/demo/ingest-synthetic-gnn-data \\
-  -H "X-API-Key: $INGEST_API_KEY"`}
+              label="Bootstrap cyber demo data end to end"
+              code={`curl -X POST ${API_BASE}/v1/demo/bootstrap \\
+  -H "Authorization: Bearer <CENTRAL_ACCESS_TOKEN>" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "domain": "cyber",
+    "scenario": "ddos_vpn_fraud",
+    "epochs": 25,
+    "cyber_runs": 10,
+    "benign_per_run": 100,
+    "seed_sources": true
+  }'`}
             />
             <CodeBlock
-              label="Ingest corruption synthetic data (247 nodes, 6 fraud families)"
-              code={`curl -X POST ${API_BASE}/v1/demo/ingest-corruption-data \\
-  -H "X-API-Key: $INGEST_API_KEY"`}
+              label="Bootstrap corruption demo data end to end"
+              code={`curl -X POST ${API_BASE}/v1/demo/bootstrap \\
+  -H "Authorization: Bearer <CENTRAL_ACCESS_TOKEN>" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "domain": "corruption",
+    "epochs": 25,
+    "corruption_runs": 10,
+    "benign_per_run": 100
+  }'`}
             />
             <CodeBlock
-              label="Train GNN model after ingesting data"
-              code={`curl -X POST ${API_BASE}/v1/ai/gnn/train \\
-  -H "X-API-Key: $INGEST_API_KEY"
-
-# Cyber GNN:
-curl -X POST ${API_BASE}/v1/ai/gnn/train?domain=cyber
-
-# Corruption GNN:
-curl -X POST ${API_BASE}/v1/ai/gnn/train?domain=corruption`}
+              label="Bootstrap both domains in one run"
+              code={`curl -X POST ${API_BASE}/v1/demo/bootstrap \\
+  -H "Authorization: Bearer <CENTRAL_ACCESS_TOKEN>" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "domain": "all",
+    "scenario": "ddos_vpn_fraud",
+    "epochs": 25,
+    "cyber_runs": 10,
+    "corruption_runs": 10,
+    "benign_per_run": 100,
+    "seed_sources": true
+  }'`}
             />
             <div className="info-note">
               <Info size={13} style={{ flexShrink: 0 }} />
               <span>
-                Find <span className="mono-inline">INGEST_API_KEY</span> in your <span className="mono-inline">.env</span> file.
-                After ingesting data, return to the main dashboard and click <strong>Resync</strong>.
-                GNN training runs asynchronously — check <strong>GNN Intelligence</strong> for results.
+                Use a central access token for bootstrap. The background job replays demo scenarios, seeds training data, and writes predictions.
+                After bootstrap, return to the main dashboard and click <strong>Resync</strong>, then open <strong>GNN Intelligence</strong> to confirm the latest written run.
               </span>
             </div>
           </div>
@@ -631,9 +684,9 @@ curl -X POST ${API_BASE}/v1/ai/gnn/train?domain=corruption`}
               {[
                 { num: "①", text: "Log in as admin (bootstrap credentials from .env)", color: "var(--accent)" },
                 { num: "②", text: 'Go to COMMAND → Agency Onboarding → click "Create All Test Accounts"', color: "var(--accent)" },
-                { num: "③", text: "Run the synthetic data ingest commands above to populate the dashboard", color: "var(--info)" },
-                { num: "④", text: "Log out → click KPS chip on login screen → enter test password → see KPS-only view", color: "var(--info)" },
-                { num: "⑤", text: "Log out → click DCI chip → see DCI data — each agency is isolated", color: "var(--info)" },
+                { num: "③", text: "Run the demo bootstrap command above so events, graph data, and predictions are written together", color: "var(--info)" },
+                { num: "④", text: "Log out → enter kps_test on the login screen → enter test password → see KPS-only view", color: "var(--info)" },
+                { num: "⑤", text: "Log out → enter dci_test → see DCI data — each agency is isolated", color: "var(--info)" },
                 { num: "⑥", text: "Log in as admin → see everything across all agencies (Central Command)", color: "var(--accent)" },
                 { num: "⑦", text: "Test containment: log in as an operator account → go to Defense Center → execute block_ip", color: "var(--warning)" },
                 { num: "⑧", text: "Test federation: register mock partners via the curl commands above, then check Federation Network", color: "var(--warning)" },

@@ -1,4 +1,5 @@
 import logging
+import os
 import time
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -50,6 +51,11 @@ def _register_lifecycle(app: FastAPI) -> None:
 
         patch_out = apply_schema_contract(engine)
         log.info("schema_contract_applied=%s", patch_out)
+        schema_status = schema_contract_status(engine)
+        if not bool(schema_status.get("ok")):
+            raise RuntimeError(
+                f"schema_contract_incomplete missing={schema_status.get('missing', {})}"
+            )
         try:
             db = SessionLocal()
             try:
@@ -125,6 +131,17 @@ def _register_operational_routes(app: FastAPI) -> None:
             pass  # table may not exist yet on first boot
 
         schema_status = schema_contract_status(engine)
+        minio_mode = os.getenv("MINIO_ANCHOR_MODE", "disabled").strip().lower() or "disabled"
+        immudb_mode = os.getenv("IMMUDB_ANCHOR_MODE", "disabled").strip().lower() or "disabled"
+        anchor_modes = {minio_mode, immudb_mode}
+        if anchor_modes <= {"disabled"}:
+            legal_anchor_integrity = "disabled"
+        elif "stub" in anchor_modes:
+            legal_anchor_integrity = "simulated"
+        elif "disabled" in anchor_modes:
+            legal_anchor_integrity = "partial"
+        else:
+            legal_anchor_integrity = "live"
 
         return {
             "status":               "ok",
@@ -136,6 +153,12 @@ def _register_operational_routes(app: FastAPI) -> None:
             "schema_contract_ok":   bool(schema_status.get("ok")),
             "schema_missing_count": int(schema_status.get("missing_count") or 0),
             "schema_missing":       schema_status.get("missing", {}),
+            "federation_signed_requests_required": bool(settings.federation_require_signed_requests),
+            "legal_anchor_modes": {
+                "minio": minio_mode,
+                "immudb": immudb_mode,
+            },
+            "legal_anchor_integrity": legal_anchor_integrity,
             "capabilities": [
                 "cyber_gnn",
                 "corruption_gnn",

@@ -31,6 +31,7 @@ export function useDashboardSync() {
   const [healthGnnLoaded, setHealthGnnLoaded] = useState(false);
   const [healthModelVersion, setHealthModelVersion] = useState<string | null>(null);
   const [healthGnnMetrics, setHealthGnnMetrics] = useState<Record<string, unknown>>({});
+  const [healthPlatformStatus, setHealthPlatformStatus] = useState<Record<string, unknown>>({});
 
   const [eventsData, setEventsData] = useState<EventRecord[]>([]);
   const [timelineData, setTimelineData] = useState<TimelinePoint[]>([]);
@@ -91,10 +92,22 @@ export function useDashboardSync() {
               ? (health.gnn_metrics as Record<string, unknown>)
               : {},
           );
+          setHealthPlatformStatus({
+            schema_contract_ok: Boolean(health.schema_contract_ok),
+            schema_missing_count: Number(health.schema_missing_count ?? 0),
+            federation_signed_requests_required: Boolean(health.federation_signed_requests_required),
+            legal_anchor_integrity:
+              typeof health.legal_anchor_integrity === "string" ? health.legal_anchor_integrity : "unknown",
+            legal_anchor_modes:
+              health.legal_anchor_modes != null && typeof health.legal_anchor_modes === "object"
+                ? (health.legal_anchor_modes as Record<string, unknown>)
+                : {},
+          });
         } else {
           setHealthGnnLoaded(false);
           setHealthModelVersion(null);
           setHealthGnnMetrics({});
+          setHealthPlatformStatus({});
           warnings.push("health limited");
           if (nextStatus === "connected") nextStatus = "degraded";
         }
@@ -135,6 +148,7 @@ export function useDashboardSync() {
     healthGnnLoaded,
     healthModelVersion,
     healthGnnMetrics,
+    healthPlatformStatus,
     eventsData,
     timelineData,
     indicatorsData,

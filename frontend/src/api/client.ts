@@ -139,6 +139,32 @@ const parseResponseBody = (text: string): unknown => {
   }
 };
 
+const extractApiDetail = (payload: Record<string, unknown> | null, errorObj: Record<string, unknown> | null): string => {
+  if (errorObj && typeof errorObj.message === "string" && errorObj.message.trim()) {
+    return errorObj.message.trim();
+  }
+
+  const detail = payload?.detail;
+  if (typeof detail === "string" && detail.trim()) {
+    return detail.trim();
+  }
+
+  if (Array.isArray(detail) && detail.length > 0) {
+    const first = detail[0];
+    if (typeof first === "string" && first.trim()) {
+      return first.trim();
+    }
+    if (typeof first === "object" && first !== null) {
+      const msg = (first as Record<string, unknown>).msg;
+      if (typeof msg === "string" && msg.trim()) {
+        return msg.trim();
+      }
+    }
+  }
+
+  return "request_failed";
+};
+
 const getStoredRefreshToken = (): string => {
   if (typeof window === "undefined") return "";
   return window.localStorage.getItem(REFRESH_TOKEN_KEY)?.trim() ?? "";
@@ -303,11 +329,7 @@ export async function apiFetchJson<T>(
         ? (payload.error as Record<string, unknown>)
         : null;
 
-    const detail =
-      (payload && "detail" in payload && String(payload.detail)) ||
-      (errorObj && "message" in errorObj && String(errorObj.message)) ||
-      response.statusText ||
-      "request_failed";
+    const detail = extractApiDetail(payload, errorObj) || response.statusText || "request_failed";
     const code = errorObj && "code" in errorObj ? String(errorObj.code) : undefined;
     const requestId =
       (errorObj && "request_id" in errorObj && String(errorObj.request_id)) ||
@@ -405,11 +427,7 @@ export async function apiFetchBlob(
         ? (payload.error as Record<string, unknown>)
         : null;
 
-    const detail =
-      (payload && "detail" in payload && String(payload.detail)) ||
-      (errorObj && "message" in errorObj && String(errorObj.message)) ||
-      response.statusText ||
-      "request_failed";
+    const detail = extractApiDetail(payload, errorObj) || response.statusText || "request_failed";
     const code = errorObj && "code" in errorObj ? String(errorObj.code) : undefined;
     const requestId =
       (errorObj && "request_id" in errorObj && String(errorObj.request_id)) ||
