@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import logging
+import json
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -90,6 +91,23 @@ def _build_payload(
     }
 
 
+def _signed_headers(body_bytes: bytes) -> Dict[str, str]:
+    signature = hmac.new(settings.hub_api_key.encode(), body_bytes, hashlib.sha256).hexdigest()
+    return {
+        "X-API-Key": settings.hub_api_key,
+        "X-Sentinel-Signature": f"sha256={signature}",
+        "Content-Type": "application/json",
+    }
+
+
+def _signed_post(path: str, payload: Dict[str, Any], *, timeout_s: int) -> Dict[str, Any]:
+    body_bytes = json.dumps(payload, default=str).encode()
+    url = f"{settings.hub_url.rstrip('/')}{path}"
+    response = httpx.post(url, content=body_bytes, headers=_signed_headers(body_bytes), timeout=timeout_s)
+    response.raise_for_status()
+    return response.json()
+
+
 def publish(
     results:      List[GNNResult],
     window_start: datetime,
@@ -109,17 +127,31 @@ def publish(
         logger.info("No high-risk entities above threshold %.2f — skipping publish", settings.risk_threshold)
         return {"accepted": 0, "skipped": True}
 
-    url = f"{settings.hub_url.rstrip('/')}/v1/federation/patterns"
-    headers = {
-        "X-API-Key":    settings.hub_api_key,
-        "Content-Type": "application/json",
-    }
-
-    logger.info("Publishing %d high-risk entities to hub (%s)…", high_count, url)
-
-    response = httpx.post(url, json=payload, headers=headers, timeout=timeout_s)
-    response.raise_for_status()
-
-    resp_json = response.json()
+    logger.info(
+        "Publishing %d high-risk entities to hub (%s)…",
+        high_count,
+        f"{settings.hub_url.rstrip('/')}/v1/federation/patterns",
+    )
+    resp_json = _signed_post("/v1/federation/patterns", payload, timeout_s=timeout_s)
     logger.info("Hub accepted %d patterns for partner '%s'", resp_json.get("accepted", 0), settings.partner_id)
     return resp_json
+
+
+def send_heartbeat(
+    payload: Dict[str, Any],
+    *,
+    timeout_s: int = 10,
+) -> Dict[str, Any]:
+    logger.info("Sending edge heartbeat to hub (%s)…", f"{settings.hub_url.rstrip('/')}/v1/federation/heartbeat")
+    return _signed_post("/v1/federation/heartbeat", payload, timeout_s=timeout_s)
+
+
+def check_hub_connectivity(*, timeout_s: int = 10) -> Dict[str, Any]:
+    url = f"{settings.hub_url.rstrip('/')}/health"
+    response = httpx.get(url, timeout=timeout_s)
+    response.raise_for_status()
+    payload = response.json()
+    if not isinstance(payload, dict):
+        payload = {"status": "unknown"}
+    payload["hub_url"] = settings.hub_url
+    return payload

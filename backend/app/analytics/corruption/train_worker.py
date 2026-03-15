@@ -56,8 +56,11 @@ from app.analytics.layer3.evidence_graph import (
     recent_entity_event_hashes,
 )
 from app.analytics.layer3.gnn_train_worker import (
+    _apply_feedback_overrides,
     _compute_fairness_metrics,
     _compute_provenance_metrics,
+    _latest_feedback_overrides,
+    _mark_feedback_consumed,
 )
 from app.analytics.explainability import (
     heuristic_signal_attributions,
@@ -496,6 +499,24 @@ def run_once(
     if not dataset.feature_matrix:
         return {"status": "no_features"}
 
+    feedback_overrides = _latest_feedback_overrides(
+        db,
+        entity_keys=dataset.entity_keys,
+        prediction_type=CORRUPTION_PREDICTION_TYPE,
+    )
+    dataset, feedback_metrics, feedback_ids = _apply_feedback_overrides(
+        dataset,
+        feedback_overrides=feedback_overrides,
+    )
+    if feedback_metrics["override_count"] > 0:
+        log.info(
+            "corruption_feedback_overrides_applied total=%d positive=%d negative=%d new=%d",
+            feedback_metrics["override_count"],
+            feedback_metrics["positive_override_count"],
+            feedback_metrics["negative_override_count"],
+            feedback_metrics["new_feedback_count"],
+        )
+
     # ── Train ─────────────────────────────────────────────────────────
     try:
         train_result = train_graphsage(
@@ -630,13 +651,25 @@ def run_once(
                     "min_real_ratio": min_real_ratio,
                     "passed": bool(real_data_gate_passed),
                 },
+                "feedback": feedback_metrics,
                 "label_strategy": {
-                    "label_source": "heuristic_procurement_flags",
-                    "label_quality": "weak",
+                    "label_source": (
+                        "weak_plus_analyst_feedback"
+                        if feedback_metrics["override_count"] > 0
+                        else "heuristic_procurement_flags"
+                    ),
+                    "label_quality": (
+                        "weak_with_feedback_overrides"
+                        if feedback_metrics["override_count"] > 0
+                        else "weak"
+                    ),
+                    "feedback_override_count": feedback_metrics["override_count"],
+                    "new_feedback_count": feedback_metrics["new_feedback_count"],
                     "positive_definition": (
                         "Labels come from procurement weak-label heuristics such as single-source "
                         "awards, director conflicts, emergency procurement, payment anomalies, and "
-                        "event-volume thresholds. They are not confirmed case outcomes."
+                        "event-volume thresholds. Analyst feedback overrides the heuristic label when present. "
+                        "They are not confirmed case outcomes."
                     ),
                     "eval_caveat": (
                         "AUC/F1/Precision/Recall are computed on a holdout split of the same weak-label "
@@ -728,6 +761,18 @@ def run_once(
             )
             created += 1
 
+        consumed_feedback = _mark_feedback_consumed(db, feedback_ids=feedback_ids)
+        run.metrics_json = {
+            **dict(run.metrics_json or {}),
+            "feedback": {
+                **feedback_metrics,
+                "consumed_count": consumed_feedback,
+            },
+            "label_strategy": {
+                **dict((run.metrics_json or {}).get("label_strategy") or {}),
+                "consumed_feedback_count": consumed_feedback,
+            },
+        }
         db.commit()
         log.info(
             "corruption_train_complete nodes=%d auc=%.4f predictions=%d artifact=%s",
@@ -748,6 +793,8 @@ def run_once(
         "positive_count":  dataset.positive_count,
         "negative_count":  dataset.negative_count,
         "predictions":     created,
+        "feedback_overrides_applied": feedback_metrics["override_count"],
+        "feedback_consumed": consumed_feedback,
         "model_based_explanations": len(feature_contrib_by_idx) if 'feature_contrib_by_idx' in locals() else 0,
         "artifact_path":   artifact_path,
         "metrics":         train_result.metrics,

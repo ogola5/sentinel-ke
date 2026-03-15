@@ -1,6 +1,11 @@
 import { apiFetchJson } from "./client";
 import { endpoints } from "./endpoints";
-import type { FederationCorrelation, FederationPartner, FederationPattern } from "../types/federation";
+import type {
+  FederationCorrelation,
+  FederationEdgeSyncStatus,
+  FederationPartner,
+  FederationPattern,
+} from "../types/federation";
 
 export interface PartnerRegistrationPayload {
   partner_id: string;
@@ -30,9 +35,21 @@ export async function registerFederationPartner(
   });
 }
 
-export async function fetchEdgeSyncStatus(): Promise<Record<string, unknown>> {
+export async function fetchEdgeSyncStatus(): Promise<FederationEdgeSyncStatus> {
   try {
-    return await apiFetchJson<Record<string, unknown>>(endpoints.federationEdgeStatus());
+    const data = await apiFetchJson<Record<string, unknown>>(endpoints.federationEdgeStatus());
+    const r = asRecord(data);
+    return {
+      is_edge_node: asBoolean(r.is_edge_node),
+      partner_id: asString(r.partner_id),
+      hub_url: asString(r.hub_url),
+      status: asString(r.status),
+      last_synced_at: (r.last_synced_at as string | null) ?? null,
+      age_seconds: r.age_seconds != null ? asNumber(r.age_seconds) : null,
+      total_pushed: asNumber(r.total_pushed, 0),
+      last_error: (r.last_error as string | null) ?? null,
+      message: asString(r.message),
+    };
   } catch (_err) {
     return { is_edge_node: false, status: "unreachable" };
   }
@@ -84,6 +101,15 @@ export async function fetchFederationPartners(): Promise<FederationPartner[]> {
         total_patterns: asNumber(r.total_patterns, 0),
         registered_at: (r.registered_at as string | null) ?? null,
         metadata: asRecord(r.metadata),
+        last_heartbeat_at: (r.last_heartbeat_at as string | null) ?? null,
+        agent_version: (r.agent_version as string | null) ?? null,
+        model_version: (r.model_version as string | null) ?? null,
+        data_source: (r.data_source as string | null) ?? null,
+        hub_reachable: r.hub_reachable == null ? null : asBoolean(r.hub_reachable),
+        capabilities: asStringArray(r.capabilities),
+        last_run_status: (r.last_run_status as string | null) ?? null,
+        last_publish_status: (r.last_publish_status as string | null) ?? null,
+        run_count: r.run_count != null ? asNumber(r.run_count) : null,
       };
     });
   } catch (_err) {

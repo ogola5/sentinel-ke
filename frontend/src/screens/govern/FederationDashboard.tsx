@@ -1,8 +1,18 @@
 import { useEffect, useState } from "react";
 import { Globe, RefreshCw, Loader, Network, Link2, AlertTriangle } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
-import { fetchFederationPartners, fetchFederationPatterns, fetchFederationCorrelations } from "../../api/federation";
-import type { FederationCorrelation, FederationPartner, FederationPattern } from "../../types/federation";
+import {
+  fetchEdgeSyncStatus,
+  fetchFederationCorrelations,
+  fetchFederationPartners,
+  fetchFederationPatterns,
+} from "../../api/federation";
+import type {
+  FederationCorrelation,
+  FederationEdgeSyncStatus,
+  FederationPartner,
+  FederationPattern,
+} from "../../types/federation";
 
 function riskClass(level: string): string {
   const l = level.toLowerCase();
@@ -24,23 +34,56 @@ function sectorColor(sector: string): string {
   return "var(--risk-unknown)";
 }
 
+function partnerStatusTone(status: FederationPartner["status"]): string {
+  if (status === "online") return "var(--accent)";
+  if (status === "stale") return "var(--warning)";
+  if (status === "offline") return "var(--risk-high)";
+  return "var(--risk-unknown)";
+}
+
+function partnerStatusSurface(status: FederationPartner["status"]): { background: string; border: string } {
+  if (status === "online") {
+    return { background: "rgba(49,255,144,.12)", border: "rgba(49,255,144,.3)" };
+  }
+  if (status === "stale") {
+    return { background: "rgba(255,159,10,.12)", border: "rgba(255,159,10,.3)" };
+  }
+  if (status === "offline") {
+    return { background: "rgba(255,69,58,.12)", border: "rgba(255,69,58,.3)" };
+  }
+  return { background: "rgba(136,183,155,.1)", border: "rgba(136,183,155,.2)" };
+}
+
+function partnerFreshnessLabel(partner: FederationPartner): string {
+  if (partner.last_heartbeat_at) {
+    return `Heartbeat ${new Date(partner.last_heartbeat_at).toLocaleString()}`;
+  }
+  if (partner.last_seen_at) {
+    return `Seen ${new Date(partner.last_seen_at).toLocaleString()}`;
+  }
+  return "No heartbeat yet";
+}
+
 export default function FederationDashboard() {
   const [partners, setPartners] = useState<FederationPartner[]>([]);
   const [patterns, setPatterns] = useState<FederationPattern[]>([]);
   const [correlations, setCorrelations] = useState<FederationCorrelation[]>([]);
+  const [edgeSync, setEdgeSync] = useState<FederationEdgeSyncStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [selectedPartner, setSelectedPartner] = useState<string>("");
 
   const load = async () => {
     setLoading(true);
-    const [p, pt, c] = await Promise.all([
+    const [p, pt, c, edge] = await Promise.all([
       fetchFederationPartners(),
       fetchFederationPatterns(60),
       fetchFederationCorrelations(20),
+      fetchEdgeSyncStatus(),
     ]);
     setPartners(p);
     setPatterns(pt);
     setCorrelations(c);
+    setEdgeSync(edge);
     if (p.length > 0) setSelectedPartner(p[0].partner_id);
     setLoading(false);
   };
@@ -57,6 +100,8 @@ export default function FederationDashboard() {
 
   const selectedPartnerPatterns = patterns.filter((pt) => pt.partner_id === selectedPartner);
   const activePartners = partners.filter((p) => p.is_active).length;
+  const stalePartners = partners.filter((p) => p.status === "stale").length;
+  const offlinePartners = partners.filter((p) => p.status === "offline").length;
   const totalPatterns = patterns.length;
   const criticalCorrelations = correlations.filter((c) => c.risk_level.toLowerCase() === "critical").length;
 
@@ -75,11 +120,21 @@ export default function FederationDashboard() {
       </div>
 
       {/* Metric bar */}
-      <div className="metric-grid" style={{ gridTemplateColumns: "repeat(4, 1fr)" }}>
+      <div className="metric-grid" style={{ gridTemplateColumns: "repeat(6, 1fr)" }}>
         <div className="metric-card accent">
           <div className="metric-label">Active partners</div>
           <div className="metric-value">{activePartners}</div>
           <div className="metric-sub">{partners.length} registered</div>
+        </div>
+        <div className="metric-card">
+          <div className="metric-label">Stale partners</div>
+          <div className="metric-value" style={{ color: stalePartners > 0 ? "var(--warning)" : "var(--accent)" }}>{stalePartners}</div>
+          <div className="metric-sub">Heartbeat aging out</div>
+        </div>
+        <div className="metric-card">
+          <div className="metric-label">Offline partners</div>
+          <div className="metric-value" style={{ color: offlinePartners > 0 ? "var(--risk-high)" : "var(--accent)" }}>{offlinePartners}</div>
+          <div className="metric-sub">No recent partner signal</div>
         </div>
         <div className="metric-card">
           <div className="metric-label">Pattern submissions</div>
@@ -113,14 +168,43 @@ export default function FederationDashboard() {
         </div>
       ) : (
         <>
+          {edgeSync?.is_edge_node && (
+            <div className="panel" style={{ marginBottom: 16, borderColor: "rgba(var(--info-rgb), 0.24)", background: "rgba(var(--info-rgb), 0.07)" }}>
+              <div className="panel-header">
+                <h3>Local edge sync state</h3>
+                <span className="muted">{edgeSync.partner_id}</span>
+              </div>
+              <div className="detail-grid">
+                <div>
+                  <strong>Status</strong>
+                  <p className="muted" style={{ marginTop: 4 }}>
+                    {edgeSync.status ?? "unknown"} · {edgeSync.total_pushed ?? 0} total pushes
+                  </p>
+                </div>
+                <div>
+                  <strong>Last sync</strong>
+                  <p className="muted" style={{ marginTop: 4 }}>
+                    {edgeSync.last_synced_at ? new Date(edgeSync.last_synced_at).toLocaleString() : "No sync recorded yet"}
+                  </p>
+                </div>
+                <div>
+                  <strong>Last error</strong>
+                  <p className="muted" style={{ marginTop: 4 }}>{edgeSync.last_error ?? "None"}</p>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Partner cards */}
           <div className="partner-grid">
-            {partners.map((p) => (
+            {partners.map((p) => {
+              const statusSurface = partnerStatusSurface(p.status);
+              return (
               <div
                 key={p.partner_id}
-                className={`partner-card ${p.is_active ? "active-partner" : ""}`}
+                className={`partner-card ${p.status === "online" ? "active-partner" : ""}`}
                 onClick={() => setSelectedPartner(p.partner_id)}
-                style={{ cursor: "pointer", opacity: p.is_active ? 1 : 0.55 }}
+                style={{ cursor: "pointer", opacity: p.status === "offline" ? 0.55 : 1 }}
               >
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
                   <div>
@@ -130,12 +214,12 @@ export default function FederationDashboard() {
                   <span
                     className="risk-badge"
                     style={{
-                      background: p.is_active ? "rgba(49,255,144,.12)" : "rgba(136,183,155,.1)",
-                      color: p.is_active ? "var(--accent)" : "var(--risk-unknown)",
-                      border: `1px solid ${p.is_active ? "rgba(49,255,144,.3)" : "rgba(136,183,155,.2)"}`,
+                      background: statusSurface.background,
+                      color: partnerStatusTone(p.status),
+                      border: `1px solid ${statusSurface.border}`,
                     }}
                   >
-                    {p.is_active ? "Active" : "Offline"}
+                    {p.status.replace("_", " ")}
                   </span>
                 </div>
 
@@ -154,12 +238,33 @@ export default function FederationDashboard() {
                     patterns
                   </div>
                   <div className="partner-stat">
-                    <span>{p.last_seen_at ? new Date(p.last_seen_at).toLocaleDateString() : "—"}</span>
-                    last seen
+                    <span>{p.run_count ?? 0}</span>
+                    runs
+                  </div>
+                </div>
+
+                <div className="list" style={{ marginTop: 12 }}>
+                  <div className="list-item" style={{ padding: 0, border: 0 }}>
+                    <strong>Freshness</strong>
+                    <p className="muted" style={{ marginTop: 4 }}>{partnerFreshnessLabel(p)}</p>
+                  </div>
+                  <div className="list-item" style={{ padding: 0, border: 0 }}>
+                    <strong>Model and source</strong>
+                    <p className="muted" style={{ marginTop: 4 }}>
+                      {p.model_version ?? "No heartbeat version yet"} · {p.data_source ?? "unknown source"}
+                    </p>
+                  </div>
+                  <div className="list-item" style={{ padding: 0, border: 0 }}>
+                    <strong>Last run</strong>
+                    <p className="muted" style={{ marginTop: 4 }}>
+                      {p.last_run_status ?? "unknown"} · publish {p.last_publish_status ?? "unknown"}
+                      {p.hub_reachable == null ? "" : ` · hub ${p.hub_reachable ? "reachable" : "unreachable"}`}
+                    </p>
                   </div>
                 </div>
               </div>
-            ))}
+              );
+            })}
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>

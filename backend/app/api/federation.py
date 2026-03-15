@@ -86,6 +86,20 @@ class PatternBatch(BaseModel):
     summary: PatternBatchSummary = Field(default_factory=PatternBatchSummary)
 
 
+class PartnerHeartbeat(BaseModel):
+    partner_id: str = Field(..., description="Edge agent partner ID, e.g. equity-bank-ke")
+    agent_version: Optional[str] = Field(None, description="Edge agent software version")
+    model_version: Optional[str] = Field(None, description="Currently loaded model version on edge node")
+    artifact: Dict[str, Any] = Field(default_factory=dict, description="Artifact metadata exposed by the edge agent")
+    last_run_at: Optional[datetime] = None
+    last_run_status: Optional[str] = None
+    last_publish_status: Optional[str] = None
+    run_count: int = 0
+    data_source: Optional[str] = None
+    hub_reachable: Optional[bool] = None
+    capabilities: List[str] = Field(default_factory=list)
+
+
 class PartnerRegistration(BaseModel):
     partner_id: str = Field(..., min_length=3, max_length=64,
                             description="Short stable ID e.g. equity-bank-ke")
@@ -210,6 +224,53 @@ async def submit_patterns(
     }
 
 
+@router.post(
+    "/heartbeat",
+    summary="Receive edge-agent liveness + version heartbeat",
+    description=(
+        "Edge agents send this lightweight heartbeat on startup and after runs so the hub can display "
+        "freshness, agent version, model version, and artifact status even when no new patterns were published."
+    ),
+    status_code=202,
+)
+async def receive_heartbeat(
+    heartbeat: PartnerHeartbeat,
+    partner: FederationPartner = Depends(_require_partner_api_key),
+    db: Session = Depends(get_db),
+) -> dict:
+    if partner.partner_id != heartbeat.partner_id:
+        raise HTTPException(status_code=403, detail="partner_id in heartbeat does not match API key owner")
+
+    now = utcnow()
+    metadata = dict(partner.metadata_json or {})
+    edge_status = dict(metadata.get("edge_status") or {})
+    edge_status.update(
+        {
+            "last_heartbeat_at": now.isoformat(),
+            "agent_version": heartbeat.agent_version,
+            "model_version": heartbeat.model_version,
+            "artifact": dict(heartbeat.artifact or {}),
+            "last_run_at": heartbeat.last_run_at.isoformat() if heartbeat.last_run_at else None,
+            "last_run_status": heartbeat.last_run_status,
+            "last_publish_status": heartbeat.last_publish_status,
+            "run_count": int(heartbeat.run_count or 0),
+            "data_source": heartbeat.data_source,
+            "hub_reachable": heartbeat.hub_reachable,
+            "capabilities": list(heartbeat.capabilities or []),
+        }
+    )
+    metadata["edge_status"] = edge_status
+    partner.metadata_json = metadata
+    partner.last_seen = now
+    db.commit()
+
+    return {
+        "accepted": True,
+        "partner_id": partner.partner_id,
+        "received_at": now.isoformat(),
+    }
+
+
 # ---------------------------------------------------------------------------
 # GET /v1/federation/partners  — list all partners
 # ---------------------------------------------------------------------------
@@ -235,6 +296,8 @@ def list_partners(db: Session = Depends(get_db)) -> List[dict]:
                              else now - p.last_seen).total_seconds())
             status = "online" if age_sec < 300 else ("stale" if age_sec < 3600 else "offline")
 
+        metadata = dict(p.metadata_json or {})
+        edge_status = dict(metadata.get("edge_status") or {})
         result.append({
             "partner_id":       p.partner_id,
             "partner_name":     p.partner_name,
@@ -245,7 +308,16 @@ def list_partners(db: Session = Depends(get_db)) -> List[dict]:
             "total_patterns":   p.total_patterns,
             "is_active":        p.is_active,
             "registered_at":    p.registered_at.isoformat() if p.registered_at else None,
-            "metadata":         p.metadata_json or {},
+            "metadata":         metadata,
+            "last_heartbeat_at": edge_status.get("last_heartbeat_at"),
+            "agent_version":   edge_status.get("agent_version"),
+            "model_version":   edge_status.get("model_version"),
+            "data_source":     edge_status.get("data_source"),
+            "hub_reachable":   edge_status.get("hub_reachable"),
+            "capabilities":    list(edge_status.get("capabilities") or []),
+            "last_run_status": edge_status.get("last_run_status"),
+            "last_publish_status": edge_status.get("last_publish_status"),
+            "run_count":       edge_status.get("run_count"),
         })
     return result
 

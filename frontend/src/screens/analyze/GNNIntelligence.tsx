@@ -290,6 +290,8 @@ export default function GNNIntelligence({
 
   const latestRun = filteredRuns[0] ?? null;
   const latestMetrics = asRecord(latestRun?.metrics);
+  const latestProvenance = asRecord(latestRun?.provenance ?? latestMetrics.provenance);
+  const latestFeedbackMetrics = asRecord(latestMetrics.feedback);
 
   const auc = latestRun?.auc ?? metricNumber(healthGnnMetrics, "auc");
   const precision = latestRun?.precision ?? metricNumber(healthGnnMetrics, "precision");
@@ -303,6 +305,10 @@ export default function GNNIntelligence({
   const featureDim = latestRun?.feature_dim ?? metricNumber(healthGnnMetrics, "feature_dim");
   const modelVersion = latestRun?.model_version ?? healthModelVersion ?? "—";
   const predictionType = latestRun?.prediction_type ?? (typeof healthGnnMetrics.prediction_type === "string" ? healthGnnMetrics.prediction_type : "—");
+  const realRatio = metricNumber(latestProvenance, "real_ratio");
+  const avgRealSignalRatio = metricNumber(latestProvenance, "avg_real_signal_ratio");
+  const feedbackOverrideCount = metricNumber(latestFeedbackMetrics, "override_count");
+  const feedbackConsumedCount = metricNumber(latestFeedbackMetrics, "consumed_count", "new_feedback_count");
 
   const epochTrainLosses = asNumberArray(latestMetrics.epoch_train_losses);
   const epochValLosses = asNumberArray(latestMetrics.epoch_val_losses);
@@ -454,6 +460,18 @@ export default function GNNIntelligence({
               <div className="metric-label">Needs review</div>
               <div className={`metric-value${needsReviewCount > 0 ? " gnn-metric-warn" : ""}`}>{needsReviewCount}</div>
               <div className="metric-sub">Uncertainty threshold exceeded</div>
+            </div>
+            <div className="metric-card info">
+              <div className="metric-label">Real-signal ratio</div>
+              <div className="metric-value">{realRatio != null ? `${Math.round(realRatio * 100)}%` : "—"}</div>
+              <div className="metric-sub">Real + mixed nodes in the latest run</div>
+            </div>
+            <div className="metric-card info">
+              <div className="metric-label">Feedback labels used</div>
+              <div className="metric-value">{feedbackOverrideCount != null ? feedbackOverrideCount : "—"}</div>
+              <div className="metric-sub">
+                {feedbackConsumedCount != null ? `${feedbackConsumedCount} newly consumed` : "Analyst overrides applied"}
+              </div>
             </div>
           </div>
 
@@ -702,13 +720,24 @@ export default function GNNIntelligence({
                 </div>
                 <div className="list-item">
                   <strong>Real-data gate</strong>
-                  <p className="muted">{latestRun?.real_data_gate_passed === false ? "Failed for the latest run." : "No failure recorded on the latest run."}</p>
+                  <p className="muted">
+                    {latestRun?.real_data_gate_passed === false ? "Failed for the latest run." : "No failure recorded on the latest run."}
+                    {realRatio != null ? ` Real ratio ${Math.round(realRatio * 100)}%.` : ""}
+                    {avgRealSignalRatio != null ? ` Avg per-node real signal ${Math.round(avgRealSignalRatio * 100)}%.` : ""}
+                  </p>
                 </div>
                 <div className="list-item">
                   <strong>Fairness state</strong>
                   <p className="muted">
                     {latestRun?.fairness?.fairness_flag ?? "No fairness result recorded"}
                     {latestRun?.fairness_blocked ? " · deployment blocked" : ""}
+                  </p>
+                </div>
+                <div className="list-item">
+                  <strong>Analyst feedback</strong>
+                  <p className="muted">
+                    {feedbackOverrideCount != null ? `${feedbackOverrideCount} override labels applied.` : "No analyst feedback overrides recorded."}
+                    {feedbackConsumedCount != null ? ` ${feedbackConsumedCount} newly consumed in training.` : ""}
                   </p>
                 </div>
               </div>

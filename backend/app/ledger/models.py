@@ -68,9 +68,11 @@ class EventEntityIndex(Base):
         primary_key=True,
     )
     entity_key = Column(String, primary_key=True)
+    entity_type = Column(String, nullable=True)
 
     __table_args__ = (
         Index("ix_event_entity_entity_key", "entity_key"),
+        Index("ix_event_entity_type", "entity_type"),
     )
 
 

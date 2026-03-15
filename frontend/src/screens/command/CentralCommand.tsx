@@ -169,6 +169,8 @@ export default function CentralCommand({
       : trustSummary?.overall_status === "fail"
         ? "var(--risk-critical)"
         : "var(--warning)";
+  const cyberGovernance = trustSummary?.model_governance?.find((item) => item.prediction_type === "risk_gnn") ?? null;
+  const corruptionGovernance = trustSummary?.model_governance?.find((item) => item.prediction_type === "corruption_risk") ?? null;
   const viewGuide =
     view === "brief"
       ? {
@@ -593,6 +595,15 @@ export default function CentralCommand({
                   <div className="list-item">
                     <strong>{trustSummary.resilience.backup_attestations_30d}</strong> backup attestations in 30d
                   </div>
+                  <div className="list-item">
+                    <strong>{cyberGovernance?.real_ratio != null ? `${Math.round(cyberGovernance.real_ratio * 100)}%` : "—"}</strong> cyber real-signal ratio
+                  </div>
+                  <div className="list-item">
+                    <strong>{corruptionGovernance?.real_ratio != null ? `${Math.round(corruptionGovernance.real_ratio * 100)}%` : "—"}</strong> corruption real-signal ratio
+                  </div>
+                  <div className="list-item">
+                    <strong>{(cyberGovernance?.feedback_override_count ?? 0) + (corruptionGovernance?.feedback_override_count ?? 0)}</strong> analyst feedback overrides in model runs
+                  </div>
                 </div>
                 <div className="panel-subsection">
                   <h4>Trust checks</h4>
@@ -606,6 +617,24 @@ export default function CentralCommand({
                           </span>
                         </div>
                         <p className="muted" style={{ marginTop: 4 }}>{item.detail}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <div className="panel-subsection">
+                  <h4>Model data realism</h4>
+                  <div className="list">
+                    {[cyberGovernance, corruptionGovernance].filter(Boolean).map((item) => (
+                      <div key={item?.prediction_type} className="list-item">
+                        <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+                          <strong>{item?.prediction_type}</strong>
+                          <span>{item?.status?.toUpperCase()}</span>
+                        </div>
+                        <p className="muted" style={{ marginTop: 4 }}>
+                          Real ratio {item?.real_ratio != null ? `${Math.round(item.real_ratio * 100)}%` : "—"} ·
+                          Avg per-node real signal {item?.avg_real_signal_ratio != null ? ` ${Math.round(item.avg_real_signal_ratio * 100)}%` : " —"} ·
+                          Feedback overrides {item?.feedback_override_count ?? 0}
+                        </p>
                       </div>
                     ))}
                   </div>

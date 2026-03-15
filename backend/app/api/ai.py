@@ -29,7 +29,7 @@ from app.analytics.ai_models import (
     GNNTrainingRun,
     ThreatIntelIndicator,
 )
-from app.analytics.layer3.forecasting import build_risk_forecast
+from app.analytics.layer3.forecasting import build_risk_forecast, summarize_forecast_card
 from app.analytics.layer3.local_analyst_query import answer_local_analyst_query
 from app.analytics.layer3.threat_intel_worker import export_stix_bundle, import_stix_bundle
 from app.analytics.layer3.trust_service import build_entity_trust_summary, build_platform_trust_summary
@@ -1257,21 +1257,9 @@ def threat_indicators_summary(
         "total":         int(tot[5] or 0),
     }
 
-    # ── 7. Simple forecast: linear trend on GNN avg scores ──────────────────
-    forecast = {"trend": "stable", "forecast_score": None, "confidence": 0.0}
-    if len(gnn_risk_series) >= 2:
-        scores = [s["avg_score"] for s in gnn_risk_series[-4:]]
-        if len(scores) >= 2:
-            slope = (scores[-1] - scores[0]) / max(1, len(scores) - 1)
-            last  = scores[-1]
-            forecast["forecast_score"] = round(min(100, max(0, last + slope * 3)), 1)
-            forecast["confidence"]      = round(min(0.9, 0.5 + abs(slope) / 20), 2)
-            if slope > 1.0:
-                forecast["trend"] = "rising"
-            elif slope < -1.0:
-                forecast["trend"] = "falling"
-            else:
-                forecast["trend"] = "stable"
+    # ── 7. Shared limited-data forecast based on daily GNN avg scores ───────
+    forecast_detail = build_risk_forecast(history=gnn_risk_series, horizon=7, alpha=0.3, beta=0.1)
+    forecast = summarize_forecast_card(forecast_detail, target_day=3)
 
     return {
         "generated_at":          datetime.now(timezone.utc).isoformat(),
@@ -1283,6 +1271,7 @@ def threat_indicators_summary(
         "kill_chain_distribution": kill_chain_distribution,
         "event_totals":          event_totals,
         "forecast":              forecast,
+        "forecast_detail":       forecast_detail,
     }
 
 

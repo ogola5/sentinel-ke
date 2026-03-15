@@ -18,7 +18,7 @@ export type ReportPeriod =
   | "semi_annual"
   | "annual";
 
-export type ReportFormat = "json" | "html";
+export type ReportFormat = "json" | "html" | "pdf";
 
 export type ReportRequest = {
   report_type: ReportType;
@@ -68,7 +68,8 @@ export async function downloadReport(payload: ReportRequest): Promise<string> {
     method: "POST",
     body: JSON.stringify(payload),
   });
-  const fallback = `sentinel-${payload.report_type}.${payload.format === "html" ? "html" : "json"}`;
+  const extension = payload.format === "html" ? "html" : payload.format === "pdf" ? "pdf" : "json";
+  const fallback = `sentinel-${payload.report_type}.${extension}`;
   const filename = parseFilename(response.headers.get("Content-Disposition"), fallback);
   const url = window.URL.createObjectURL(blob);
   const link = document.createElement("a");

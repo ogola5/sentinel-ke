@@ -20,7 +20,9 @@ from app.analytics.ai_models import (
     ThreatIntelIndicator,
 )
 from app.analytics.layer3.ai_intel import techniques_to_tools
+from app.campaign.models import Campaign, CampaignEntity, CampaignEvent
 from app.defense.models import BackupAttestation, ContainmentAction, ContainmentWebhook, IncidentPlaybookRun, RestoreDrill
+from app.legal.models import LegalEvidenceBundle
 
 
 def _utcnow() -> datetime:
@@ -354,6 +356,118 @@ def build_entity_trust_summary(
     }
 
 
+def build_campaign_trust_summary(
+    db: Session,
+    *,
+    campaign_id: str,
+) -> dict[str, Any]:
+    campaign = db.query(Campaign).filter(Campaign.id == campaign_id).first()
+    if not campaign:
+        raise ValueError("campaign_not_found")
+
+    entities = (
+        db.query(CampaignEntity)
+        .filter(CampaignEntity.campaign_id == campaign.id)
+        .order_by(CampaignEntity.last_seen.desc())
+        .all()
+    )
+    events = (
+        db.query(CampaignEvent)
+        .filter(CampaignEvent.campaign_id == campaign.id)
+        .order_by(CampaignEvent.occurred_at.desc())
+        .limit(100)
+        .all()
+    )
+    indicator = (
+        db.query(AICampaignRiskIndicator)
+        .filter(AICampaignRiskIndicator.campaign_id == campaign.id)
+        .order_by(AICampaignRiskIndicator.window_end.desc())
+        .first()
+    )
+    latest_bundle = (
+        db.query(LegalEvidenceBundle)
+        .filter(LegalEvidenceBundle.campaign_id == str(campaign.id))
+        .order_by(LegalEvidenceBundle.created_at.desc())
+        .first()
+    )
+
+    trust_checks = [
+        _trust_check(
+            "Campaign evidence coverage",
+            "pass" if events and entities else ("warn" if entities or events else "fail"),
+            f"{len(entities)} entities and {len(events)} recent campaign events are linked.",
+            action="Refresh campaign correlation before briefing if the campaign has no supporting events." if not events else None,
+        ),
+        _trust_check(
+            "AI campaign scoring",
+            "pass" if indicator else "warn",
+            (
+                f"Latest campaign AI indicator is {float(indicator.score or 0.0):.1f}/100 "
+                f"with {int(indicator.flagged_entity_count or 0)} flagged entities."
+                if indicator else
+                "No campaign-level AI indicator is attached yet."
+            ),
+            action="Run or refresh the post-prediction campaign indicator pipeline before escalation." if not indicator else None,
+        ),
+        _trust_check(
+            "Legal packaging",
+            "pass" if latest_bundle else "warn",
+            (
+                f"Legal evidence bundle {latest_bundle.bundle_id} is available for this campaign."
+                if latest_bundle else
+                "No legal evidence bundle is available yet for this campaign."
+            ),
+            action="Generate the legal evidence bundle before external enforcement or prosecutor handoff." if not latest_bundle else None,
+        ),
+    ]
+
+    next_actions = [
+        check["action"]
+        for check in trust_checks
+        if check.get("action") and check["status"] != "pass"
+    ]
+    if not next_actions:
+        next_actions = [
+            "Validate the highest-risk entities inside the campaign before escalation.",
+            "Preserve linked events and graph relationships as evidence.",
+            "Refresh the case packet before inter-agency handoff.",
+        ]
+
+    return {
+        "campaign_id": str(campaign.id),
+        "operator_brief": {
+            "headline": f"Campaign {campaign.type} is currently {_severity(campaign.score)} risk.",
+            "what_system_saw": [
+                f"{len(entities)} linked entities and {len(events)} recent campaign events remain attached.",
+                (
+                    f"Latest campaign AI indicator is {float(indicator.score or 0.0):.1f}/100."
+                    if indicator else
+                    "No campaign-level AI indicator is attached yet."
+                ),
+                (
+                    f"Legal bundle {latest_bundle.bundle_id} is available for downstream sharing."
+                    if latest_bundle else
+                    "No legal bundle is attached yet."
+                ),
+            ],
+            "why_it_matters": [
+                "Campaign-level reporting explains connected activity, not just isolated alerts.",
+                "Coordinated campaigns are harder to dismiss and easier to escalate with evidence continuity.",
+            ],
+            "next_actions": next_actions[:5],
+            "caveat": "Campaign AI indicators summarize linked evidence and should still be validated by an analyst before enforcement.",
+        },
+        "evidence_summary": {
+            "entity_count": len(entities),
+            "event_count": len(events),
+            "ai_indicator_available": bool(indicator),
+            "legal_bundle_available": bool(latest_bundle),
+        },
+        "trust_checks": trust_checks,
+        "generated_at": _utcnow().isoformat(),
+    }
+
+
 def build_platform_trust_summary(db: Session) -> dict[str, Any]:
     now = _utcnow()
     prediction_types = ("risk_gnn", "corruption_risk")
@@ -394,6 +508,8 @@ def build_platform_trust_summary(db: Session) -> dict[str, Any]:
         drift = _latest_drift_report(db, prediction_type=prediction_type, model_version=run.model_version if run else None)
         rollout = _latest_rollout(db, prediction_type=prediction_type)
         fairness = dict((run.metrics_json or {}).get("fairness") or {}) if run else {}
+        provenance = dict((run.metrics_json or {}).get("provenance") or {}) if run else {}
+        feedback = dict((run.metrics_json or {}).get("feedback") or {}) if run else {}
         fairness_disparity = float(fairness.get("max_positive_rate_disparity", 0.0) or 0.0)
         fairness_status = "fail" if fairness_disparity >= 0.75 else ("warn" if fairness_disparity >= 0.35 else "pass")
         real_gate = dict((run.metrics_json or {}).get("real_data_gate") or {}) if run else {}
@@ -412,6 +528,10 @@ def build_platform_trust_summary(db: Session) -> dict[str, Any]:
                 "window_end": run.window_end.isoformat() if run else None,
                 "fairness_status": fairness_status,
                 "real_data_gate_passed": real_data_passed,
+                "real_ratio": float(provenance.get("real_ratio") or 0.0),
+                "avg_real_signal_ratio": float(provenance.get("avg_real_signal_ratio") or 0.0),
+                "feedback_override_count": int(feedback.get("override_count") or 0),
+                "feedback_consumed_count": int(feedback.get("consumed_count") or feedback.get("new_feedback_count") or 0),
                 "drift_status": drift_state,
                 "rollout_mode": rollout.rollout_mode if rollout else None,
                 "rollout_status": rollout.status if rollout else None,
@@ -464,6 +584,8 @@ def build_platform_trust_summary(db: Session) -> dict[str, Any]:
                 (
                     f"Model {summary['model_version'] or 'n/a'}; fairness={summary['fairness_status']}; "
                     f"real-data gate={'pass' if summary['real_data_gate_passed'] else 'warn'}; "
+                    f"real ratio={float(summary['real_ratio']):.2f}; "
+                    f"feedback overrides={int(summary['feedback_override_count'])}; "
                     f"drift={summary['drift_status']}."
                 ),
                 action="Review model rollout and governance metrics before claiming this model is production-ready." if summary["status"] != "pass" else None,

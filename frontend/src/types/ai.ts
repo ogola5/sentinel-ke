@@ -217,6 +217,10 @@ export interface PlatformTrustSummary {
     window_end?: string | null;
     fairness_status: string;
     real_data_gate_passed: boolean;
+    real_ratio?: number;
+    avg_real_signal_ratio?: number;
+    feedback_override_count?: number;
+    feedback_consumed_count?: number;
     drift_status: string;
     rollout_mode?: string | null;
     rollout_status?: string | null;

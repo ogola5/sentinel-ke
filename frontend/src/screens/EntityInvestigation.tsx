@@ -844,6 +844,20 @@ export default function EntityInvestigation({ initialEntityKey, analystId }: Inv
                     >
                       Download JSON
                     </button>
+                    <button
+                      className="chip ghost"
+                      type="button"
+                      onClick={() => void downloadReport({
+                        report_type: "entity_investigation",
+                        period: "daily",
+                        format: "pdf",
+                        entity_key: entityKey ?? undefined,
+                        prediction_type: prediction.prediction_type,
+                        classification: "RESTRICTED",
+                      })}
+                    >
+                      Download PDF
+                    </button>
                   </div>
                 </div>
 
@@ -882,6 +896,21 @@ export default function EntityInvestigation({ initialEntityKey, analystId }: Inv
                       })}
                     >
                       Download JSON
+                    </button>
+                    <button
+                      className="chip ghost"
+                      type="button"
+                      onClick={() => void downloadReport({
+                        report_type: "ai_decision_explanation",
+                        period: "daily",
+                        format: "pdf",
+                        entity_key: entityKey ?? undefined,
+                        prediction_id: prediction.id,
+                        prediction_type: prediction.prediction_type,
+                        classification: "RESTRICTED",
+                      })}
+                    >
+                      Download PDF
                     </button>
                   </div>
                 </div>

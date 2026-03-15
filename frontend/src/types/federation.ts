@@ -11,6 +11,15 @@ export interface FederationPartner {
   total_patterns?: number;
   registered_at?: string | null;
   metadata?: Record<string, unknown>;
+  last_heartbeat_at?: string | null;
+  agent_version?: string | null;
+  model_version?: string | null;
+  data_source?: string | null;
+  hub_reachable?: boolean | null;
+  capabilities?: string[];
+  last_run_status?: string | null;
+  last_publish_status?: string | null;
+  run_count?: number | null;
 }
 
 export interface FederationPattern {
@@ -43,4 +52,16 @@ export interface FederationCorrelation {
   total_signals?: number;
   first_seen: string;
   last_seen: string;
+}
+
+export interface FederationEdgeSyncStatus {
+  is_edge_node: boolean;
+  partner_id?: string;
+  hub_url?: string;
+  status?: string;
+  last_synced_at?: string | null;
+  age_seconds?: number | null;
+  total_pushed?: number;
+  last_error?: string | null;
+  message?: string;
 }

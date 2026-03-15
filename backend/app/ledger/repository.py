@@ -136,6 +136,7 @@ class LedgerRepository:
                         EventEntityIndex(
                             event_hash=event_hash,
                             entity_key=f"{k}:{v}",
+                            entity_type=str(k),
                         )
                     )
 

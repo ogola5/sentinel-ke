@@ -209,7 +209,7 @@ def answer_local_analyst_query(
             next_peak = forecast["alert_recommendation"]["peak_forecast_score"]
             answer = (
                 f"Risk trend is {forecast['trend_direction']}. "
-                f"Peak forecast over the next {forecast['horizon_days']} days is {next_peak:.2f}. "
+                f"Peak forecasted cyber-risk signal over the next {forecast['horizon_days']} days is {next_peak:.2f}. "
                 f"Recommended posture: {forecast['alert_recommendation']['level']}."
             )
         return {

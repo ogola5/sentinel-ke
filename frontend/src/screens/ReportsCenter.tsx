@@ -192,7 +192,7 @@ export default function ReportsCenter() {
         <div className="panel workflow-stage-panel">
           <div className="panel-header">
             <h3>1. Report Builder</h3>
-            <span className="muted">HTML or JSON download</span>
+            <span className="muted">HTML, PDF, or JSON download</span>
           </div>
 
           {!catalog ? (
