@@ -28,10 +28,11 @@ import type { CasePacket, EntityProfile, EvidenceItem, EventRecord, SourceType }
 import ActiveScreen from "./ActiveScreen";
 import CredentialsPanel from "./CredentialsPanel";
 import EvidenceDrawer from "./EvidenceDrawer";
+import GlobalAssistantPanel from "./GlobalAssistantPanel";
 import Inspector from "./Inspector";
 import Sidebar from "./Sidebar";
 import Topbar from "./Topbar";
-import { SCREEN_GUIDES, SOURCE_OPTIONS, type ScreenId } from "./navigation";
+import { SCREEN_CHROME, SCREEN_GUIDES, SOURCE_OPTIONS, type ScreenId } from "./navigation";
 import { useDashboardSync } from "./useDashboardSync";
 import { canonicalServiceKey } from "../utils/entityKeys";
 
@@ -109,6 +110,7 @@ function AuthenticatedApp({
   const [casesData, setCasesData] = useState<CasePacket[]>([]);
   const [navCollapsed, setNavCollapsed] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(false);
+  const [assistantOpen, setAssistantOpen] = useState(false);
 
   const defaultScreen: ScreenId = central ? "command" : "live";
   const [activeScreen, setActiveScreen] = useState<ScreenId>(defaultScreen);
@@ -162,6 +164,7 @@ function AuthenticatedApp({
   const activeCase = casesData.find((packet) => packet.id === selectedCaseId);
   const selectedCampaign = campaignsData.find((campaign) => campaign.id === selectedCampaignId);
   const screenGuide = SCREEN_GUIDES[activeScreen];
+  const screenChrome = SCREEN_CHROME[activeScreen];
   const timelineEvidenceRefs = useMemo(
     () =>
       Array.from(
@@ -263,6 +266,7 @@ function AuthenticatedApp({
           entityQuery={entityQuery}
           entities={entitiesData}
           inspectorOpen={inspectorOpen}
+          assistantOpen={assistantOpen}
           onToggleSource={toggleSource}
           onSelectTimeWindow={setTimeWindow}
           onEntityQueryChange={setEntityQuery}
@@ -272,6 +276,30 @@ function AuthenticatedApp({
             setInspectorOpen(true);
           }}
           onOpenInspector={() => setInspectorOpen(true)}
+          onToggleAssistant={() => setAssistantOpen((open) => !open)}
+        />
+
+        <GlobalAssistantPanel
+          open={assistantOpen}
+          activeScreen={activeScreen}
+          screenTitle={screenChrome.title}
+          screenGuide={screenGuide}
+          principal={principal}
+          backendLabel={backendLabel}
+          selectedEntity={selectedEntity}
+          selectedCampaignId={selectedCampaignId}
+          selectedServiceId={selectedServiceId}
+          selectedCaseId={selectedCaseId}
+          eventCount={eventsData.length}
+          campaignCount={campaignsData.length}
+          entityCount={entitiesData.length}
+          graphNodes={graphData.nodes.length}
+          graphEdges={graphData.edges.length}
+          healthGnnLoaded={healthGnnLoaded}
+          healthModelVersion={healthModelVersion}
+          actionStatus={actionStatus}
+          onClose={() => setAssistantOpen(false)}
+          onRequireLogin={onLogout}
         />
 
         {connectionPanelOpen && (

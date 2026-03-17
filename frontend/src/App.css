@@ -521,6 +521,32 @@
   justify-self: end;
 }
 
+.assistant-panel {
+  margin: 16px 28px 0;
+  padding: 18px;
+  border: 1px solid rgba(var(--accent-rgb), 0.22);
+  border-radius: 16px;
+  background:
+    linear-gradient(160deg, rgba(var(--accent-rgb), 0.08), rgba(var(--surface-rgb), 0.92)),
+    var(--panel);
+  box-shadow: var(--shadow);
+}
+
+.assistant-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.assistant-context-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
+
 /* Status dot */
 .status-dot {
   width: 8px;
@@ -1403,6 +1429,10 @@
 
   .demo-panel {
     right: 16px;
+  }
+
+  .assistant-panel {
+    margin: 16px 16px 0;
   }
 
   .workspace-footer {

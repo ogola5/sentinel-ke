@@ -129,15 +129,49 @@ function rawEntityTarget(entityKey: string): string {
   return idx >= 0 ? entityKey.slice(idx + 1) : entityKey;
 }
 
+function entityFamily(entityKey: string): string {
+  const idx = entityKey.indexOf(":");
+  return idx >= 0 ? entityKey.slice(0, idx) : entityKey;
+}
+
 function suggestedActionType(entityKey: string): string {
   if (entityKey.startsWith("ip:")) return "block_ip";
-  if (entityKey.startsWith("host:") || entityKey.startsWith("endpoint:") || entityKey.startsWith("service_id:")) {
+  if (entityKey.startsWith("host:") || entityKey.startsWith("endpoint:") || entityKey.startsWith("device_id:")) {
     return "isolate_host";
   }
   if (entityKey.startsWith("account_h:") || entityKey.startsWith("user:") || entityKey.startsWith("email:")) {
     return "revoke_user";
   }
   return "block_ip";
+}
+
+function suggestedActionTarget(entityKey: string): string {
+  const family = entityFamily(entityKey);
+  if (["ip", "host", "endpoint", "device_id", "account_h", "user", "email"].includes(family)) {
+    return rawEntityTarget(entityKey);
+  }
+  return "";
+}
+
+function containmentReadinessMessage(
+  entityKey: string | null,
+  actionType: string,
+  webhooks: WebhookRecord[],
+  accessLevel: Principal["access_level"],
+): string {
+  if (!entityKey) return "Load one entity before planning containment.";
+  const family = entityFamily(entityKey);
+  if (["service_id", "provider_id", "domain", "url", "person_h", "phone_h"].includes(family)) {
+    return "This entity is a correlation object, not a directly actionable host or IP. Choose the concrete IP, host, or account target you want to contain.";
+  }
+  if (accessLevel !== "central") {
+    return "Containment can still be requested, but webhook registry visibility is restricted to central command users.";
+  }
+  const matching = webhooks.filter((item) => item.is_active && item.action_type === actionType);
+  if (matching.length === 0) {
+    return `No active ${actionType} webhook is registered right now. The action can be recorded, but no partner-side delivery will fire until a webhook is configured.`;
+  }
+  return `${matching.length} active ${actionType} webhook${matching.length === 1 ? "" : "s"} can currently receive this action.`;
 }
 
 export default function EntityInvestigation({ initialEntityKey, analystId, principal }: InvestigationProps) {
@@ -190,7 +224,7 @@ export default function EntityInvestigation({ initialEntityKey, analystId, princ
     setEntityKey(trimmed);
     setCopilotAnswer(null);
     setActionType(suggestedActionType(trimmed));
-    setActionTarget(rawEntityTarget(trimmed));
+    setActionTarget(suggestedActionTarget(trimmed));
     setActionStatus(null);
     setFeedbackStatus(null);
 
@@ -310,7 +344,18 @@ export default function EntityInvestigation({ initialEntityKey, analystId, princ
         entity_key: entityKey,
         prediction_id: prediction.id,
       });
-      setActionStatus(`${result.status} — ${actionType} requested for ${actionTarget.trim()}.`);
+      const firstAction = result.actions?.[0];
+      const webhookStatus =
+        firstAction && firstAction.details && typeof firstAction.details.webhook_status === "string"
+          ? firstAction.details.webhook_status
+          : null;
+      const hint =
+        firstAction && firstAction.details && typeof firstAction.details.hint === "string"
+          ? firstAction.details.hint
+          : null;
+      setActionStatus(
+        `${result.status} — ${actionType} requested for ${actionTarget.trim()}.${webhookStatus ? ` Delivery state: ${webhookStatus}.` : ""}${hint ? ` ${hint}` : ""}`,
+      );
       const nextTrust = await fetchEntityTrustSummary(entityKey, prediction.prediction_type);
       setTrustSummary(nextTrust);
       if (principal.access_level === "central") {
@@ -337,6 +382,9 @@ export default function EntityInvestigation({ initialEntityKey, analystId, princ
         fused_score: fusion?.fused_score,
         decision: fusion?.decision,
         tools: toolAttribution?.tools?.map((item) => item.name) ?? [],
+        operator_brief: trustSummary?.operator_brief ?? null,
+        linked_campaigns: trustSummary?.linked_campaigns?.map((item) => item.campaign_id) ?? [],
+        data_realism: trustSummary?.operator_brief?.data_realism ?? null,
         trust_checks: trustSummary?.trust_checks?.map((item) => ({
           label: item.label,
           status: item.status,
@@ -353,19 +401,25 @@ export default function EntityInvestigation({ initialEntityKey, analystId, princ
     const reasons = (explanation?.reason_codes ?? prediction.reason_codes ?? []).slice(0, 3);
     const evidenceCount = explanation?.evidence_hashes?.length ?? 0;
     const toolCount = toolAttribution?.summary?.tool_count ?? toolAttribution?.tools?.length ?? 0;
-    const pathValue = pathScore?.path_score != null ? formatRiskScore(pathScore.path_score) : "not available";
-    const fusedValue = fusion?.fused_score != null ? formatRiskScore(fusion.fused_score) : "not available";
+    const brief = trustSummary?.operator_brief;
+    const operatorDecision = brief?.operator_decision;
+    const graphMeaning = brief?.graph_meaning;
+    const dataRealism = brief?.data_realism;
+    const containmentReadiness = brief?.containment_readiness;
 
     return [
-      `${entityKey} is currently scored ${formatRiskScore(prediction.score)} / 100 (${riskSeverityLabel(prediction.score)}).`,
+      `${entityKey} is currently ${riskSeverityLabel(prediction.score).toLowerCase()} risk at ${formatRiskScore(prediction.score)} / 100.`,
+      operatorDecision ?? null,
       prediction.kill_chain_stage ? `The current kill-chain stage is ${prediction.kill_chain_stage}.` : null,
       reasons.length > 0 ? `Main reasons: ${reasons.join(", ").toLowerCase().replaceAll("_", " ")}.` : null,
-      evidenceCount > 0 ? `${evidenceCount} supporting evidence records are attached to the explanation.` : null,
-      `Path score is ${pathValue} and fused decision score is ${fusedValue}.`,
-      toolCount > 0 ? `${toolCount} likely attacker tools are currently mapped from the observed techniques.` : null,
-      "This is an investigative indicator, not final proof.",
+      graphMeaning ?? null,
+      evidenceCount > 0 ? `${evidenceCount} supporting evidence record(s) are attached to the explanation.` : null,
+      toolCount > 0 ? `${toolCount} likely attacker tool mapping(s) are currently attached.` : null,
+      dataRealism ?? null,
+      containmentReadiness ?? null,
+      "Treat this as an investigative indicator, not final proof.",
     ].filter(Boolean).join(" ");
-  }, [entityKey, explanation, fusion, pathScore, prediction, toolAttribution]);
+  }, [entityKey, explanation, prediction, toolAttribution, trustSummary]);
 
   const predictionScore = clampRiskPercent(prediction?.score);
   const pathScoreValue = clampRiskPercent(pathScore?.path_score);
@@ -386,6 +440,7 @@ export default function EntityInvestigation({ initialEntityKey, analystId, princ
     [deliveryReceipts, entityKey, rawTarget],
   );
   const activeWebhooks = webhooks.filter((item) => item.is_active);
+  const containmentGuidance = containmentReadinessMessage(entityKey, actionType, activeWebhooks, principal.access_level);
 
   return (
     <section className="screen">
@@ -480,6 +535,24 @@ export default function EntityInvestigation({ initialEntityKey, analystId, princ
               </span>
             </div>
             <p style={{ lineHeight: 1.7, marginBottom: 12 }}>{summaryText}</p>
+            <div className="detail-grid" style={{ marginBottom: 12 }}>
+              <div>
+                <p className="label">Recommended posture</p>
+                <p>{trustBrief?.operator_decision ?? "Review the trust brief before acting."}</p>
+              </div>
+              <div>
+                <p className="label">Likelihood indicator</p>
+                <p>{trustBrief?.likelihood_indicator ?? `${Math.round(prediction.score)}/100 cyber-risk indicator`}</p>
+              </div>
+              <div>
+                <p className="label">Data realism</p>
+                <p>{trustBrief?.data_realism ?? "No current provenance statement is attached."}</p>
+              </div>
+              <div>
+                <p className="label">Containment readiness</p>
+                <p>{trustBrief?.containment_readiness ?? containmentGuidance}</p>
+              </div>
+            </div>
             <div className="chip-row">
               <span className="chip">Entity: {prediction.entity_key}</span>
               <span className="chip">Prediction: {prediction.prediction_type}</span>
@@ -535,6 +608,14 @@ export default function EntityInvestigation({ initialEntityKey, analystId, princ
             <div className="panel-header">
               <h3>Decision posture</h3>
               <span className="muted">Corrected score scales from the backend</span>
+            </div>
+            <div className="list" style={{ marginBottom: 16 }}>
+              <div className="list-item">
+                <strong>How to read this</strong>
+                <p className="muted" style={{ marginTop: 4 }}>
+                  Risk score tells you how much attention this entity deserves. Uncertainty tells you how careful the analyst should be before escalation. Path score tells you how strongly the graph links this entity to risky neighbours and shared events.
+                </p>
+              </div>
             </div>
             <div style={{ display: "flex", gap: 24, flexWrap: "wrap" }}>
               <ScoreRing value={predictionScore} label="Risk score" color={riskColor(prediction.score)} />
@@ -639,14 +720,28 @@ export default function EntityInvestigation({ initialEntityKey, analystId, princ
                 <h3><ShieldAlert size={14} /> Containment and delivery state</h3>
                 <span className="muted">{activeWebhooks.length} active hooks</span>
               </div>
+              <div className="list" style={{ marginBottom: 12 }}>
+                <div className="list-item">
+                  <strong>Containment readiness</strong>
+                  <p className="muted" style={{ marginTop: 4 }}>{containmentGuidance}</p>
+                </div>
+              </div>
               <div className="detail-grid" style={{ marginBottom: 12 }}>
                 <div>
                   <p className="label">Suggested target</p>
-                  <p className="mono">{rawTarget || "—"}</p>
+                  <p className="mono">{actionTarget || "Choose a concrete target"}</p>
                 </div>
                 <div>
                   <p className="label">Recent receipts</p>
                   <p>{relatedDeliveries.length}</p>
+                </div>
+                <div>
+                  <p className="label">Selected action hooks</p>
+                  <p>{activeWebhooks.filter((item) => item.action_type === actionType).length}</p>
+                </div>
+                <div>
+                  <p className="label">Entity family</p>
+                  <p className="mono">{entityFamily(entityKey ?? "")}</p>
                 </div>
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1.4fr auto", gap: 10, alignItems: "end" }}>
@@ -736,6 +831,14 @@ export default function EntityInvestigation({ initialEntityKey, analystId, princ
                 <h3><GitBranch size={14} /> Graph and evidence</h3>
                 <span className="muted">{trustSummary?.evidence_summary?.linked_campaign_count ?? 0} linked campaigns</span>
               </div>
+              <div className="list" style={{ marginBottom: 12 }}>
+                <div className="list-item">
+                  <strong>What the graph means</strong>
+                  <p className="muted" style={{ marginTop: 4 }}>
+                    {trustBrief?.graph_meaning ?? "The graph score is a structural signal showing how strongly this entity is linked to risky neighbours, shared events, or campaign routes."}
+                  </p>
+                </div>
+              </div>
               <div className="detail-grid">
                 <div>
                   <p className="label">Path score</p>
@@ -777,10 +880,11 @@ export default function EntityInvestigation({ initialEntityKey, analystId, princ
                   <div className="list">
                     {trustSummary.linked_campaigns.slice(0, 4).map((item) => (
                       <div key={item.campaign_id} className="list-item">
-                        <strong className="mono">{item.campaign_id.slice(0, 8)}…</strong>
+                        <strong>{item.severity} · {formatRiskScore(item.score)} / 100</strong>
                         <p className="muted" style={{ marginTop: 4 }}>
-                          {item.severity} · {formatRiskScore(item.score)} / 100 · {item.flagged_entity_count} flagged entities
+                          {item.flagged_entity_count} flagged entities
                         </p>
+                        <p className="mono" style={{ marginTop: 4, fontSize: "0.78rem" }}>{item.campaign_id}</p>
                       </div>
                     ))}
                   </div>
@@ -989,10 +1093,23 @@ export default function EntityInvestigation({ initialEntityKey, analystId, princ
                 {copilotLoading ? "Asking…" : "Ask"}
               </button>
             </div>
+            <div className="chip-row" style={{ marginTop: 10 }}>
+              {[
+                "Explain this in plain English",
+                "What does the graph score mean here?",
+                "Is this low risk or urgent?",
+                "What should I say in a presentation about this entity?",
+                "How real is the data behind this score?",
+              ].map((prompt) => (
+                <button key={prompt} className="chip ghost" type="button" onClick={() => setCopilotQuestion(prompt)}>
+                  {prompt}
+                </button>
+              ))}
+            </div>
             {copilotAnswer && (
               <div className="panel-subsection">
                 <div className="list-item">
-                  <p style={{ lineHeight: 1.7, margin: 0 }}>{copilotAnswer}</p>
+                  <p style={{ lineHeight: 1.7, margin: 0, whiteSpace: "pre-wrap" }}>{copilotAnswer}</p>
                 </div>
               </div>
             )}

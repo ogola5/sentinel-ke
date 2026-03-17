@@ -44,6 +44,76 @@ def _severity(score: float | None) -> str:
     return "low"
 
 
+def _operator_decision(score: float | None, uncertainty: float | None) -> tuple[str, str]:
+    value = float(score or 0.0)
+    uncertainty_value = float(uncertainty or 0.0)
+    if value >= 85 and uncertainty_value < 0.45:
+        return "Act now after quick human confirmation.", "The signal is severe and relatively confident."
+    if value >= 70:
+        return "Review now and prepare containment.", "The signal is elevated enough to justify immediate analyst attention."
+    if value >= 55:
+        return "Investigate soon; do not auto-contain yet.", "The signal is meaningful but still needs corroboration."
+    return "Monitor only; no immediate action is required from your side.", "The current score is low enough for observation rather than intervention."
+
+
+def _data_realism_note(
+    *,
+    real_ratio: float | None,
+    avg_real_signal_ratio: float | None,
+    feedback_override_count: int,
+    feedback_consumed_count: int,
+) -> str:
+    if real_ratio is None:
+        base = "No current data-mix record is attached to this model run."
+    elif real_ratio >= 0.7:
+        base = "This run is mostly driven by real or mixed-source signals."
+    elif real_ratio >= 0.35:
+        base = "This run uses a mixed real-plus-synthetic dataset."
+    else:
+        base = "This run is still mostly synthetic or demo-oriented and should be used for triage, not proof."
+
+    detail: list[str] = []
+    if real_ratio is not None:
+        detail.append(f"Real-signal ratio is {round(real_ratio * 100)}%.")
+    if avg_real_signal_ratio is not None:
+        detail.append(f"Average per-node real coverage is {round(avg_real_signal_ratio * 100)}%.")
+    if feedback_override_count > 0:
+        feedback_sentence = f"{feedback_override_count} analyst feedback label(s) influenced training"
+        if feedback_consumed_count > 0:
+            feedback_sentence += f", including {feedback_consumed_count} newly consumed"
+        detail.append(f"{feedback_sentence}.")
+    return " ".join([base, *detail]).strip()
+
+
+def _graph_meaning(path_score: AIAttackPathScore | None, evidence_paths: list[Any]) -> str:
+    if not path_score:
+        return "Graph reasoning is not yet attached, so this score is coming mostly from model output and supporting evidence rather than a verified graph route."
+    hops = int(path_score.hop_count or 0)
+    value = float(path_score.path_score or 0.0)
+    if evidence_paths:
+        return (
+            f"Graph path score is {value:.1f}/100 across {hops} hop(s): it measures how strongly this entity is structurally linked to risky neighbours, "
+            "shared events, or campaign routes."
+        )
+    return (
+        f"Graph path score is {value:.1f}/100 across {hops} hop(s), but no evidence path is attached yet. "
+        "Treat the structural signal as suggestive rather than fully explained."
+    )
+
+
+def _containment_readiness(active_webhooks: int, recommended_controls: list[str], latest_containment: ContainmentAction | None) -> str:
+    if latest_containment:
+        return (
+            f"Latest containment record is {latest_containment.action_type} on {latest_containment.target} with status {latest_containment.status}. "
+            f"There are {active_webhooks} active webhook(s) available for partner-side delivery."
+        )
+    if active_webhooks <= 0:
+        return "Containment is not operationally ready yet because no active partner webhook is registered."
+    if not recommended_controls:
+        return f"There are {active_webhooks} active webhook(s), but the explanation did not return a recommended control for this entity."
+    return f"Containment is available: {active_webhooks} active webhook(s) are registered and the explanation returned response guidance."
+
+
 def _status_from_age(dt: datetime | None, *, warn_hours: int, fail_hours: int) -> tuple[str, str, float | None]:
     if not dt:
         return "fail", "No records found.", None
@@ -202,6 +272,12 @@ def build_entity_trust_summary(
     inferred_tools = techniques_to_tools(technique_ids) if technique_ids else []
     linked_campaigns = _campaign_links(db, entity_key=entity_key)
     active_webhooks = db.query(ContainmentWebhook).filter(ContainmentWebhook.is_active.is_(True)).count()
+    latest_containment = (
+        db.query(ContainmentAction)
+        .filter(ContainmentAction.target.in_([entity_key, entity_key.split(":", 1)[1] if ":" in entity_key else entity_key]))
+        .order_by(ContainmentAction.executed_at.desc(), ContainmentAction.created_at.desc())
+        .first()
+    )
 
     evidence_hashes = list(explanation.evidence_hashes or []) if explanation else []
     evidence_paths = list(explanation.evidence_paths or []) if explanation else []
@@ -213,8 +289,23 @@ def build_entity_trust_summary(
     fairness_status = "fail" if fairness_disparity >= 0.75 else ("warn" if fairness_disparity >= 0.35 else "pass")
 
     real_gate = dict((run.metrics_json or {}).get("real_data_gate") or {}) if run else {}
+    provenance = dict((run.metrics_json or {}).get("provenance") or {}) if run else {}
+    feedback_metrics = dict((run.metrics_json or {}).get("feedback") or {}) if run else {}
     real_data_passed = bool(real_gate.get("passed", False))
     drift_status = str(drift.status or "unknown") if drift else "unknown"
+    real_ratio = float(provenance.get("real_ratio")) if provenance.get("real_ratio") is not None else None
+    avg_real_signal_ratio = (
+        float(provenance.get("avg_real_signal_ratio"))
+        if provenance.get("avg_real_signal_ratio") is not None
+        else None
+    )
+    feedback_override_count = int(feedback_metrics.get("override_count") or 0)
+    feedback_consumed_count = int(
+        feedback_metrics.get("consumed_count")
+        or feedback_metrics.get("new_feedback_count")
+        or 0
+    )
+    operator_decision, operator_reason = _operator_decision(prediction.score, prediction.uncertainty)
 
     trust_checks = [
         _trust_check(
@@ -286,7 +377,10 @@ def build_entity_trust_summary(
 
     label_strategy = dict((run.metrics_json or {}).get("label_strategy") or {}) if run else {}
     operator_brief = {
-        "headline": f"{entity_key} is currently assessed as {_severity(prediction.score)} risk.",
+        "headline": (
+            f"{entity_key} is currently assessed as {_severity(prediction.score)} risk at {float(prediction.score or 0.0):.1f}/100. "
+            f"{operator_decision}"
+        ),
         "what_system_saw": [
             f"{len(explanation.reason_codes or []) if explanation else len(prediction.reason_codes or [])} reason codes contributed to the latest score.",
             f"{len(linked_campaigns)} linked campaign indicators reference this entity." if linked_campaigns else "No linked campaign indicators currently reference this entity.",
@@ -294,12 +388,23 @@ def build_entity_trust_summary(
             f"{len(evidence_hashes)} evidence hashes and {len(evidence_paths)} evidence paths are available for review.",
         ],
         "why_it_matters": [
+            operator_reason,
             f"Decision source: {prediction.decision_source or 'model'}; kill-chain stage: {prediction.kill_chain_stage or 'unknown'}.",
             f"Decision fusion is {fusion.decision if fusion else 'not available'} with score {float(fusion.fused_score or 0.0):.1f}/100." if fusion else "No decision-fusion record is available yet.",
             "AI output is an investigative indicator and must be corroborated before enforcement.",
         ],
         "next_actions": next_actions[:5],
         "caveat": str(label_strategy.get("eval_caveat") or "Model quality depends on the current event and analyst-feedback coverage."),
+        "operator_decision": operator_decision,
+        "likelihood_indicator": f"{round(float(prediction.score or 0.0))}/100 cyber-risk likelihood indicator",
+        "graph_meaning": _graph_meaning(path_score, evidence_paths),
+        "data_realism": _data_realism_note(
+            real_ratio=real_ratio,
+            avg_real_signal_ratio=avg_real_signal_ratio,
+            feedback_override_count=feedback_override_count,
+            feedback_consumed_count=feedback_consumed_count,
+        ),
+        "containment_readiness": _containment_readiness(active_webhooks, recommended_controls, latest_containment),
     }
 
     return {
@@ -344,6 +449,8 @@ def build_entity_trust_summary(
             "drift_status": drift_status,
             "drift_score": float(drift.drift_score or 0.0) if drift else None,
             "label_strategy": label_strategy,
+            "provenance": provenance,
+            "feedback_metrics": feedback_metrics,
         },
         "trust_checks": trust_checks,
         "linked_campaigns": linked_campaigns[:8],

@@ -143,6 +143,11 @@ export interface EntityTrustSummary {
     why_it_matters: string[];
     next_actions: string[];
     caveat: string;
+    operator_decision?: string;
+    likelihood_indicator?: string;
+    graph_meaning?: string;
+    data_realism?: string;
+    containment_readiness?: string;
   };
   evidence_summary: {
     reason_count: number;
@@ -170,6 +175,8 @@ export interface EntityTrustSummary {
     label_strategy?: Record<string, unknown>;
     fairness?: Record<string, unknown>;
     real_data_gate?: Record<string, unknown>;
+    provenance?: Record<string, unknown>;
+    feedback_metrics?: Record<string, unknown>;
   };
   trust_checks: TrustCheck[];
   linked_campaigns: Array<{

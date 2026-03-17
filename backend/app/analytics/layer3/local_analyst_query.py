@@ -16,6 +16,7 @@ from app.analytics.ai_models import (
 )
 from app.analytics.layer3.ai_intel import techniques_to_tools
 from app.analytics.layer3.forecasting import build_risk_forecast
+from app.analytics.layer3.trust_service import build_entity_trust_summary, build_platform_trust_summary
 from app.core.config import settings
 from app.defense.models import ContainmentAction
 from app.legal.models import LegalEvidenceBundle
@@ -35,6 +36,23 @@ SUSPICIOUS_EVENT_TYPES = (
     "VULNERABILITY_EVENT",
 )
 
+PLATFORM_PRESENTATION_FLOW = [
+    "Open National Command first to frame the national threat picture and platform readiness.",
+    "Move to Entity Investigation to explain one entity in plain language: score, uncertainty, graph links, and actions.",
+    "Then show Campaigns and Cases to prove escalation from one entity to a coordinated case.",
+    "Close with Reports or Defense so the audience sees operational output, not just analytics.",
+]
+
+SCREEN_GUIDE = {
+    "command": "Use National Command for national posture, partner freshness, resilience, and governance.",
+    "investigation": "Use Entity Investigation for one entity, one explanation, one decision. It is the best screen for live explanation.",
+    "campaigns": "Use Campaigns to show how isolated entities become coordinated activity.",
+    "cases": "Use Cases to export a structured case packet or STIX artifact.",
+    "reports": "Use Reports to show plain-English outputs for leadership, investigators, or oversight.",
+    "gnn": "Use GNN Intelligence to explain model quality, uncertainty, real-vs-synthetic mix, and analyst feedback usage.",
+    "defense": "Use Defense to show governed action, webhook delivery, and incident-run tracking.",
+}
+
 
 def _pick_entity_key(question: str, context: Mapping[str, Any] | None) -> str | None:
     if context:
@@ -48,6 +66,12 @@ def _pick_entity_key(question: str, context: Mapping[str, Any] | None) -> str | 
 def _detect_intent(question: str) -> str:
     q = str(question or "").lower()
     score_map = {
+        "presentation": sum(w in q for w in ("present", "presentation", "demo", "judge", "show", "screen", "click", "say")),
+        "platform": sum(w in q for w in ("platform", "workflow", "what can", "how do i use", "which screen", "where should")),
+        "mfa": sum(w in q for w in ("mfa", "otp", "totp", "two-factor", "2fa", "step-up", "authenticator")),
+        "gnn": sum(w in q for w in ("gnn", "model", "uncertainty", "confidence", "fused", "score meaning")),
+        "graph": sum(w in q for w in ("graph", "path", "hop", "linked", "campaign link", "relationship")),
+        "data_realism": sum(w in q for w in ("real data", "synthetic", "realness", "provenance", "mixed data", "public feed")),
         "forecast": sum(w in q for w in ("forecast", "predict", "likelihood", "next week", "trend", "rising")),
         "containment": sum(w in q for w in ("contain", "block", "isolate", "mitigate", "response", "action")),
         "tools": sum(w in q for w in ("tool", "malware", "software", "family", "mimikatz", "cobalt", "impacket")),
@@ -186,6 +210,160 @@ def _format_list(values: Sequence[str]) -> str:
     return ", ".join(vals)
 
 
+def _screen_hint_from_question(question: str) -> str | None:
+    q = str(question or "").lower()
+    for key, text in SCREEN_GUIDE.items():
+        if key in q:
+            return text
+    if "investigate" in q or "entity" in q:
+        return SCREEN_GUIDE["investigation"]
+    if "report" in q:
+        return SCREEN_GUIDE["reports"]
+    if "federation" in q:
+        return SCREEN_GUIDE["command"]
+    return None
+
+
+def _screen_hint_from_context(context: Mapping[str, Any] | None) -> str | None:
+    if not context:
+        return None
+    current_screen = str(context.get("current_screen") or "").strip().lower()
+    if current_screen and current_screen in SCREEN_GUIDE:
+        return SCREEN_GUIDE[current_screen]
+    screen_title = str(context.get("screen_title") or "").strip()
+    screen_purpose = str(context.get("screen_purpose") or "").strip()
+    next_screen = str(context.get("next_screen") or "").strip()
+    bits = [part for part in (screen_title, screen_purpose) if part]
+    if next_screen:
+        bits.append(f"Best next move from the UI is {next_screen}.")
+    return " ".join(bits) if bits else None
+
+
+def _presentation_answer(
+    *,
+    entity_key: str | None,
+    trust_summary: Mapping[str, Any] | None,
+    platform_summary: Mapping[str, Any] | None,
+    screen_hint: str | None,
+) -> str:
+    parts: list[str] = []
+    if entity_key and trust_summary:
+        brief = dict(trust_summary.get("operator_brief") or {})
+        parts.append(
+            f"For a strong live demo, start with Entity Investigation on {entity_key}. "
+            f"Lead with: {str(brief.get('headline') or 'Explain the current risk posture in plain language.')}"
+        )
+        if brief.get("graph_meaning"):
+            parts.append(f"When asked about the graph, say: {brief['graph_meaning']}")
+        if brief.get("data_realism"):
+            parts.append(f"When asked about data quality, say: {brief['data_realism']}")
+        if brief.get("containment_readiness"):
+            parts.append(f"For response, say: {brief['containment_readiness']}")
+    else:
+        parts.append("Use this order in the presentation: " + " ".join(PLATFORM_PRESENTATION_FLOW))
+
+    if platform_summary:
+        headline = str(platform_summary.get("headline") or "").strip()
+        if headline:
+            parts.append(f"Platform trust summary right now: {headline}")
+        actions = list(platform_summary.get("recommended_actions") or [])
+        if actions:
+            parts.append(f"Most defensible platform follow-up: {actions[0]}")
+    if screen_hint:
+        parts.append(screen_hint)
+    return " ".join(part for part in parts if part)
+
+
+def _platform_answer(platform_summary: Mapping[str, Any] | None, screen_hint: str | None) -> str:
+    if not platform_summary:
+        return screen_hint or "Sentinel-KE is strongest when you show Command, Entity Investigation, Campaigns, Cases, and Reports in one sequence."
+    headline = str(platform_summary.get("headline") or "Platform trust summary unavailable.")
+    actions = list(platform_summary.get("recommended_actions") or [])
+    tail = f" Recommended next step: {actions[0]}." if actions else ""
+    hint = f" {screen_hint}" if screen_hint else ""
+    return (
+        f"{headline}{tail}{hint} "
+        "The strongest story is event to entity to campaign to case to report, with governance visible throughout."
+    )
+
+
+def _entity_gnn_answer(
+    *,
+    entity_key: str,
+    prediction: AIPrediction,
+    trust_summary: Mapping[str, Any] | None,
+    fusion_value: float,
+) -> str:
+    brief = dict((trust_summary or {}).get("operator_brief") or {})
+    severity = str((trust_summary or {}).get("prediction", {}).get("severity") or "unknown")
+    headline = str(brief.get("headline") or "")
+    graph_meaning = str(brief.get("graph_meaning") or "").strip()
+    return (
+        f"The GNN is not claiming certainty. It is estimating how risky {entity_key} looks after considering graph neighbourhood, shared behaviour, and prior evidence. "
+        f"Current posture is {severity} risk at {float(prediction.score or 0.0):.1f}/100 with uncertainty {float(prediction.uncertainty or 0.0):.2f}. "
+        f"Fusion score is {fusion_value:.1f}/100. "
+        f"{headline} {graph_meaning}".strip()
+    )
+
+
+def _entity_graph_answer(entity_key: str, trust_summary: Mapping[str, Any] | None) -> str:
+    brief = dict((trust_summary or {}).get("operator_brief") or {})
+    graph_meaning = str(brief.get("graph_meaning") or "").strip()
+    linked = list((trust_summary or {}).get("linked_campaigns") or [])
+    linked_sentence = (
+        f"{len(linked)} linked campaign indicator(s) currently reference this entity."
+        if linked
+        else "No linked campaign indicators currently reference this entity."
+    )
+    if graph_meaning:
+        return f"{graph_meaning} {linked_sentence}"
+    return (
+        f"For {entity_key}, the graph view should be read as relationship evidence: who this entity is connected to, what they shared, "
+        "and whether those links look operationally risky."
+    )
+
+
+def _data_realism_answer(
+    *,
+    trust_summary: Mapping[str, Any] | None,
+    platform_summary: Mapping[str, Any] | None,
+) -> str:
+    if trust_summary:
+        brief = dict(trust_summary.get("operator_brief") or {})
+        if brief.get("data_realism"):
+            return str(brief["data_realism"])
+    if platform_summary:
+        models = list(platform_summary.get("model_governance") or [])
+        if models:
+            bits = []
+            for row in models[:2]:
+                prediction_type = str(row.get("prediction_type") or "model")
+                real_ratio = row.get("real_ratio")
+                caveat = str(row.get("label_caveat") or "").strip()
+                if isinstance(real_ratio, (int, float)):
+                    bits.append(f"{prediction_type} real-signal ratio is {round(float(real_ratio) * 100)}%")
+                if caveat:
+                    bits.append(caveat)
+            if bits:
+                return " ".join(bits) + " Mixed public threat feeds, synthetic scenarios, and analyst feedback are all visible in governance."
+    return "The platform uses mixed public threat feeds, synthetic scenarios, and analyst feedback. The key is to state that provenance honestly, not to overclaim."
+
+
+def _mfa_answer(context: Mapping[str, Any] | None, screen_hint: str | None) -> str:
+    mfa_authenticated = bool((context or {}).get("principal_mfa_authenticated") is True)
+    state = (
+        "The current session already has recent MFA authentication."
+        if mfa_authenticated
+        else "The current session is not yet step-up authenticated."
+    )
+    screen_part = f" {screen_hint}" if screen_hint else ""
+    return (
+        f"{state} To demonstrate MFA live, use the Assistant security tools to start enrollment, add the TOTP secret to an authenticator app, verify one 6-digit code, "
+        "then sign in again so the login flow prompts for the code. After that, central write actions that require step-up are easier to defend in front of judges."
+        f"{screen_part}"
+    )
+
+
 def answer_local_analyst_query(
     *,
     db: Session,
@@ -200,6 +378,25 @@ def answer_local_analyst_query(
     fusion = _latest_fusion_score(db, entity_key) if entity_key else None
     containment = _latest_containment(db, entity_key) if entity_key else None
     bundle = _latest_bundle(db)
+    trust_summary = None
+    platform_summary = None
+    screen_hint = _screen_hint_from_question(question) or _screen_hint_from_context(context)
+
+    if entity_key and prediction:
+        try:
+            trust_summary = build_entity_trust_summary(
+                db=db,
+                entity_key=entity_key,
+                prediction_type=prediction.prediction_type,
+            )
+        except Exception:
+            trust_summary = None
+
+    if intent in {"presentation", "platform", "data_realism"} or not entity_key:
+        try:
+            platform_summary = build_platform_trust_summary(db=db)
+        except Exception:
+            platform_summary = None
 
     if intent == "forecast":
         forecast = _forecast_summary(db)
@@ -235,6 +432,35 @@ def answer_local_analyst_query(
             "sources": ["event_log"],
         }
 
+    if intent == "presentation":
+        return {
+            "answer": _presentation_answer(
+                entity_key=entity_key,
+                trust_summary=trust_summary,
+                platform_summary=platform_summary,
+                screen_hint=screen_hint,
+            ),
+            "model": settings.ai_copilot_model,
+            "intent": intent,
+            "sources": ["ai_prediction", "trust_summary", "platform_trust_summary"],
+        }
+
+    if intent == "platform":
+        return {
+            "answer": _platform_answer(platform_summary=platform_summary, screen_hint=screen_hint),
+            "model": settings.ai_copilot_model,
+            "intent": intent,
+            "sources": ["platform_trust_summary"],
+        }
+
+    if intent == "mfa":
+        return {
+            "answer": _mfa_answer(context, screen_hint),
+            "model": settings.ai_copilot_model,
+            "intent": intent,
+            "sources": ["auth_workflow", "platform_trust_summary"],
+        }
+
     if entity_key and prediction:
         technique_rows = _latest_techniques(db, entity_key, prediction.window_end)
         technique_ids = [str(r.technique_id) for r in technique_rows]
@@ -244,6 +470,7 @@ def answer_local_analyst_query(
         control_list = list((explanation.recommended_controls_json if explanation else []) or [])
         path_value = float(path_score.path_score or 0.0) if path_score else 0.0
         fusion_value = float(fusion.fused_score or 0.0) if fusion else 0.0
+        operator_brief = dict((trust_summary or {}).get("operator_brief") or {})
 
         if intent == "tools":
             if tools:
@@ -268,6 +495,8 @@ def answer_local_analyst_query(
                     f"Recommended actions for {entity_key}: {_format_list(control_list[:5])}. "
                     f"No executed containment action is recorded yet."
                 )
+            if operator_brief.get("containment_readiness"):
+                answer = f"{answer} {operator_brief['containment_readiness']}"
         elif intent == "evidence":
             answer = (
                 f"{entity_key} scored {float(prediction.score or 0.0):.2f} with reasons {_format_list(top_reasons)}. "
@@ -275,14 +504,35 @@ def answer_local_analyst_query(
                 f"Graph evidence paths recorded: {len(evidence_paths)}. "
                 f"Latest legal bundle present: {'yes' if bundle else 'no'}."
             )
-        else:
-            answer = (
-                f"{entity_key} is currently scored {float(prediction.score or 0.0):.2f} "
-                f"({str(prediction.kill_chain_stage or 'unknown_stage')}). "
-                f"Top reasons: {_format_list(top_reasons)}. "
-                f"Path score: {path_value:.2f}. "
-                f"Fusion score: {fusion_value:.2f}."
+        elif intent == "graph":
+            answer = _entity_graph_answer(entity_key, trust_summary)
+        elif intent == "gnn":
+            answer = _entity_gnn_answer(
+                entity_key=entity_key,
+                prediction=prediction,
+                trust_summary=trust_summary,
+                fusion_value=fusion_value,
             )
+        elif intent == "data_realism":
+            answer = _data_realism_answer(trust_summary=trust_summary, platform_summary=platform_summary)
+        else:
+            if operator_brief:
+                answer = " ".join(
+                    [
+                        str(operator_brief.get("headline") or "").strip(),
+                        str(operator_brief.get("graph_meaning") or "").strip(),
+                        str(operator_brief.get("containment_readiness") or "").strip(),
+                        str(operator_brief.get("data_realism") or "").strip(),
+                    ]
+                ).strip()
+            else:
+                answer = (
+                    f"{entity_key} is currently scored {float(prediction.score or 0.0):.2f} "
+                    f"({str(prediction.kill_chain_stage or 'unknown_stage')}). "
+                    f"Top reasons: {_format_list(top_reasons)}. "
+                    f"Path score: {path_value:.2f}. "
+                    f"Fusion score: {fusion_value:.2f}."
+                )
 
         return {
             "answer": answer,
@@ -298,18 +548,17 @@ def answer_local_analyst_query(
         }
 
     if prediction:
-        answer = (
-            f"Latest national cyber prediction window is {prediction.window_key} ending "
-            f"{prediction.window_end.isoformat()}. Highest observed entity score is "
-            f"{float(prediction.score or 0.0):.2f} for {prediction.entity_key}."
-        )
+        answer = _platform_answer(platform_summary=platform_summary, screen_hint=screen_hint)
     else:
-        answer = "No cyber AI predictions are available yet. Train or infer a risk_gnn model first."
+        answer = (
+            "No cyber AI predictions are available yet. Bootstrap demo data or run a risk_gnn training cycle first, "
+            "then use Entity Investigation to explain one entity clearly."
+        )
 
     return {
         "answer": answer,
         "model": settings.ai_copilot_model,
         "intent": intent,
-        "sources": ["ai_prediction"],
+        "sources": ["ai_prediction", "platform_trust_summary"],
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }

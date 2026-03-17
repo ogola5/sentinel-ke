@@ -14,11 +14,13 @@ export default function Topbar({
   entityQuery,
   entities,
   inspectorOpen,
+  assistantOpen,
   onToggleSource,
   onSelectTimeWindow,
   onEntityQueryChange,
   onInvestigateEntity,
   onOpenInspector,
+  onToggleAssistant,
 }: {
   activeScreen: ScreenId;
   sourceFilters: Record<SourceType, boolean>;
@@ -26,11 +28,13 @@ export default function Topbar({
   entityQuery: string;
   entities: EntityProfile[];
   inspectorOpen: boolean;
+  assistantOpen: boolean;
   onToggleSource: (source: SourceType) => void;
   onSelectTimeWindow: (id: string) => void;
   onEntityQueryChange: (query: string) => void;
   onInvestigateEntity: (entity: EntityProfile) => void;
   onOpenInspector: () => void;
+  onToggleAssistant: () => void;
 }) {
   const chrome = SCREEN_CHROME[activeScreen];
   const showSourceFilters = Boolean(chrome.showSourceFilters);
@@ -125,6 +129,9 @@ export default function Topbar({
         )}
 
         <div className="topbar-end">
+          <button className={assistantOpen ? "chip active" : "chip ghost"} type="button" onClick={onToggleAssistant} title="Open platform assistant">
+            Assistant
+          </button>
           {!inspectorOpen && (
             <button className="chip ghost" type="button" onClick={onOpenInspector} title="Open entity inspector">
               Inspector
