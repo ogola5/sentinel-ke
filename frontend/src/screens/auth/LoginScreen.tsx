@@ -4,6 +4,7 @@ import {
   Lock, ChevronDown, ChevronUp, Terminal, Info,
 } from "lucide-react";
 import { apiLogin, saveSession } from "../../api/auth";
+import { LOGIN_NOTICE_KEY } from "../../api/auth";
 import { KENYA_AGENCIES } from "../../types/auth";
 import type { Principal } from "../../types/auth";
 
@@ -38,6 +39,10 @@ export default function LoginScreen({ onLogin }: Props) {
   const [step, setStep]         = useState<"credentials" | "mfa">("credentials");
   const [guideOpen, setGuideOpen] = useState(false);
   const [activePreset, setActivePreset] = useState<string | null>(null);
+  const [loginNotice, setLoginNotice] = useState<string>(() => {
+    if (typeof window === "undefined") return "";
+    return window.localStorage.getItem(LOGIN_NOTICE_KEY) ?? "";
+  });
 
   const agencyCodes = Object.keys(KENYA_AGENCIES);
 
@@ -63,6 +68,9 @@ export default function LoginScreen({ onLogin }: Props) {
         password,
         step === "mfa" ? otpCode.trim() : undefined,
       );
+      if (typeof window !== "undefined") {
+        window.localStorage.removeItem(LOGIN_NOTICE_KEY);
+      }
       saveSession(session);
       onLogin(session.principal);
     } catch (err: unknown) {
@@ -124,6 +132,26 @@ export default function LoginScreen({ onLogin }: Props) {
           <div className="agency-hint">
             <span className="status-dot live" />
             &nbsp;{agencyLabel}
+          </div>
+        )}
+
+        {loginNotice && (
+          <div className="agency-hint" style={{ borderColor: "rgba(var(--accent-rgb), 0.35)", background: "rgba(var(--accent-rgb), 0.08)" }}>
+            <Info size={13} />
+            <span style={{ marginLeft: 8 }}>{loginNotice}</span>
+            <button
+              type="button"
+              className="btn-ghost"
+              style={{ marginLeft: "auto", padding: "2px 8px" }}
+              onClick={() => {
+                setLoginNotice("");
+                if (typeof window !== "undefined") {
+                  window.localStorage.removeItem(LOGIN_NOTICE_KEY);
+                }
+              }}
+            >
+              ×
+            </button>
           </div>
         )}
 

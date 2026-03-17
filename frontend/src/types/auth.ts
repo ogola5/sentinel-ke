@@ -3,6 +3,8 @@ export type AccessLevel = "section" | "central";
 export type UserRole = "admin" | "analyst" | "operator" | "auditor";
 
 export interface Principal {
+  principal_type?: "user" | "api_key";
+  actor_id?: string;
   user_id: string;
   username: string;
   display_name: string | null;
@@ -10,7 +12,8 @@ export interface Principal {
   access_level: AccessLevel;
   section_code: string | null;
   scopes: string[];
-  principal_type: "user" | "api_key";
+  mfa_authenticated?: boolean;
+  mfa_at?: string | null;
 }
 
 export interface AuthSession {

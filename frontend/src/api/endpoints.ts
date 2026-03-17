@@ -197,6 +197,9 @@ export const endpoints = {
   authUserPasswordReset: (username: string) =>
     withBase(`/v1/auth/users/${encodeURIComponent(username)}/password/reset`),
   authPolicies: () => withBase("/v1/auth/policies"),
+  authMfaEnrollStart: () => withBase("/v1/auth/mfa/enroll/start"),
+  authMfaEnrollVerify: () => withBase("/v1/auth/mfa/enroll/verify"),
+  authMfaDisable: () => withBase("/v1/auth/mfa/disable"),
 };
 
 export type Endpoints = typeof endpoints;

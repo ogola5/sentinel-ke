@@ -190,6 +190,44 @@ function loadAnalystId(): string {
   return generated;
 }
 
+function describeDataRealism(
+  realRatio: number | null,
+  avgRealSignalRatio: number | null,
+  feedbackOverrideCount: number | null,
+  feedbackConsumedCount: number | null,
+): string {
+  let base = "No current provenance statement is attached to this run.";
+  if (realRatio != null) {
+    if (realRatio >= 0.7) {
+      base = "This run is mostly driven by real or mixed-source signals.";
+    } else if (realRatio >= 0.35) {
+      base = "This run uses a mixed real-plus-synthetic dataset.";
+    } else {
+      base = "This run is still mostly synthetic or demo-oriented and should be used for triage, not proof.";
+    }
+  }
+  const extras: string[] = [];
+  if (realRatio != null) extras.push(`Real-signal ratio ${Math.round(realRatio * 100)}%.`);
+  if (avgRealSignalRatio != null) extras.push(`Average per-node real coverage ${Math.round(avgRealSignalRatio * 100)}%.`);
+  if (feedbackOverrideCount != null && feedbackOverrideCount > 0) {
+    extras.push(
+      `${feedbackOverrideCount} analyst feedback label${feedbackOverrideCount === 1 ? "" : "s"} influenced training${feedbackConsumedCount != null ? `, including ${feedbackConsumedCount} newly consumed` : ""}.`,
+    );
+  }
+  return [base, ...extras].join(" ");
+}
+
+function describeModelMeaning(domain: Domain): string {
+  if (domain === "corruption") {
+    return "This GNN looks for risky relationships across suppliers, payments, procurement entities, and governance signals. A higher score means the entity deserves more integrity review, not automatic enforcement.";
+  }
+  return "This GNN looks at linked cyber entities and shared activity, not isolated alerts. A higher score means the entity deserves more analyst attention, not that an attack is certain.";
+}
+
+function describeUncertaintyMeaning(): string {
+  return "Uncertainty is the model’s caution signal. High uncertainty means the analyst should slow down, read the evidence, and avoid treating the score as proof.";
+}
+
 interface Props {
   healthGnnLoaded: boolean;
   healthModelVersion: string | null;
@@ -398,6 +436,14 @@ export default function GNNIntelligence({
   const needsReviewCount = sortedPredictions.filter((prediction) => (prediction.uncertainty ?? 0) >= 0.5).length;
   const abstainedCount = sortedPredictions.filter((prediction) => prediction.abstained).length;
   const viewContent = GNN_VIEW_CONTENT[view];
+  const dataRealismStatement = describeDataRealism(
+    realRatio,
+    avgRealSignalRatio,
+    feedbackOverrideCount,
+    feedbackConsumedCount,
+  );
+  const modelMeaningStatement = describeModelMeaning(activeDomain);
+  const uncertaintyMeaningStatement = describeUncertaintyMeaning();
 
   return (
     <div className="screen">
@@ -493,6 +539,50 @@ export default function GNNIntelligence({
               </div>
             </div>
           )}
+
+          <div className="grid-two">
+            <div className="panel workflow-stage-panel">
+              <div className="panel-header">
+                <h3>What this model means in plain language</h3>
+                <span className="muted">{activeDomain === "cyber" ? "Cyber explanation" : "Integrity explanation"}</span>
+              </div>
+              <div className="list">
+                <div className="list-item">
+                  <strong>What the GNN is doing</strong>
+                  <p className="muted" style={{ marginTop: 4 }}>{modelMeaningStatement}</p>
+                </div>
+                <div className="list-item">
+                  <strong>How to read the score</strong>
+                  <p className="muted" style={{ marginTop: 4 }}>
+                    Low scores usually mean monitor only. Mid-range scores mean investigate soon. High scores mean review now and prepare response. The score is a likelihood-style attention signal, not proof.
+                  </p>
+                </div>
+                <div className="list-item">
+                  <strong>How to read uncertainty</strong>
+                  <p className="muted" style={{ marginTop: 4 }}>{uncertaintyMeaningStatement}</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="panel workflow-stage-panel">
+              <div className="panel-header">
+                <h3>Current data realism</h3>
+                <span className="muted">Public feeds + synthetic scenarios + analyst feedback</span>
+              </div>
+              <div className="list">
+                <div className="list-item">
+                  <strong>Provenance statement</strong>
+                  <p className="muted" style={{ marginTop: 4 }}>{dataRealismStatement}</p>
+                </div>
+                <div className="list-item">
+                  <strong>How to present it</strong>
+                  <p className="muted" style={{ marginTop: 4 }}>
+                    Be explicit that this MVP uses mixed-source data. The strength is that Sentinel-KE shows the provenance and lets analyst feedback improve future runs.
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
 
           <div className="metric-grid">
             <div className="metric-card accent">
@@ -859,13 +949,17 @@ export default function GNNIntelligence({
               </div>
               <div className="list">
                 <div className="list-item">
+                  <strong>Plain-language state</strong>
+                  <p className="muted">{dataRealismStatement}</p>
+                </div>
+                <div className="list-item">
                   <strong>Graph coverage</strong>
                   <p className="muted">Nodes: {nodeCount ?? "—"} · Edges: {edgeCount ?? "—"} · Positives: {positiveCount ?? "—"}</p>
                 </div>
                 <div className="list-item">
                   <strong>Real-data gate</strong>
                   <p className="muted">
-                    {latestRun?.real_data_gate_passed === false ? "Failed for the latest run." : "No failure recorded on the latest run."}
+                    {latestRun?.real_data_gate_passed === false ? "The latest run did not naturally pass the real-data gate." : "No real-data gate failure was recorded on the latest run."}
                     {realRatio != null ? ` Real ratio ${Math.round(realRatio * 100)}%.` : ""}
                     {avgRealSignalRatio != null ? ` Avg per-node real signal ${Math.round(avgRealSignalRatio * 100)}%.` : ""}
                     {realGateOverrideApplied ? " Demo override was applied so the run completed despite low real-data coverage." : ""}

@@ -4,6 +4,7 @@ import type { AuthSession, AuthUser, Principal } from "../types/auth";
 
 const SESSION_KEY = "sentinel_auth_session";
 const PRINCIPAL_KEY = "sentinel_principal";
+export const LOGIN_NOTICE_KEY = "sentinel_login_notice";
 
 // ── Persist / load ─────────────────────────────────────────────────────────
 
@@ -115,6 +116,39 @@ export async function apiAdminResetPassword(
   await apiFetchJson<unknown>(endpoints.authUserPasswordReset(username), {
     method: "POST",
     body: JSON.stringify({ new_password: newPassword, revoke_existing_sessions: true }),
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+export async function apiStartMfaEnrollment(): Promise<{
+  status: string;
+  username: string;
+  secret: string;
+  issuer: string;
+  provisioning_uri: string;
+}> {
+  return apiFetchJson(endpoints.authMfaEnrollStart(), {
+    method: "POST",
+  });
+}
+
+export async function apiVerifyMfaEnrollment(
+  otpCode: string,
+): Promise<{ status: string; mfa_enabled: boolean; revoked_sessions: number }> {
+  return apiFetchJson(endpoints.authMfaEnrollVerify(), {
+    method: "POST",
+    body: JSON.stringify({ otp_code: otpCode }),
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+export async function apiDisableMfa(
+  otpCode: string,
+  currentPassword: string,
+): Promise<{ status: string; mfa_enabled: boolean; revoked_sessions: number }> {
+  return apiFetchJson(endpoints.authMfaDisable(), {
+    method: "POST",
+    body: JSON.stringify({ otp_code: otpCode, current_password: currentPassword }),
     headers: { "Content-Type": "application/json" },
   });
 }
