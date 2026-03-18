@@ -4,6 +4,7 @@ import type {
   AIFeedback,
   AIDriftReport,
   AIPrediction,
+  AIScenarioForecast,
   CryptoPosture,
   EntityTrustSummary,
   GNNTrainingRun,
@@ -64,18 +65,25 @@ export async function seedDemoData(
 
 export async function bootstrapDemoData(
   domain: "cyber" | "corruption",
+  scenario = "ddos_vpn_fraud",
 ): Promise<{ accepted: boolean; domain: string; scenario: string; message: string }> {
   return apiFetchJson(endpoints.demoBootstrap(), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       domain,
-      scenario: "ddos_vpn_fraud",
+      scenario,
       epochs: 25,
       allow_demo_real_data_override: true,
       allow_demo_fairness_override: true,
     }),
   });
+}
+
+export async function startDemoScenario(
+  scenario: string,
+): Promise<{ accepted: boolean; status: string; scenario: string; normalized_scenario?: string; message?: string }> {
+  return apiFetchJson(endpoints.demoScenarioStart(scenario), { method: "POST" });
 }
 
 export async function fetchGNNTrainingRuns(limit = 10, options: QueryOptions = {}): Promise<GNNTrainingRun[]> {
@@ -219,6 +227,20 @@ export async function fetchAIForecast(
 ): Promise<Record<string, unknown> | null> {
   try {
     return await apiFetchJson<Record<string, unknown>>(endpoints.aiForecast(days, horizon));
+  } catch {
+    return null;
+  }
+}
+
+export async function fetchAIScenarioForecast(
+  scenario: string,
+  lookbackHours = 48,
+  horizonHours = 24,
+): Promise<AIScenarioForecast | null> {
+  try {
+    return await apiFetchJson<AIScenarioForecast>(
+      endpoints.aiScenarioForecast(scenario, lookbackHours, horizonHours),
+    );
   } catch {
     return null;
   }

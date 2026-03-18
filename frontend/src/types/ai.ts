@@ -116,6 +116,61 @@ export interface AIDriftReport {
   created_at: string;
 }
 
+export interface AIScenarioForecastPoint {
+  timestamp: string;
+  forecast_score: number;
+  lower_80?: number;
+  upper_80?: number;
+  lower_95?: number;
+  upper_95?: number;
+  horizon_hour: number;
+}
+
+export interface AIScenarioHistoryPoint {
+  timestamp: string;
+  score: number;
+  event_count: number;
+  ddos_count?: number;
+  login_count?: number;
+  sim_swap_count?: number;
+  transaction_count?: number;
+  distinct_ips?: number;
+  distinct_devices?: number;
+  distinct_accounts?: number;
+  smoothed_score?: number;
+}
+
+export interface AIScenarioForecast {
+  status: string;
+  scenario: string;
+  normalized_scenario: string;
+  display_name: string;
+  generated_at: string;
+  lookback_hours: number;
+  history_hours: number;
+  horizon_hours: number;
+  trend_direction?: string;
+  net_change_forecast?: number;
+  volatility?: number;
+  forecast_confidence?: number;
+  confidence_grade?: string;
+  methodology_note?: string;
+  scenario_explanation?: string;
+  recommended_operator_posture?: string;
+  source_summary?: {
+    matching_events: number;
+    hours_with_activity: number;
+    scenario_alias_applied?: boolean;
+  };
+  alert_recommendation?: {
+    level?: string;
+    message?: string;
+    peak_forecast_score?: number;
+  };
+  history: AIScenarioHistoryPoint[];
+  forecast: AIScenarioForecastPoint[];
+}
+
 export interface TrustCheck {
   label: string;
   status: "pass" | "warn" | "fail";

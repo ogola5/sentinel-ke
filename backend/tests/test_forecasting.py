@@ -1,4 +1,4 @@
-from app.analytics.layer3.forecasting import build_risk_forecast, summarize_forecast_card
+from app.analytics.layer3.forecasting import build_risk_forecast, build_signal_forecast, summarize_forecast_card
 
 
 def test_build_risk_forecast_returns_cross_validated_output_for_short_history():
@@ -75,3 +75,34 @@ def test_build_risk_forecast_reports_insufficient_data():
 
     assert out["status"] == "insufficient_data"
     assert out["forecast"] == []
+
+
+def test_build_signal_forecast_supports_hourly_scenario_series():
+    history = []
+    for hour in range(12):
+        history.append(
+            {
+                "timestamp": f"2026-03-18T{hour:02d}:00:00+00:00",
+                "score": 25.0 + hour * 2.5,
+                "event_count": 3 + hour,
+            }
+        )
+
+    out = build_signal_forecast(
+        history=history,
+        horizon=6,
+        alpha=0.3,
+        beta=0.1,
+        season_length=6,
+        granularity="hour",
+        time_field="timestamp",
+        value_field="score",
+        signal_name="scenario pressure signal",
+    )
+
+    assert out["status"] == "ok"
+    assert out["history_hours"] == 12
+    assert out["horizon_hours"] == 6
+    assert len(out["forecast"]) == 6
+    assert "timestamp" in out["forecast"][0]
+    assert out["forecast"][0]["horizon_hour"] == 1

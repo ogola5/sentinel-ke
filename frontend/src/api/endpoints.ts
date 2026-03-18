@@ -147,6 +147,8 @@ export const endpoints = {
   demoIngestCyber: () => withBase("/v1/demo/ingest-synthetic-gnn-data"),
   demoIngestCorruption: () => withBase("/v1/demo/ingest-corruption-data"),
   demoBootstrap: () => withBase("/v1/demo/bootstrap"),
+  demoScenarioStart: (scenarioName: string) =>
+    withBase(`/v1/demo/scenario/start/${encodeURIComponent(scenarioName)}`),
 
   // Crypto posture
   cryptoPosture: () => withBase("/v1/crypto/posture"),
@@ -155,6 +157,14 @@ export const endpoints = {
   // AI forecasting, tool attribution, paths, fusion, NL copilot
   aiForecast: (days = 30, horizon = 7, alpha = 0.3, beta = 0.1) =>
     withQuery("/v1/ai/forecast", { days, horizon, alpha, beta }),
+  aiScenarioForecast: (scenario: string, lookbackHours = 48, horizonHours = 24, alpha = 0.3, beta = 0.1) =>
+    withQuery("/v1/ai/forecast/scenario", {
+      scenario,
+      lookback_hours: lookbackHours,
+      horizon_hours: horizonHours,
+      alpha,
+      beta,
+    }),
   aiToolAttribution: (entityKey: string) =>
     withQuery("/v1/ai/tool-attribution", { entity_key: entityKey }),
   aiToolsSummary: (limit = 10) => withQuery("/v1/ai/tools/summary", { limit }),

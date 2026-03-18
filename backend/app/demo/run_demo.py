@@ -209,14 +209,15 @@ def run_demo(*, seed: bool = False, scenario: str = "ddos_vpn", mode: str = "db"
     if seed:
         seed_sources()
 
+    normalized_scenario = "fraud" if scenario == "sim_swap" else scenario
     base_time = _now_utc()
 
     events: List[CanonicalEvent] = []
-    if scenario in ("ddos", "ddos_vpn", "all", "ddos_vpn_fraud"):
+    if normalized_scenario in ("ddos", "ddos_vpn", "all", "ddos_vpn_fraud"):
         events.extend(_ddos_events(base_time))
-    if scenario in ("vpn", "ddos_vpn", "all", "ddos_vpn_fraud"):
+    if normalized_scenario in ("vpn", "ddos_vpn", "all", "ddos_vpn_fraud"):
         events.extend(_vpn_events(base_time))
-    if scenario in ("fraud", "all", "ddos_vpn_fraud"):
+    if normalized_scenario in ("fraud", "all", "ddos_vpn_fraud"):
         events.extend(_fraud_events(base_time))
 
     if mode == "kafka":
@@ -239,7 +240,7 @@ def run_demo(*, seed: bool = False, scenario: str = "ddos_vpn", mode: str = "db"
             producer.publish(topic=topic, key=f"demo:{published}", value=payload)
             published += 1
         producer.flush()
-        print(f"[demo] scenario={scenario} total={len(events)} published={published} topic={topic}")
+        print(f"[demo] scenario={normalized_scenario} total={len(events)} published={published} topic={topic}")
         return
 
     db = SessionLocal()
@@ -266,7 +267,7 @@ def run_demo(*, seed: bool = False, scenario: str = "ddos_vpn", mode: str = "db"
     finally:
         db.close()
 
-    print(f"[demo] scenario={scenario} total={len(events)} accepted={accepted} duplicate={duplicates}")
+    print(f"[demo] scenario={normalized_scenario} total={len(events)} accepted={accepted} duplicate={duplicates}")
 
 
 def main():
@@ -274,7 +275,7 @@ def main():
 
     p = argparse.ArgumentParser()
     p.add_argument("--seed-sources", action="store_true")
-    p.add_argument("--scenario", choices=["ddos", "vpn", "fraud", "ddos_vpn", "ddos_vpn_fraud", "all"], default="ddos_vpn")
+    p.add_argument("--scenario", choices=["ddos", "vpn", "sim_swap", "fraud", "ddos_vpn", "ddos_vpn_fraud", "all"], default="ddos_vpn")
     p.add_argument("--mode", choices=["db", "kafka"], default="db")
     p.add_argument("--topic", default="sentinel.ingest")
     args = p.parse_args()

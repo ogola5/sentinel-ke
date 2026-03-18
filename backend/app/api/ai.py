@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
@@ -30,13 +30,246 @@ from app.analytics.ai_models import (
     GNNTrainingRun,
     ThreatIntelIndicator,
 )
-from app.analytics.layer3.forecasting import build_risk_forecast, summarize_forecast_card
+from app.analytics.layer3.forecasting import (
+    build_risk_forecast,
+    build_signal_forecast,
+    summarize_forecast_card,
+)
 from app.analytics.layer3.local_analyst_query import answer_local_analyst_query
 from app.analytics.layer3.threat_intel_worker import export_stix_bundle, import_stix_bundle
 from app.analytics.layer3.trust_service import build_entity_trust_summary, build_platform_trust_summary
 
 log = logging.getLogger("sentinel.api.ai")
 router = APIRouter(prefix="/v1/ai", tags=["ai"])
+
+SCENARIO_ALIASES: dict[str, str] = {
+    "sim_swap": "fraud",
+}
+
+SCENARIO_LABELS: dict[str, str] = {
+    "ddos": "Kenyan DDoS pressure",
+    "vpn": "VPN-style login reuse",
+    "fraud": "SIM-swap / mobile-money fraud",
+    "ddos_vpn": "DDoS + VPN blended pressure",
+    "ddos_vpn_fraud": "Combined DDoS + VPN + SIM-swap pressure",
+    "all": "Combined DDoS + VPN + SIM-swap pressure",
+}
+
+
+def _normalize_scenario_name(value: str) -> str:
+    raw = str(value or "").strip().lower()
+    return SCENARIO_ALIASES.get(raw, raw)
+
+
+def _scenario_sql_condition(scenario: str) -> str:
+    conditions = {
+        "ddos": """
+            event_type = 'DDOS_SIGNAL_EVENT'
+        """,
+        "vpn": """
+            event_type = 'LOGIN_EVENT'
+            AND COALESCE(payload_json->>'provider', '') = 'demo-vpn'
+        """,
+        "fraud": """
+            event_type = 'SIM_SWAP_EVENT'
+            OR (
+                event_type = 'LOGIN_EVENT'
+                AND COALESCE(anchors_json->>'endpoint', '') = 'bank:/login:POST'
+            )
+            OR (
+                event_type = 'TRANSACTION_EVENT'
+                AND (
+                    COALESCE(payload_json->>'channel', '') IN ('MOBILE', 'AGENT_CASHOUT')
+                    OR COALESCE(payload_json->>'agent_id', '') = 'agent-47'
+                )
+            )
+        """,
+        "ddos_vpn": """
+            event_type = 'DDOS_SIGNAL_EVENT'
+            OR (
+                event_type = 'LOGIN_EVENT'
+                AND COALESCE(payload_json->>'provider', '') = 'demo-vpn'
+            )
+        """,
+        "ddos_vpn_fraud": """
+            event_type = 'DDOS_SIGNAL_EVENT'
+            OR (
+                event_type = 'LOGIN_EVENT'
+                AND (
+                    COALESCE(payload_json->>'provider', '') = 'demo-vpn'
+                    OR COALESCE(anchors_json->>'endpoint', '') = 'bank:/login:POST'
+                )
+            )
+            OR event_type = 'SIM_SWAP_EVENT'
+            OR (
+                event_type = 'TRANSACTION_EVENT'
+                AND (
+                    COALESCE(payload_json->>'channel', '') IN ('MOBILE', 'AGENT_CASHOUT')
+                    OR COALESCE(payload_json->>'agent_id', '') = 'agent-47'
+                )
+            )
+        """,
+        "all": """
+            event_type = 'DDOS_SIGNAL_EVENT'
+            OR (
+                event_type = 'LOGIN_EVENT'
+                AND (
+                    COALESCE(payload_json->>'provider', '') = 'demo-vpn'
+                    OR COALESCE(anchors_json->>'endpoint', '') = 'bank:/login:POST'
+                )
+            )
+            OR event_type = 'SIM_SWAP_EVENT'
+            OR (
+                event_type = 'TRANSACTION_EVENT'
+                AND (
+                    COALESCE(payload_json->>'channel', '') IN ('MOBILE', 'AGENT_CASHOUT')
+                    OR COALESCE(payload_json->>'agent_id', '') = 'agent-47'
+                )
+            )
+        """,
+    }
+    if scenario not in conditions:
+        raise HTTPException(
+            status_code=400,
+            detail="invalid_scenario: use ddos, vpn, sim_swap, fraud, ddos_vpn, ddos_vpn_fraud, or all",
+        )
+    return conditions[scenario]
+
+
+def _scenario_component_scores(metrics: dict[str, float]) -> tuple[float, float, float]:
+    ddos_score = min(
+        100.0,
+        metrics["ddos_count"] * 1.6
+        + metrics["distinct_ips"] * 1.4
+        + min(26.0, metrics["avg_req_rate"] * 0.08)
+        + min(18.0, metrics["avg_latency_ms"] * 0.09)
+        + min(16.0, metrics["avg_error_rate"] * 280.0),
+    )
+    vpn_score = min(
+        100.0,
+        metrics["login_count"] * 2.6
+        + metrics["distinct_ips"] * 6.0
+        + metrics["distinct_devices"] * 5.0,
+    )
+    fraud_score = min(
+        100.0,
+        metrics["sim_swap_count"] * 18.0
+        + metrics["transaction_count"] * 8.5
+        + metrics["login_count"] * 4.5
+        + metrics["distinct_accounts"] * 7.0
+        + metrics["distinct_devices"] * 4.0,
+    )
+    return ddos_score, vpn_score, fraud_score
+
+
+def _scenario_signal_score(scenario: str, metrics: dict[str, float]) -> float:
+    ddos_score, vpn_score, fraud_score = _scenario_component_scores(metrics)
+    if scenario == "ddos":
+        return ddos_score
+    if scenario == "vpn":
+        return vpn_score
+    if scenario == "fraud":
+        return fraud_score
+    if scenario == "ddos_vpn":
+        return min(100.0, ddos_score * 0.58 + vpn_score * 0.42)
+    return min(100.0, ddos_score * 0.36 + vpn_score * 0.24 + fraud_score * 0.40)
+
+
+def _scenario_recommended_posture(level: str, label: str) -> str:
+    if level == "CRITICAL":
+        return f"{label} is forecast to remain critical over the next 24 hours. Prepare containment, surge analyst coverage, and pre-brief leadership."
+    if level == "HIGH":
+        return f"{label} is likely to stay elevated over the next 24 hours. Keep the service or fraud queue under active watch and pre-position response actions."
+    if level == "ELEVATED":
+        return f"{label} remains watch-worthy over the next 24 hours. Continue monitoring and validate whether the scenario is expanding beyond the current entity set."
+    return f"{label} is forecast to remain low over the next 24 hours. Monitor only unless other trust signals or campaign indicators rise."
+
+
+def _scenario_forecast_history(
+    db: Session,
+    scenario: str,
+    lookback_hours: int,
+) -> tuple[list[dict[str, object]], dict[str, int]]:
+    from sqlalchemy import text as _text
+
+    sql = _text(
+        f"""
+        SELECT
+            date_trunc('hour', occurred_at AT TIME ZONE 'UTC') AS bucket,
+            COUNT(*) AS event_count,
+            SUM(CASE WHEN event_type = 'DDOS_SIGNAL_EVENT' THEN 1 ELSE 0 END) AS ddos_count,
+            SUM(CASE WHEN event_type = 'LOGIN_EVENT' THEN 1 ELSE 0 END) AS login_count,
+            SUM(CASE WHEN event_type = 'SIM_SWAP_EVENT' THEN 1 ELSE 0 END) AS sim_swap_count,
+            SUM(CASE WHEN event_type = 'TRANSACTION_EVENT' THEN 1 ELSE 0 END) AS transaction_count,
+            COUNT(DISTINCT NULLIF(anchors_json->>'ip', '')) AS distinct_ips,
+            COUNT(DISTINCT NULLIF(anchors_json->>'device_id', '')) AS distinct_devices,
+            COUNT(DISTINCT NULLIF(anchors_json->>'account_h', '')) AS distinct_accounts,
+            AVG(CASE WHEN event_type = 'DDOS_SIGNAL_EVENT' THEN NULLIF(payload_json->>'req_rate', '')::double precision END) AS avg_req_rate,
+            AVG(CASE WHEN event_type = 'DDOS_SIGNAL_EVENT' THEN NULLIF(payload_json->>'avg_latency_ms', '')::double precision END) AS avg_latency_ms,
+            AVG(CASE WHEN event_type = 'DDOS_SIGNAL_EVENT' THEN NULLIF(payload_json->>'error_rate', '')::double precision END) AS avg_error_rate
+        FROM event_log
+        WHERE occurred_at >= NOW() - INTERVAL '1 hour' * :lookback_hours
+          AND ({_scenario_sql_condition(scenario)})
+        GROUP BY 1
+        ORDER BY 1
+        """
+    )
+    rows = db.execute(sql, {"lookback_hours": lookback_hours}).mappings().all()
+    by_bucket: dict[datetime, dict[str, object]] = {}
+    for row in rows:
+        bucket = row.get("bucket")
+        if isinstance(bucket, datetime):
+            if bucket.tzinfo is None:
+                bucket = bucket.replace(tzinfo=timezone.utc)
+            else:
+                bucket = bucket.astimezone(timezone.utc)
+        else:
+            bucket = datetime.now(timezone.utc)
+        by_bucket[bucket] = dict(row)
+
+    end_hour = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    start_hour = end_hour - timedelta(hours=max(0, lookback_hours - 1))
+    history: list[dict[str, object]] = []
+    matching_events = 0
+    hours_with_activity = 0
+    for idx in range(lookback_hours):
+        bucket = start_hour + timedelta(hours=idx)
+        row = dict(by_bucket.get(bucket) or {})
+        metrics = {
+            "event_count": float(row.get("event_count") or 0.0),
+            "ddos_count": float(row.get("ddos_count") or 0.0),
+            "login_count": float(row.get("login_count") or 0.0),
+            "sim_swap_count": float(row.get("sim_swap_count") or 0.0),
+            "transaction_count": float(row.get("transaction_count") or 0.0),
+            "distinct_ips": float(row.get("distinct_ips") or 0.0),
+            "distinct_devices": float(row.get("distinct_devices") or 0.0),
+            "distinct_accounts": float(row.get("distinct_accounts") or 0.0),
+            "avg_req_rate": float(row.get("avg_req_rate") or 0.0),
+            "avg_latency_ms": float(row.get("avg_latency_ms") or 0.0),
+            "avg_error_rate": float(row.get("avg_error_rate") or 0.0),
+        }
+        event_count = int(metrics["event_count"])
+        matching_events += event_count
+        if event_count > 0:
+            hours_with_activity += 1
+        history.append(
+            {
+                "timestamp": bucket.isoformat(),
+                "score": round(_scenario_signal_score(scenario, metrics), 2),
+                "event_count": event_count,
+                "ddos_count": int(metrics["ddos_count"]),
+                "login_count": int(metrics["login_count"]),
+                "sim_swap_count": int(metrics["sim_swap_count"]),
+                "transaction_count": int(metrics["transaction_count"]),
+                "distinct_ips": int(metrics["distinct_ips"]),
+                "distinct_devices": int(metrics["distinct_devices"]),
+                "distinct_accounts": int(metrics["distinct_accounts"]),
+            }
+        )
+    return history, {
+        "matching_events": matching_events,
+        "hours_with_activity": hours_with_activity,
+    }
 
 
 def _severity_from_score(score: float) -> str:
@@ -1400,6 +1633,66 @@ def ai_risk_forecast(
         alpha=alpha,
         beta=beta,
     )
+
+
+@router.get("/forecast/scenario")
+def ai_scenario_forecast(
+    scenario: str = Query(..., description="ddos, vpn, sim_swap, fraud, ddos_vpn, ddos_vpn_fraud, or all"),
+    lookback_hours: int = Query(default=48, ge=6, le=168, description="History window in hours"),
+    horizon_hours: int = Query(default=24, ge=1, le=72, description="Forecast horizon in hours"),
+    alpha: float = Query(default=0.3, ge=0.05, le=0.95, description="Level smoothing factor"),
+    beta: float = Query(default=0.1, ge=0.01, le=0.5, description="Trend smoothing factor"),
+    db: Session = Depends(get_db),
+):
+    raw_scenario = str(scenario or "").strip().lower()
+    normalized = _normalize_scenario_name(raw_scenario)
+    label = SCENARIO_LABELS.get(normalized)
+    if not label:
+        raise HTTPException(
+            status_code=400,
+            detail="invalid_scenario: use ddos, vpn, sim_swap, fraud, ddos_vpn, ddos_vpn_fraud, or all",
+        )
+
+    history, source_summary = _scenario_forecast_history(
+        db=db,
+        scenario=normalized,
+        lookback_hours=lookback_hours,
+    )
+    forecast = build_signal_forecast(
+        history=history,
+        horizon=horizon_hours,
+        alpha=alpha,
+        beta=beta,
+        season_length=24,
+        granularity="hour",
+        time_field="timestamp",
+        value_field="score",
+        signal_name=f"{label} pressure signal",
+    )
+    forecast["scenario"] = raw_scenario
+    forecast["normalized_scenario"] = normalized
+    forecast["display_name"] = label
+    forecast["lookback_hours"] = lookback_hours
+    forecast["source_summary"] = {
+        **source_summary,
+        "scenario_alias_applied": raw_scenario != normalized,
+    }
+    if forecast.get("status") == "ok":
+        alert = forecast.get("alert_recommendation") or {}
+        level = str((alert or {}).get("level") or "NORMAL")
+        forecast["recommended_operator_posture"] = _scenario_recommended_posture(level, label)
+        forecast["scenario_explanation"] = (
+            f"This forecast tracks {label.lower()} using hourly event pressure from scenario-matched ingest data. "
+            "It is an operational pressure forecast, not a guarantee that a specific attack will happen."
+        )
+    else:
+        forecast["recommended_operator_posture"] = (
+            f"Not enough {label.lower()} history is available yet. Replay the scenario, wait for ingest to settle, then rerun the forecast."
+        )
+        forecast["scenario_explanation"] = (
+            f"This route forecasts hourly {label.lower()} pressure once at least three hourly history points exist."
+        )
+    return forecast
 
 
 @router.get("/trust/entity")

@@ -52,7 +52,7 @@ def _seed_corruption() -> dict:
 
 class DemoBootstrapRequest(BaseModel):
     domain: Literal["cyber", "corruption", "all"] = "all"
-    scenario: Literal["ddos", "vpn", "fraud", "ddos_vpn", "ddos_vpn_fraud", "all"] = "ddos_vpn_fraud"
+    scenario: Literal["ddos", "vpn", "sim_swap", "fraud", "ddos_vpn", "ddos_vpn_fraud", "all"] = "ddos_vpn_fraud"
     epochs: int = 40
     cyber_runs: int = 10
     corruption_runs: int = 10
@@ -205,6 +205,14 @@ def bootstrap_demo_environment(
       1. Replays a Kenyan-style demo scenario into the canonical ingest path
       2. Seeds large-scale synthetic graph snapshots for stable training
       3. Trains the cyber GNN and writes predictions
+
+    Scenario names:
+      - ddos
+      - vpn
+      - sim_swap (alias for the fraud / mobile-money chain)
+      - fraud
+      - ddos_vpn
+      - ddos_vpn_fraud
 
     Corruption domain:
       1. Seeds corruption graph snapshots

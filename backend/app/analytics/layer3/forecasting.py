@@ -25,6 +25,26 @@ def _to_date(value: object) -> date:
     return datetime.now(timezone.utc).date()
 
 
+def _to_datetime(value: object) -> datetime:
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+    if isinstance(value, date):
+        return datetime.combine(value, datetime.min.time(), tzinfo=timezone.utc)
+    if isinstance(value, str) and value:
+        try:
+            if len(value) == 10:
+                return datetime.combine(date.fromisoformat(value), datetime.min.time(), tzinfo=timezone.utc)
+            dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt.astimezone(timezone.utc)
+        except ValueError:
+            pass
+    return datetime.now(timezone.utc)
+
+
 def _mean(values: Sequence[float]) -> float:
     if not values:
         return 0.0
@@ -568,26 +588,37 @@ def summarize_forecast_card(forecast: Dict[str, object], *, target_day: int = 3)
     }
 
 
-def build_risk_forecast(
+def build_signal_forecast(
     *,
     history: Sequence[Dict[str, object]],
     horizon: int,
     alpha: float,
     beta: float,
     gamma: float = 0.2,
-    season_length: int = 7,
+    season_length: int | None = None,
     phi: float = 0.9,
+    granularity: str = "day",
+    time_field: str | None = None,
+    value_field: str = "avg_score",
+    signal_name: str = "cyber-risk signal",
 ) -> Dict[str, object]:
+    unit = "day" if granularity != "hour" else "hour"
+    time_key = time_field or ("date" if unit == "day" else "timestamp")
+    seasonal_period = season_length if season_length is not None else (7 if unit == "day" else 24)
+
     if len(history) < 3:
         return {
             "status": "insufficient_data",
-            "message": f"Need at least 3 daily GNN data points, got {len(history)}.",
+            "message": f"Need at least 3 {unit}ly signal points, got {len(history)}.",
             "history": [],
             "forecast": [],
         }
 
-    dates = [_to_date(row.get("date")) for row in history]
-    scores = [_clamp_score(_safe_float(row.get("avg_score"))) for row in history]
+    if unit == "hour":
+        times = [_to_datetime(row.get(time_key) or row.get("timestamp") or row.get("date")) for row in history]
+    else:
+        times = [_to_date(row.get(time_key) or row.get("date")) for row in history]
+    scores = [_clamp_score(_safe_float(row.get(value_field))) for row in history]
     eval_horizon = min(max(1, horizon), 3)
 
     cv_results = _rolling_origin_backtest(
@@ -596,7 +627,7 @@ def build_risk_forecast(
         alpha=alpha,
         beta=beta,
         gamma=gamma,
-        season_length=season_length,
+        season_length=seasonal_period,
         phi=phi,
     )
     selected_model_names, candidate_models = _select_models(cv_results)
@@ -606,7 +637,7 @@ def build_risk_forecast(
         alpha=alpha,
         beta=beta,
         gamma=gamma,
-        season_length=season_length,
+        season_length=seasonal_period,
         phi=phi,
     )
     selected_models = [full_models[name] for name in selected_model_names if name in full_models]
@@ -622,7 +653,7 @@ def build_risk_forecast(
         alpha=alpha,
         beta=beta,
         gamma=gamma,
-        season_length=season_length,
+        season_length=seasonal_period,
         phi=phi,
     )
     interval_bands, interval_method = _build_confidence_bands(forecast_values, lead_errors)
@@ -639,15 +670,20 @@ def build_risk_forecast(
             residuals.append(float(scores[idx]) - float(fitted[idx]))
 
     forecast_points: List[Dict[str, object]] = []
-    last_date = dates[-1]
+    last_time = times[-1]
     for step in range(1, horizon + 1):
         bands = interval_bands[step - 1]
+        next_time = (
+            last_time + timedelta(hours=step)
+            if unit == "hour"
+            else last_time + timedelta(days=step)
+        )
         forecast_points.append(
             {
-                "date": str(last_date + timedelta(days=step)),
+                time_key: next_time.isoformat() if unit == "hour" else str(next_time),
                 "forecast_score": round(float(forecast_values[step - 1]), 2),
                 **bands,
-                "horizon_day": step,
+                f"horizon_{unit}": step,
             }
         )
 
@@ -662,42 +698,42 @@ def build_risk_forecast(
 
     if peak_forecast >= 85:
         alert_level = "CRITICAL"
-        alert_msg = "Forecast peak risk >=85. Recommend activating national incident response."
+        alert_msg = f"Forecast peak risk >=85. Recommend activating response for the monitored {signal_name}."
     elif peak_forecast >= 70:
         alert_level = "HIGH"
-        alert_msg = "Forecast peak risk >=70. Recommend heightened monitoring and pre-positioning of response teams."
+        alert_msg = f"Forecast peak risk >=70. Recommend heightened monitoring for the monitored {signal_name}."
     elif peak_forecast >= 55:
         alert_level = "ELEVATED"
-        alert_msg = "Forecast risk elevated. Continue active monitoring."
+        alert_msg = f"Forecast risk is elevated for the monitored {signal_name}. Continue active monitoring."
     else:
         alert_level = "NORMAL"
-        alert_msg = "Forecast risk within normal range."
+        alert_msg = f"Forecast risk is within normal range for the monitored {signal_name}."
 
     confidence = _confidence_score(len(history), candidate_models, interval_bands)
     confidence_grade = _confidence_grade(confidence)
 
     methodology = (
         "Rolling-origin cross-validation compares mean level, naive, drift, simple exponential smoothing, "
-        "Holt linear, damped Holt, and seasonal candidates where weekly structure is supported; "
+        "Holt linear, damped Holt, and seasonal candidates where repeated structure is supported; "
         "the best model or a small average of near-best models is then used for the final forecast."
     )
 
-    return {
+    out: Dict[str, object] = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "status": "ok",
-        "history_days": len(history),
-        "horizon_days": horizon,
+        f"history_{unit}s": len(history),
+        f"horizon_{unit}s": horizon,
         "alpha": alpha,
         "beta": beta,
         "gamma": gamma,
         "phi": phi,
-        "season_length": season_length,
+        "season_length": seasonal_period,
         "model": model_label,
         "selected_models": selected_model_names,
         "candidate_models": candidate_models,
         "cross_validation": {
             "method": "rolling_origin",
-            "evaluation_horizon_days": eval_horizon,
+            f"evaluation_horizon_{unit}s": eval_horizon,
             "candidate_count": len(candidate_models),
             "folds": max((int(item.get("origins") or 0) for item in candidate_models), default=0),
         },
@@ -716,6 +752,32 @@ def build_risk_forecast(
         },
         "methodology_note": (
             methodology
-            + " This forecasts the learned daily cyber-risk signal, not the guaranteed occurrence or exact timing of a specific attack."
+            + f" This forecasts the learned {unit}ly {signal_name}, not the guaranteed occurrence or exact timing of a specific attack."
         ),
     }
+    return out
+
+
+def build_risk_forecast(
+    *,
+    history: Sequence[Dict[str, object]],
+    horizon: int,
+    alpha: float,
+    beta: float,
+    gamma: float = 0.2,
+    season_length: int = 7,
+    phi: float = 0.9,
+) -> Dict[str, object]:
+    return build_signal_forecast(
+        history=history,
+        horizon=horizon,
+        alpha=alpha,
+        beta=beta,
+        gamma=gamma,
+        season_length=season_length,
+        phi=phi,
+        granularity="day",
+        time_field="date",
+        value_field="avg_score",
+        signal_name="cyber-risk signal",
+    )

@@ -28,12 +28,20 @@ import {
   bootstrapDemoData,
   fetchAIFeedback,
   fetchAIForecast,
+  fetchAIScenarioForecast,
   fetchAIPredictions,
   fetchGNNTrainingRuns,
+  startDemoScenario,
   submitAIFeedback,
   triggerGNNTrain,
 } from "../../api/ai";
-import type { AIFeedback, AIPrediction, FairnessMetrics, GNNTrainingRun } from "../../types/ai";
+import type {
+  AIFeedback,
+  AIPrediction,
+  AIScenarioForecast,
+  FairnessMetrics,
+  GNNTrainingRun,
+} from "../../types/ai";
 import { clampRiskPercent, formatRiskScore, isHighRisk, riskColor, riskSeverityLabel } from "../../utils/risk";
 
 const ANALYST_ID_STORAGE_KEY = "sentinel_analyst_id";
@@ -41,6 +49,7 @@ const ANALYST_ID_STORAGE_KEY = "sentinel_analyst_id";
 type Domain = "cyber" | "corruption";
 type DomainWindowKey = "Wmid" | "Wcorruption";
 type GNNView = "overview" | "review" | "ops";
+type CyberScenario = "ddos" | "vpn" | "sim_swap" | "ddos_vpn" | "ddos_vpn_fraud";
 
 const DOMAIN_OPTIONS: Array<{ domain: Domain; windowKey: DomainWindowKey; label: string }> = [
   { domain: "cyber", windowKey: "Wmid", label: "Cyber (Wmid)" },
@@ -57,6 +66,38 @@ const FEEDBACK_OPTIONS = [
   { label: "Confirm threat", value: 1 as const, icon: CheckCircle },
   { label: "False positive", value: 0 as const, icon: XCircle },
   { label: "Uncertain", value: 2 as const, icon: HelpCircle },
+];
+
+const CYBER_SCENARIO_OPTIONS: Array<{
+  id: CyberScenario;
+  label: string;
+  summary: string;
+}> = [
+  {
+    id: "ddos",
+    label: "DDoS pressure",
+    summary: "Simulates a rising burst against KPLC login infrastructure with IP fan-in and degrading service health.",
+  },
+  {
+    id: "vpn",
+    label: "VPN login reuse",
+    summary: "Simulates repeated successful logins from a rotating IP pool through a VPN-like provider pattern.",
+  },
+  {
+    id: "sim_swap",
+    label: "SIM swap / fraud",
+    summary: "Simulates a Kenyan mobile-money fraud chain: SIM swap, suspicious login, transfer to mule, then agent cash-out.",
+  },
+  {
+    id: "ddos_vpn",
+    label: "DDoS + VPN",
+    summary: "Simulates concurrent DDoS pressure and credential reuse through VPN-like access patterns.",
+  },
+  {
+    id: "ddos_vpn_fraud",
+    label: "Combined pressure",
+    summary: "Simulates DDoS, VPN-style login abuse, and SIM-swap fraud pressure in one combined rehearsal.",
+  },
 ];
 
 const GNN_VIEW_CONTENT: Record<GNNView, {
@@ -228,6 +269,10 @@ function describeUncertaintyMeaning(): string {
   return "Uncertainty is the model’s caution signal. High uncertainty means the analyst should slow down, read the evidence, and avoid treating the score as proof.";
 }
 
+function scenarioLabelFor(scenario: CyberScenario): string {
+  return CYBER_SCENARIO_OPTIONS.find((option) => option.id === scenario)?.label ?? scenario;
+}
+
 interface Props {
   healthGnnLoaded: boolean;
   healthModelVersion: string | null;
@@ -255,6 +300,10 @@ export default function GNNIntelligence({
   const [showAllMetrics, setShowAllMetrics] = useState(false);
   const [forecast, setForecast] = useState<Record<string, unknown> | null>(null);
   const [forecastLoading, setForecastLoading] = useState(false);
+  const [selectedScenario, setSelectedScenario] = useState<CyberScenario>("sim_swap");
+  const [scenarioForecast, setScenarioForecast] = useState<AIScenarioForecast | null>(null);
+  const [scenarioForecastLoading, setScenarioForecastLoading] = useState(false);
+  const [scenarioBusy, setScenarioBusy] = useState(false);
 
   const analystId = useMemo(() => loadAnalystId(), []);
   const activeWindowKey = DOMAIN_OPTIONS.find((option) => option.domain === activeDomain)?.windowKey ?? "Wmid";
@@ -301,12 +350,35 @@ export default function GNNIntelligence({
       .finally(() => setForecastLoading(false));
   }, [view, forecast]);
 
+  const loadScenarioForecast = useCallback(async (scenario: CyberScenario) => {
+    setScenarioForecastLoading(true);
+    try {
+      const data = await fetchAIScenarioForecast(scenario, 48, 24);
+      setScenarioForecast(data);
+      return data;
+    } finally {
+      setScenarioForecastLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (view !== "ops" || activeDomain !== "cyber") return;
+    void loadScenarioForecast(selectedScenario);
+  }, [activeDomain, loadScenarioForecast, selectedScenario, view]);
+
   const handleSeed = async (domain: Domain) => {
     setSeedBusy(true);
     setTrainMsg(null);
     try {
-      const response = await bootstrapDemoData(domain);
-      setTrainMsg(`Bootstrap started: ${response.message}`);
+      const response = await bootstrapDemoData(
+        domain,
+        domain === "cyber" ? selectedScenario : "ddos_vpn_fraud",
+      );
+      setTrainMsg(
+        domain === "cyber"
+          ? `Bootstrap started for ${scenarioLabelFor(selectedScenario)}: ${response.message}`
+          : `Bootstrap started: ${response.message}`,
+      );
     } catch (error: unknown) {
       setTrainMsg(`Seed failed: ${String(error)}`);
     } finally {
@@ -345,10 +417,31 @@ export default function GNNIntelligence({
         setTrainMsg(`Train failed: ${detail}`);
       }
       await load();
+      if (domain === "cyber") {
+        await loadScenarioForecast(selectedScenario);
+      }
     } catch (error: unknown) {
       setTrainMsg(`Train failed: ${String(error)}`);
     } finally {
       setTrainBusy(false);
+    }
+  };
+
+  const handleScenarioReplay = async () => {
+    setScenarioBusy(true);
+    setTrainMsg(null);
+    try {
+      const response = await startDemoScenario(selectedScenario);
+      setTrainMsg(
+        `Scenario replay started for ${scenarioLabelFor(selectedScenario)}: ${response.message ?? "Synthetic events are being ingested now."}`,
+      );
+      window.setTimeout(() => {
+        void loadScenarioForecast(selectedScenario);
+      }, 1200);
+    } catch (error: unknown) {
+      setTrainMsg(`Scenario replay failed: ${String(error)}`);
+    } finally {
+      setScenarioBusy(false);
     }
   };
 
@@ -444,6 +537,7 @@ export default function GNNIntelligence({
   );
   const modelMeaningStatement = describeModelMeaning(activeDomain);
   const uncertaintyMeaningStatement = describeUncertaintyMeaning();
+  const selectedScenarioOption = CYBER_SCENARIO_OPTIONS.find((option) => option.id === selectedScenario) ?? CYBER_SCENARIO_OPTIONS[0];
 
   return (
     <div className="screen">
@@ -821,11 +915,149 @@ export default function GNNIntelligence({
 
       {view === "ops" && (
         <div className="workflow-stack">
+          {activeDomain === "cyber" && (
+            <div className="panel workflow-stage-panel">
+              <div className="panel-header">
+                <h3>Scenario rehearsal and next 24 hours</h3>
+                <span className="muted">
+                  {selectedScenarioOption.label} · simulate now, then forecast hourly pressure for the next day
+                </span>
+              </div>
+
+              <div className="workflow-summary-banner" style={{ marginBottom: 14 }}>
+                <div>
+                  <strong>{selectedScenarioOption.label}</strong>
+                  <span className="muted">Selected Kenyan scenario</span>
+                </div>
+                <div>
+                  <strong>48h</strong>
+                  <span className="muted">Lookback window for the hourly signal</span>
+                </div>
+                <div>
+                  <strong>24h</strong>
+                  <span className="muted">Forecast horizon shown to the operator</span>
+                </div>
+              </div>
+
+              <div className="list" style={{ marginBottom: 14 }}>
+                <div className="list-item">
+                  <strong>What this scenario simulates</strong>
+                  <p className="muted" style={{ marginTop: 4 }}>{selectedScenarioOption.summary}</p>
+                </div>
+              </div>
+
+              <div className="detail-grid" style={{ marginBottom: 14 }}>
+                <label className="field">
+                  <span className="muted" style={{ display: "block", marginBottom: 6 }}>Scenario</span>
+                  <select
+                    value={selectedScenario}
+                    onChange={(event) => setSelectedScenario(event.target.value as CyberScenario)}
+                    disabled={scenarioBusy || seedBusy || trainBusy}
+                    style={{ width: "100%", padding: "10px 12px", borderRadius: 10, border: "1px solid var(--line)", background: "var(--panel-elevated)", color: "var(--ink)" }}
+                  >
+                    {CYBER_SCENARIO_OPTIONS.map((option) => (
+                      <option key={option.id} value={option.id}>{option.label}</option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+
+              <div className={`gnn-train-actions${trainMsg ? " has-msg" : ""}`} style={{ marginBottom: 14 }}>
+                <button type="button" className="btn-ghost" onClick={() => void handleScenarioReplay()} disabled={scenarioBusy || seedBusy || trainBusy}>
+                  {scenarioBusy ? <Loader size={13} className="spin" /> : <Play size={13} />}
+                  &nbsp;Simulate selected scenario
+                </button>
+                <button type="button" className="btn-ghost" onClick={() => void handleSeed("cyber")} disabled={scenarioBusy || seedBusy || trainBusy}>
+                  {seedBusy ? <Loader size={13} className="spin" /> : <Database size={13} />}
+                  &nbsp;Bootstrap + retrain cyber demo
+                </button>
+                <button type="button" className="btn-train-cyber" onClick={() => void loadScenarioForecast(selectedScenario)} disabled={scenarioForecastLoading || scenarioBusy || seedBusy || trainBusy}>
+                  {scenarioForecastLoading ? <Loader size={13} className="spin" /> : <RefreshCw size={13} />}
+                  &nbsp;Forecast next 24 hours
+                </button>
+              </div>
+
+              {scenarioForecastLoading && (
+                <div className="state-box"><Loader size={18} className="spin" /><p>Building hourly scenario forecast…</p></div>
+              )}
+
+              {!scenarioForecastLoading && scenarioForecast && (() => {
+                const alertRec = scenarioForecast.alert_recommendation ?? {};
+                const alertLevel = String(alertRec.level ?? "");
+                const alertMsg = String(alertRec.message ?? "");
+                const alertColor = alertLevel === "CRITICAL" ? "var(--risk-critical)" : alertLevel === "HIGH" ? "var(--risk-high)" : alertLevel === "ELEVATED" ? "var(--warning)" : "var(--accent)";
+                const historyPoints = Array.isArray(scenarioForecast.history) ? scenarioForecast.history.slice(-24) : [];
+                const forecastPoints = Array.isArray(scenarioForecast.forecast) ? scenarioForecast.forecast : [];
+                const combined = [
+                  ...historyPoints.map((point) => ({ timestamp: point.timestamp, score: point.score, type: "history" as const })),
+                  ...forecastPoints.map((point) => ({ timestamp: point.timestamp, score: point.forecast_score, type: "forecast" as const })),
+                ];
+                return (
+                  <>
+                    {alertMsg && (
+                      <div style={{ marginBottom: 12, padding: "8px 12px", borderRadius: 6, background: `${alertColor}18`, borderLeft: `3px solid ${alertColor}` }}>
+                        <span style={{ fontSize: "0.78rem", fontWeight: 600, color: alertColor }}>{alertLevel}</span>
+                        <span style={{ fontSize: "0.78rem", marginLeft: 8, color: "var(--ink-muted)" }}>{alertMsg}</span>
+                      </div>
+                    )}
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 8, marginBottom: 14 }}>
+                      {[
+                        { label: "Trend", value: String(scenarioForecast.trend_direction ?? "—") },
+                        { label: "Confidence", value: typeof scenarioForecast.forecast_confidence === "number" ? `${Math.round(scenarioForecast.forecast_confidence * 100)}%` : "—" },
+                        { label: "Matching events", value: String(scenarioForecast.source_summary?.matching_events ?? "0") },
+                        { label: "Active hours", value: String(scenarioForecast.source_summary?.hours_with_activity ?? "0") },
+                      ].map((stat) => (
+                        <div key={stat.label} className="metric-card" style={{ padding: "8px 10px" }}>
+                          <div className="metric-label">{stat.label}</div>
+                          <div className="metric-value" style={{ fontSize: "1rem" }}>{stat.value}</div>
+                        </div>
+                      ))}
+                    </div>
+                    {combined.length > 0 && (
+                      <ResponsiveContainer width="100%" height={180}>
+                        <LineChart data={combined} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="rgba(171,199,182,0.12)" />
+                          <XAxis dataKey="timestamp" tick={{ fontSize: 9 }} tickFormatter={(value: string) => value.slice(11, 16)} />
+                          <YAxis tick={{ fontSize: 9 }} domain={[0, 100]} />
+                          <Tooltip
+                            formatter={(value: number | string | undefined) => [`${Number(value ?? 0)}`, "Scenario pressure"]}
+                            labelFormatter={(value: unknown) => typeof value === "string" ? new Date(value).toLocaleString() : String(value ?? "")}
+                            labelStyle={{ fontSize: 10 }}
+                            contentStyle={{ fontSize: 10 }}
+                          />
+                          <Legend wrapperStyle={{ fontSize: 10 }} />
+                          <Line
+                            type="monotone"
+                            dataKey="score"
+                            name="Scenario pressure"
+                            stroke="#4cb5f5"
+                            strokeWidth={2}
+                            dot={(props: { cx?: number; cy?: number; payload?: { type?: string } }) => {
+                              const { cx = 0, cy = 0, payload } = props;
+                              return payload?.type === "forecast"
+                                ? <circle key={`dot-${cx}-${cy}`} cx={cx} cy={cy} r={3} fill="#f0bf4c" stroke="none" />
+                                : <circle key={`dot-${cx}-${cy}`} cx={cx} cy={cy} r={2} fill="#4cb5f5" stroke="none" />;
+                            }}
+                          />
+                        </LineChart>
+                      </ResponsiveContainer>
+                    )}
+                    <p className="muted" style={{ fontSize: "0.75rem", marginTop: 8 }}>
+                      {scenarioForecast.scenario_explanation}
+                    </p>
+                    <p className="muted" style={{ fontSize: "0.75rem", marginTop: 6 }}>
+                      {scenarioForecast.recommended_operator_posture}
+                    </p>
+                  </>
+                );
+              })()}
+            </div>
+          )}
 
           {/* ── Risk Forecast ─────────────────────────────────────────────── */}
           <div className="panel workflow-stage-panel">
             <div className="panel-header">
-              <h3>Risk Forecast</h3>
+              <h3>Platform risk forecast</h3>
               <span className="muted">
                 {forecastLoading
                   ? "Loading…"
@@ -920,7 +1152,7 @@ export default function GNNIntelligence({
               <div className={`gnn-train-actions${trainMsg ? " has-msg" : ""}`}>
                 <button type="button" className="btn-ghost" onClick={() => void handleSeed("cyber")} disabled={seedBusy || trainBusy}>
                   {seedBusy ? <Loader size={13} className="spin" /> : <Database size={13} />}
-                  &nbsp;Bootstrap Cyber Demo
+                  &nbsp;Bootstrap selected cyber demo
                 </button>
                 <button type="button" className="btn-ghost" onClick={() => void handleSeed("corruption")} disabled={seedBusy || trainBusy}>
                   {seedBusy ? <Loader size={13} className="spin" /> : <Database size={13} />}
