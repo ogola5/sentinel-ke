@@ -895,6 +895,8 @@ def list_link_predictions(
 def list_decision_fusions(
     pagination: dict = Depends(pagination_params),
     prediction_type: str | None = Query(default=None),
+    entity_key: str | None = Query(default=None),
+    window_key: str | None = Query(default=None),
     decision: str | None = Query(default=None),
     min_score: float | None = Query(default=None),
     db: Session = Depends(get_db),
@@ -902,6 +904,10 @@ def list_decision_fusions(
     q = db.query(AIDecisionFusion)
     if prediction_type:
         q = q.filter(AIDecisionFusion.prediction_type == prediction_type)
+    if entity_key:
+        q = q.filter(AIDecisionFusion.entity_key == entity_key)
+    if window_key:
+        q = q.filter(AIDecisionFusion.window_key == window_key)
     if decision:
         q = q.filter(AIDecisionFusion.decision == decision)
     if min_score is not None:
@@ -1332,7 +1338,11 @@ def tool_attribution(
             "technique_id": r.technique_id,
             "tactic": r.tactic,
             "confidence": float(r.confidence or 0.0),
-            "source_event_type": r.source_event_type,
+            "source_event_type": (
+                str((r.source_json or {}).get("source_event_type"))
+                if (r.source_json or {}).get("source_event_type") is not None
+                else None
+            ),
         }
         for r in rows
     ]

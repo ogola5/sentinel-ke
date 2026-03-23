@@ -11,6 +11,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { EventRecord } from "../types/domain";
 import { loadClientCredentials } from "../api/client";
+import { endpoints } from "../api/endpoints";
 
 export type StreamStatus = "connecting" | "live" | "error" | "closed";
 
@@ -35,8 +36,7 @@ export function useEventStream(enabled = true) {
     }
 
     const { apiKey } = loadClientCredentials();
-    const qs = apiKey ? `?token=${encodeURIComponent(apiKey)}` : "";
-    const url = `/v1/stream/events${qs}`;
+    const url = endpoints.eventStream(apiKey);
 
     setStreamStatus("connecting");
     const es = new EventSource(url);

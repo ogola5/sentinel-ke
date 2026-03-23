@@ -238,6 +238,21 @@ services:
     volumes: *backend-volumes
     restart: unless-stopped
 
+  # ── Neo4j projection worker (replays graph_delta_log into Neo4j) ──────────
+  neo4j-worker:
+    build: *backend-build
+    <<: *backend-env
+    environment:
+      PYTHONPATH: /app
+    command: /bin/sh -c "while true; do python -m app.graph.neo4j_worker --batch-size 5000; sleep 30; done"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      neo4j:
+        condition: service_started
+    volumes: *backend-volumes
+    restart: unless-stopped
+
   # ── Cyber GNN training worker ────────────────────────────────────────────────
   cyber-train-worker:
     build: *backend-build

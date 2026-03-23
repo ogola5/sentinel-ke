@@ -456,7 +456,9 @@ const buildGraphFromSnapshot = (
 
   for (const event of events) {
     const serviceNodeId = canonicalServiceKey(event.service_id);
-    const endpointNodeId = canonicalEndpointKey(event.endpoint);
+    const endpointNodeId = canonicalEndpointKey(
+      event.service_id && event.endpoint ? `${event.service_id}:${event.endpoint}` : event.endpoint,
+    );
     upsertNode(serviceNodeId, event.service_id, "Service");
     upsertNode(endpointNodeId, event.endpoint, "Endpoint");
 
@@ -482,7 +484,7 @@ const buildGraphFromSnapshot = (
 
     const provider = cluster.provider.trim();
     if (provider && provider !== "unknown") {
-      const providerNodeId = `provider:${provider}`;
+      const providerNodeId = `provider_id:${provider}`;
       upsertNode(providerNodeId, provider, "Provider");
       const detail = cluster.reasons[0] ?? "cluster_provider_link";
       const evidence = cluster.evidence[0] ?? {
