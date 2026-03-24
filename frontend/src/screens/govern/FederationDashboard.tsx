@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Globe, RefreshCw, Loader, Network, Link2, AlertTriangle } from "lucide-react";
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
+import ArchitectureFlow from "../../app/ArchitectureFlow";
 import {
   fetchEdgeSyncStatus,
   fetchFederationCorrelations,
@@ -105,19 +105,14 @@ export default function FederationDashboard() {
     void load();
   }, []);
 
-  const patternsByPartner = partners.map((p) => ({
-    name: p.partner_name.split(" ")[0],
-    patterns: patterns.filter((pt) => pt.partner_id === p.partner_id).length,
-    partner_id: p.partner_id,
-  }));
-
   const selectedPartnerPatterns = patterns.filter((pt) => pt.partner_id === selectedPartner);
   const activePartners = partners.filter((p) => p.status === "online").length;
   const stalePartners = partners.filter((p) => p.status === "stale").length;
   const offlinePartners = partners.filter((p) => p.status === "offline").length;
   const totalPatterns = patterns.length;
-  const criticalCorrelations = correlations.filter((c) => c.risk_level.toLowerCase() === "critical").length;
   const attentionPartners = stalePartners + offlinePartners;
+  const leadCorrelation = correlations[0] ?? null;
+  const selectedPartnerRecord = partners.find((item) => item.partner_id === selectedPartner) ?? null;
 
   return (
     <div>
@@ -128,13 +123,25 @@ export default function FederationDashboard() {
             <Globe size={20} color="var(--accent)" />
             Federation Network
           </h2>
-          <p className="subtle">Partner freshness first, shared patterns second.</p>
+          <p className="subtle">See how partner edges share hashes, how the hub correlates them, and where warnings go next.</p>
         </div>
         <button className="btn-ghost" onClick={() => void load()} disabled={loading}>
           {loading ? <Loader size={13} /> : <RefreshCw size={13} />}
           &nbsp;Refresh
         </button>
       </div>
+
+      <ArchitectureFlow
+        label="Federation flow"
+        title="How agencies share without exposing raw data"
+        summary="Raw telemetry stays at the partner edge. The hub only receives hashed warning patterns and correlation metadata."
+        steps={[
+          { stage: "Agency edge", title: "Local raw telemetry", detail: "VPN, fraud, malware, or service signals stay inside the partner perimeter.", tone: "info" },
+          { stage: "Hash", title: "Pattern digest only", detail: "The edge publishes hashes, scores, and warning families rather than raw identifiers.", tone: "accent" },
+          { stage: "Hub", title: "Cross-agency correlation", detail: "The hub measures partner freshness and finds shared threat patterns.", tone: "warning" },
+          { stage: "Warning", title: "Return to local action", detail: "Partners receive warning envelopes and resolve them back to local entities on the edge.", tone: "danger" },
+        ]}
+      />
 
       {error && (
         <div className="panel" style={{ marginBottom: 16, borderColor: "rgba(255,69,58,.28)", background: "rgba(255,69,58,.08)" }}>
@@ -144,29 +151,6 @@ export default function FederationDashboard() {
           </div>
         </div>
       )}
-
-      <div className="metric-grid" style={{ gridTemplateColumns: "repeat(4, 1fr)" }}>
-        <div className="metric-card accent">
-          <div className="metric-label">Online partners</div>
-          <div className="metric-value">{activePartners}</div>
-          <div className="metric-sub">{partners.length} registered</div>
-        </div>
-        <div className="metric-card">
-          <div className="metric-label">Need attention</div>
-          <div className="metric-value" style={{ color: attentionPartners > 0 ? "var(--warning)" : "var(--accent)" }}>{attentionPartners}</div>
-          <div className="metric-sub">{stalePartners} stale · {offlinePartners} offline</div>
-        </div>
-        <div className="metric-card">
-          <div className="metric-label">Pattern submissions</div>
-          <div className="metric-value">{totalPatterns}</div>
-          <div className="metric-sub">Anonymised entity patterns</div>
-        </div>
-        <div className={`metric-card ${criticalCorrelations > 0 ? "danger" : ""}`}>
-          <div className="metric-label">Cross-partner matches</div>
-          <div className="metric-value">{correlations.length}</div>
-          <div className="metric-sub">{criticalCorrelations} critical</div>
-        </div>
-      </div>
 
       {loading ? (
         <div className="state-box">
@@ -183,6 +167,83 @@ export default function FederationDashboard() {
         </div>
       ) : (
         <>
+          <div className="focus-layout">
+            <div className="panel focus-hero focus-hero-accent">
+              <p className="focus-kicker">Federated posture</p>
+              <p className="focus-value">{activePartners} live partners</p>
+              <p className="focus-copy">
+                Agencies keep raw telemetry locally. The hub only sees warning hashes, partner freshness, and correlation strength. This is the national proof surface for privacy-preserving intelligence sharing.
+              </p>
+              <div className="focus-stat-grid">
+                <div className="focus-stat-card">
+                  <div className="focus-stat-label">Registered</div>
+                  <div className="focus-stat-value">{partners.length}</div>
+                </div>
+                <div className="focus-stat-card">
+                  <div className="focus-stat-label">Need attention</div>
+                  <div className="focus-stat-value" style={{ color: attentionPartners > 0 ? "var(--warning)" : "var(--accent)" }}>
+                    {attentionPartners}
+                  </div>
+                </div>
+                <div className="focus-stat-card">
+                  <div className="focus-stat-label">Patterns</div>
+                  <div className="focus-stat-value">{totalPatterns}</div>
+                </div>
+                <div className="focus-stat-card">
+                  <div className="focus-stat-label">Matches</div>
+                  <div className="focus-stat-value">{correlations.length}</div>
+                </div>
+              </div>
+              {leadCorrelation && (
+                <div className="priority-card" style={{ marginTop: 18 }}>
+                  <div className="priority-card-head">
+                    <div>
+                      <h4 className="priority-card-title">Current cross-agency proof</h4>
+                      <p className="priority-card-copy">
+                        Hash {shortHash(leadCorrelation.entity_key_hash)} is shared by {leadCorrelation.partner_ids.join(", ")} with {leadCorrelation.partner_count} partners and {leadCorrelation.max_confidence.toFixed(2)} max confidence.
+                      </p>
+                    </div>
+                    <span className={`risk-badge ${riskClass(leadCorrelation.risk_level)}`}>{leadCorrelation.risk_level}</span>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="panel priority-stack">
+              <div className="panel-header">
+                <h3>Who sees what</h3>
+                <span className="muted">The privacy boundary, made explicit</span>
+              </div>
+              <div className="visibility-grid">
+                <div className="visibility-card">
+                  <h4>Agency edge sees</h4>
+                  <p>Raw accounts, raw phones, raw hostnames, local telemetry, local evidence, and local response controls.</p>
+                </div>
+                <div className="visibility-card">
+                  <h4>Hub sees</h4>
+                  <p>Hashes, warning families, confidence, partner freshness, and cross-agency matches, but not raw identifiers.</p>
+                </div>
+              </div>
+              <div className="priority-card">
+                <div className="priority-card-head">
+                  <div>
+                    <h4 className="priority-card-title">{selectedPartnerRecord?.partner_name ?? "Selected partner"}</h4>
+                    <p className="priority-card-copy">
+                      {selectedPartnerRecord
+                        ? `${partnerFreshnessLabel(selectedPartnerRecord)} · ${selectedPartnerRecord.model_version ?? "no model heartbeat yet"} · ${selectedPartnerRecord.data_source ?? "unknown source"}`
+                        : "Select a partner to review its latest warning flow."}
+                    </p>
+                  </div>
+                  {selectedPartnerRecord ? (
+                    <span className="risk-badge" style={{ color: partnerStatusTone(selectedPartnerRecord.status), borderColor: `${partnerStatusTone(selectedPartnerRecord.status)}55` }}>
+                      {selectedPartnerRecord.status.replace("_", " ")}
+                    </span>
+                  ) : null}
+                </div>
+              </div>
+            </div>
+          </div>
+
           {edgeSync?.is_edge_node && (
             <details className="panel panel-details" style={{ marginBottom: 16, borderColor: "rgba(var(--info-rgb), 0.24)", background: "rgba(var(--info-rgb), 0.07)" }}>
               <summary>
@@ -210,97 +271,74 @@ export default function FederationDashboard() {
             </details>
           )}
 
-          {/* Partner cards */}
-          <div className="partner-grid">
-            {partners.map((p) => {
-              const statusSurface = partnerStatusSurface(p.status);
-              return (
-              <div
-                key={p.partner_id}
-                className={`partner-card ${p.status === "online" ? "active-partner" : ""}`}
-                onClick={() => setSelectedPartner(p.partner_id)}
-                style={{ cursor: "pointer", opacity: p.status === "offline" ? 0.55 : 1 }}
-              >
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-                  <div>
-                    <div className="partner-name">{p.partner_name}</div>
-                    <div className="partner-id">{p.partner_id}</div>
-                  </div>
-                  <span
-                    className="risk-badge"
-                    style={{
-                      background: statusSurface.background,
-                      color: partnerStatusTone(p.status),
-                      border: `1px solid ${statusSurface.border}`,
-                    }}
-                  >
-                    {p.status.replace("_", " ")}
-                  </span>
-                </div>
-
-                <div style={{ display: "inline-block" }}>
-                  <span
-                    className="risk-badge info"
-                    style={{ fontSize: "0.65rem", background: "transparent", border: `1px solid ${sectorColor(p.sector)}20`, color: sectorColor(p.sector) }}
-                  >
-                    {p.sector.toUpperCase()}
-                  </span>
-                </div>
-
-                <div className="partner-stats">
-                  <div className="partner-stat">
-                    <span>{patterns.filter((pt) => pt.partner_id === p.partner_id).length}</span>
-                    patterns
-                  </div>
-                  <div className="partner-stat">
-                    <span>{p.run_count ?? 0}</span>
-                    runs
-                  </div>
-                </div>
-
-                <div className="list" style={{ marginTop: 12 }}>
-                  <div className="list-item" style={{ padding: 0, border: 0 }}>
-                    <strong>Freshness</strong>
-                    <p className="muted" style={{ marginTop: 4 }}>{partnerFreshnessLabel(p)}</p>
-                  </div>
-                  <div className="list-item" style={{ padding: 0, border: 0 }}>
-                    <strong>Model and source</strong>
-                    <p className="muted" style={{ marginTop: 4 }}>
-                      {p.model_version ?? "No heartbeat version yet"} · {p.data_source ?? "unknown source"}
-                    </p>
-                  </div>
-                  <div className="list-item" style={{ padding: 0, border: 0 }}>
-                    <strong>Last run</strong>
-                    <p className="muted" style={{ marginTop: 4 }}>
-                      {p.last_run_status ?? "unknown"} · publish {p.last_publish_status ?? "unknown"}
-                      {p.hub_reachable == null ? "" : ` · hub ${p.hub_reachable ? "reachable" : "unreachable"}`}
-                    </p>
-                  </div>
-                </div>
-              </div>
-              );
-            })}
-          </div>
-
           <details className="panel panel-details" open>
             <summary>
-              <span>Patterns by partner</span>
-              <span className="muted">{totalPatterns} total submissions</span>
+              <span>Partner heartbeat roster</span>
+              <span className="muted">{partners.length} partner edges</span>
             </summary>
-            <div className="panel-header">
-              <h3>Patterns by partner</h3>
+            <div className="partner-grid">
+              {partners.map((p) => {
+                const statusSurface = partnerStatusSurface(p.status);
+                return (
+                  <div
+                    key={p.partner_id}
+                    className={`partner-card ${p.status === "online" ? "active-partner" : ""}`}
+                    onClick={() => setSelectedPartner(p.partner_id)}
+                    style={{ cursor: "pointer", opacity: p.status === "offline" ? 0.55 : 1 }}
+                  >
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                      <div>
+                        <div className="partner-name">{p.partner_name}</div>
+                        <div className="partner-id">{p.partner_id}</div>
+                      </div>
+                      <span
+                        className="risk-badge"
+                        style={{
+                          background: statusSurface.background,
+                          color: partnerStatusTone(p.status),
+                          border: `1px solid ${statusSurface.border}`,
+                        }}
+                      >
+                        {p.status.replace("_", " ")}
+                      </span>
+                    </div>
+
+                    <div style={{ display: "inline-block" }}>
+                      <span
+                        className="risk-badge info"
+                        style={{ fontSize: "0.65rem", background: "transparent", border: `1px solid ${sectorColor(p.sector)}20`, color: sectorColor(p.sector) }}
+                      >
+                        {p.sector.toUpperCase()}
+                      </span>
+                    </div>
+
+                    <div className="partner-stats">
+                      <div className="partner-stat">
+                        <span>{patterns.filter((pt) => pt.partner_id === p.partner_id).length}</span>
+                        patterns
+                      </div>
+                      <div className="partner-stat">
+                        <span>{p.run_count ?? 0}</span>
+                        runs
+                      </div>
+                    </div>
+
+                    <div className="list" style={{ marginTop: 12 }}>
+                      <div className="list-item" style={{ padding: 0, border: 0 }}>
+                        <strong>Freshness</strong>
+                        <p className="muted" style={{ marginTop: 4 }}>{partnerFreshnessLabel(p)}</p>
+                      </div>
+                      <div className="list-item" style={{ padding: 0, border: 0 }}>
+                        <strong>Model and source</strong>
+                        <p className="muted" style={{ marginTop: 4 }}>
+                          {p.model_version ?? "No heartbeat version yet"} · {p.data_source ?? "unknown source"}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
-            <ResponsiveContainer width="100%" height={200}>
-              <BarChart data={patternsByPartner} margin={{ top: 4, right: 8, left: -16, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="name" tick={{ fontSize: 10, fill: "var(--ink-muted)" }} />
-                <YAxis tick={{ fontSize: 10, fill: "var(--ink-muted)" }} />
-                <Tooltip
-                  contentStyle={{ background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 8, fontSize: 12 }}
-                />
-                <Bar dataKey="patterns" fill="var(--accent)" opacity={0.8} radius={[3, 3, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
           </details>
 
           <details className="panel panel-details">
@@ -422,10 +460,7 @@ export default function FederationDashboard() {
             <div style={{ display: "flex", gap: 12, alignItems: "flex-start", marginTop: 12 }}>
               <AlertTriangle size={15} color="var(--info)" style={{ marginTop: 2, flexShrink: 0 }} />
               <p style={{ fontSize: "0.8rem", opacity: 0.7, lineHeight: 1.6 }}>
-                <strong>Privacy model:</strong> Edge agents hash entity identifiers with the shared{" "}
-                <span className="mono">NATIONAL_SALT</span> before sending to the hub. Raw phone numbers, account
-                numbers and IPs never leave the partner's premises. The hub sees only HMAC-SHA256 digests and can
-                correlate only because all partners use the same salt.
+                <strong>Privacy model:</strong> Edge agents hash entity identifiers with the shared <span className="mono">NATIONAL_SALT</span> before publishing. Raw phone numbers, account numbers, emails, and IPs stay with the partner. The hub only correlates matching digests and warning metadata.
               </p>
             </div>
           </details>

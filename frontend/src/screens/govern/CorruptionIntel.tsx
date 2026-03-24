@@ -1,5 +1,6 @@
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid } from "recharts";
 import { Building2, AlertTriangle, TrendingUp, Shield } from "lucide-react";
+import ArchitectureFlow from "../../app/ArchitectureFlow";
 import type { OperationsSnapshot } from "../../types/operations";
 
 const RISK_COLORS = ["#ff4d5a", "#ff8c42", "#ffd147", "#31ff90", "#88b79b"];
@@ -28,6 +29,15 @@ interface Props {
 
 export default function CorruptionIntel({ data, onRunLeakage, leakageActionLabel }: Props) {
   const ls = data.leakageSummary;
+  const topProcurement = data.procurementAnomalies[0] ?? null;
+  const topGuardrail = data.guardrailDecisions[0] ?? null;
+  const topIntegrity = data.integrityAlerts[0] ?? null;
+  const uniqueVendors = new Set([
+    ...data.procurementAnomalies.map((item) => item.vendorId),
+    ...data.guardrailDecisions.map((item) => item.vendorId),
+    ...data.leakageAlerts.map((item) => item.vendorId),
+  ]).size;
+  const openIntegrity = data.integrityAlerts.filter((item) => item.status.toLowerCase() === "open").length;
 
   const byDetectorData = ls
     ? Object.entries(ls.byDetector).map(([key, val]) => ({
@@ -45,7 +55,6 @@ export default function CorruptionIntel({ data, onRunLeakage, leakageActionLabel
     : [];
 
   const totalSuspectedKsh = ls?.suspectedAmountTotal ?? 0;
-  const totalLeakageAlerts = ls?.totalAlerts ?? data.leakageAlerts.length;
 
   return (
     <div>
@@ -53,51 +62,52 @@ export default function CorruptionIntel({ data, onRunLeakage, leakageActionLabel
         <h2>
           <Building2 size={20} color="var(--warning)" />
           Corruption Intelligence
-          <span className="subtitle">— procurement · ghost workers · tender cartels · IFMIS leakage</span>
+          <span className="subtitle">— procurement, supplier networks, payments, and outcomes</span>
         </h2>
         <button className="btn-accent" onClick={onRunLeakage}>
           <TrendingUp size={13} /> &nbsp;{leakageActionLabel}
         </button>
       </div>
 
-      <div className="panel workflow-guide-panel" style={{ marginBottom: 16, background: "rgba(var(--warning-rgb), 0.08)", borderColor: "rgba(var(--warning-rgb), 0.24)" }}>
-        <div className="detail-grid">
-          <div>
-            <strong>This is the deep-dive corruption workspace.</strong>
-            <p className="workflow-stage-copy" style={{ marginTop: 6 }}>
-              Use Operations for a short integrity summary. Use this page when you need the full procurement, guardrail, leakage, and integrity evidence surfaces.
-            </p>
-          </div>
-          <div>
-            <strong>Best flow</strong>
-            <ul className="inspector-compact-list" style={{ marginTop: 8 }}>
-              <li>Read the leakage banner first.</li>
-              <li>Review procurement and guardrail tables next.</li>
-              <li>Use integrity alerts last for deeper investigator follow-up.</li>
-            </ul>
-          </div>
-        </div>
-      </div>
+      <ArchitectureFlow
+        label="Integrity flow"
+        title="How the corruption view should be read"
+        summary="Start from procurement and payment pressure, then read linked supplier risk, then move into integrity evidence."
+        steps={[
+          { stage: "Procurement", title: "Tender and award signals", detail: "Watch anomalies in awards, single-source patterns, and emergency procurement.", tone: "warning" },
+          { stage: "Network", title: "Supplier linkage", detail: "Track shared directors, accounts, addresses, and family networks.", tone: "accent" },
+          { stage: "Payments", title: "Disbursement and delivery", detail: "Compare payments, milestones, complaints, and execution rate.", tone: "info" },
+          { stage: "Outcome", title: "Escalate for review", detail: "Push audit, legal, or anti-corruption follow-up with evidence attached.", tone: "danger" },
+        ]}
+      />
 
-      {/* Leakage summary banner */}
-      {ls && (
-        <div className="panel" style={{ marginBottom: 16, borderColor: "rgba(255,209,71,.32)" }}>
-          <div style={{ display: "flex", gap: 32, alignItems: "center", flexWrap: "wrap" }}>
-            <div>
-              <div className="metric-label">Window</div>
-              <div style={{ fontWeight: 700, fontSize: "1.1rem" }}>{ls.windowDays} days</div>
+      <div className="focus-layout">
+        <div className="panel focus-hero focus-hero-warning">
+          <p className="focus-kicker">Integrity pressure</p>
+          <p className="focus-value">KES {totalSuspectedKsh.toLocaleString()}</p>
+          <p className="focus-copy">
+            {ls ? `${ls.windowDays}-day suspected leakage exposure across procurement, payment control, and integrity review.` : "Integrity pressure is still building for this window."} Use this screen to show how tenders, supplier networks, controls, and review outcomes form one chain instead of disconnected alerts.
+          </p>
+          <div className="focus-stat-grid">
+            <div className="focus-stat-card">
+              <div className="focus-stat-label">Tender anomalies</div>
+              <div className="focus-stat-value">{data.procurementAnomalies.length}</div>
             </div>
-            <div>
-              <div className="metric-label">Total alerts</div>
-              <div style={{ fontWeight: 700, fontSize: "1.4rem", color: "var(--warning)" }}>{ls.totalAlerts}</div>
+            <div className="focus-stat-card">
+              <div className="focus-stat-label">Supplier entities</div>
+              <div className="focus-stat-value">{uniqueVendors}</div>
             </div>
-            <div>
-              <div className="metric-label">Suspected leakage</div>
-              <div style={{ fontWeight: 700, fontSize: "1.4rem", color: "var(--danger)" }}>
-                KES {totalSuspectedKsh.toLocaleString()}
-              </div>
+            <div className="focus-stat-card">
+              <div className="focus-stat-label">Payment controls</div>
+              <div className="focus-stat-value">{data.guardrailDecisions.length}</div>
             </div>
-            <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+            <div className="focus-stat-card">
+              <div className="focus-stat-label">Open reviews</div>
+              <div className="focus-stat-value">{openIntegrity}</div>
+            </div>
+          </div>
+          {ls && (
+            <div className="chip-row" style={{ marginTop: 16 }}>
               {Object.entries(ls.bySeverity).map(([sev, count]) =>
                 count > 0 ? (
                   <span key={sev} className={`risk-badge ${riskClass(sev)}`}>
@@ -106,98 +116,161 @@ export default function CorruptionIntel({ data, onRunLeakage, leakageActionLabel
                 ) : null,
               )}
             </div>
-          </div>
+          )}
         </div>
-      )}
 
-      {/* Metric cards */}
-      <div className="metric-grid">
-        <div className="metric-card warn">
-          <div className="metric-label">Procurement anomalies</div>
-          <div className="metric-value">{data.procurementAnomalies.length}</div>
-          <div className="metric-sub">Inflated tenders / cartels</div>
-        </div>
-        <div className="metric-card warn">
-          <div className="metric-label">Guardrail decisions</div>
-          <div className="metric-value">{data.guardrailDecisions.length}</div>
-          <div className="metric-sub">Auto-blocked transactions</div>
-        </div>
-        <div className="metric-card danger">
-          <div className="metric-label">Integrity alerts</div>
-          <div className="metric-value">{data.integrityAlerts.length}</div>
-          <div className="metric-sub">IFMIS / payroll anomalies</div>
-        </div>
-        <div className="metric-card danger">
-          <div className="metric-label">Leakage alerts</div>
-          <div className="metric-value">{totalLeakageAlerts}</div>
-          <div className="metric-sub">Cross-agency fund tracing</div>
-        </div>
-        <div className="metric-card">
-          <div className="metric-label">Economy signals</div>
-          <div className="metric-value">{data.economySignals.length}</div>
-          <div className="metric-sub">Macro / sector signals</div>
-        </div>
-        <div className="metric-card">
-          <div className="metric-label">AI predictions</div>
-          <div className="metric-value">{data.predictions.length}</div>
-          <div className="metric-sub">Corruption risk scores</div>
+        <div className="panel priority-stack">
+          <div className="panel-header">
+            <h3>How this case is read</h3>
+            <span className="muted">Follow the chain, not isolated alerts</span>
+          </div>
+          <div className="story-rail story-rail-four">
+            <div className="story-card">
+              <p className="story-card-label">Procurement</p>
+              <h4>{data.procurementAnomalies.length} anomalies</h4>
+              <p>{topProcurement ? `${topProcurement.tenderId} at ${topProcurement.agency} is the current lead case.` : "No tender anomaly is leading right now."}</p>
+            </div>
+            <div className="story-card">
+              <p className="story-card-label">Supplier network</p>
+              <h4>{uniqueVendors} vendors</h4>
+              <p>Use repeated suppliers and shared vendor identities to surface collusion and subdivision risk.</p>
+            </div>
+            <div className="story-card">
+              <p className="story-card-label">Payment control</p>
+              <h4>{data.guardrailDecisions.length} holds</h4>
+              <p>{topGuardrail ? `${topGuardrail.decision} on ${topGuardrail.tenderId} is the strongest current control signal.` : "No guardrail decision is leading yet."}</p>
+            </div>
+            <div className="story-card">
+              <p className="story-card-label">Outcome queue</p>
+              <h4>{openIntegrity} open reviews</h4>
+              <p>{topIntegrity ? `${topIntegrity.alertType} in ${topIntegrity.sourceSystem} is currently open for review.` : "No integrity review is currently open."}</p>
+            </div>
+          </div>
         </div>
       </div>
 
-      {/* Charts row */}
-      {(byDetectorData.length > 0 || bySeverityData.length > 0) && (
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
-          <div className="panel">
-            <div className="panel-header">
-              <h3>Leakage by Detector</h3>
-            </div>
-            <ResponsiveContainer width="100%" height={200}>
-              <BarChart data={byDetectorData} margin={{ top: 4, right: 8, left: -16, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="name" tick={{ fontSize: 9, fill: "var(--ink-muted)" }} />
-                <YAxis tick={{ fontSize: 10, fill: "var(--ink-muted)" }} />
-                <Tooltip
-                  contentStyle={{ background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 8, fontSize: 12 }}
-                />
-                <Bar dataKey="value" fill="var(--warning)" opacity={0.8} radius={[3, 3, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
+      <div className="grid-two">
+        <div className="panel priority-stack">
+          <div className="panel-header">
+            <h3>Priority case</h3>
+            <span className="muted">What to point at first</span>
           </div>
-          <div className="panel">
-            <div className="panel-header">
-              <h3>Alerts by Severity</h3>
+          {topProcurement ? (
+            <div className="priority-card">
+              <div className="priority-card-head">
+                <div>
+                  <h4 className="priority-card-title">{topProcurement.tenderId}</h4>
+                  <p className="priority-card-copy">
+                    {topProcurement.vendorId} at {topProcurement.agency} is flagged as {topProcurement.severity.toLowerCase()} severity at {topProcurement.score.toFixed(2)} score.
+                  </p>
+                </div>
+                <span className={`risk-badge ${riskClass(topProcurement.severity)}`}>{topProcurement.severity}</span>
+              </div>
             </div>
-            <ResponsiveContainer width="100%" height={200}>
-              <PieChart>
-                <Pie
-                  data={bySeverityData}
-                  cx="50%"
-                  cy="50%"
-                  innerRadius={50}
-                  outerRadius={80}
-                  dataKey="count"
-                  nameKey="name"
-                >
-                  {bySeverityData.map((entry, i) => (
-                    <Cell key={i} fill={entry.fill} />
-                  ))}
-                </Pie>
-                <Tooltip
-                  contentStyle={{ background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 8, fontSize: 12 }}
-                  formatter={(v: number | string | undefined, name: string | undefined) => [v ?? 0, name ?? ""]}
-                />
-              </PieChart>
-            </ResponsiveContainer>
+          ) : (
+            <div className="priority-card">
+              <h4 className="priority-card-title">No lead tender anomaly</h4>
+              <p className="priority-card-copy">Use the lifecycle panels below once procurement data is ingested into the corruption pipeline.</p>
+            </div>
+          )}
+          {topGuardrail && (
+            <div className="priority-card">
+              <div className="priority-card-head">
+                <div>
+                  <h4 className="priority-card-title">Control signal</h4>
+                  <p className="priority-card-copy">
+                    {topGuardrail.decision} applied to {topGuardrail.tenderId} for {topGuardrail.vendorId} at {topGuardrail.score.toFixed(2)} score.
+                  </p>
+                </div>
+                <Shield size={16} color="var(--warning)" />
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="panel priority-stack">
+          <div className="panel-header">
+            <h3>Recommended next moves</h3>
+            <span className="muted">Keep corruption actions human-gated</span>
+          </div>
+          <div className="priority-card">
+            <h4 className="priority-card-title">1. Freeze the review, not the whole system</h4>
+            <p className="priority-card-copy">Escalate the tender, vendor, or payment path for controlled audit review instead of claiming AI has proven wrongdoing.</p>
+          </div>
+          <div className="priority-card">
+            <h4 className="priority-card-title">2. Link supplier and payment evidence</h4>
+            <p className="priority-card-copy">Move from tender anomaly to supplier network to payment control and then to integrity outcome. That chain is the actual evidence story.</p>
+          </div>
+          <div className="priority-card-actions">
+            <button className="btn-accent" onClick={onRunLeakage}>
+              <TrendingUp size={13} /> &nbsp;{leakageActionLabel}
+            </button>
           </div>
         </div>
+      </div>
+
+      {(byDetectorData.length > 0 || bySeverityData.length > 0) && (
+        <details className="panel panel-details" open>
+          <summary>
+            <span>Detector mix and severity spread</span>
+            <span className="muted">Open analytics breakdown</span>
+          </summary>
+          <div className="grid-two">
+            <div className="panel">
+              <div className="panel-header">
+                <h3>Leakage by detector</h3>
+              </div>
+              <ResponsiveContainer width="100%" height={200}>
+                <BarChart data={byDetectorData} margin={{ top: 4, right: 8, left: -16, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="name" tick={{ fontSize: 9, fill: "var(--ink-muted)" }} />
+                  <YAxis tick={{ fontSize: 10, fill: "var(--ink-muted)" }} />
+                  <Tooltip
+                    contentStyle={{ background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 8, fontSize: 12 }}
+                  />
+                  <Bar dataKey="value" fill="var(--warning)" opacity={0.8} radius={[3, 3, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+            <div className="panel">
+              <div className="panel-header">
+                <h3>Alerts by severity</h3>
+              </div>
+              <ResponsiveContainer width="100%" height={200}>
+                <PieChart>
+                  <Pie
+                    data={bySeverityData}
+                    cx="50%"
+                    cy="50%"
+                    innerRadius={50}
+                    outerRadius={80}
+                    dataKey="count"
+                    nameKey="name"
+                  >
+                    {bySeverityData.map((entry, i) => (
+                      <Cell key={i} fill={entry.fill} />
+                    ))}
+                  </Pie>
+                  <Tooltip
+                    contentStyle={{ background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 8, fontSize: 12 }}
+                    formatter={(v: number | string | undefined, name: string | undefined) => [v ?? 0, name ?? ""]}
+                  />
+                </PieChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+        </details>
       )}
 
       {/* Procurement anomalies */}
       {data.procurementAnomalies.length > 0 && (
-        <div className="panel" style={{ marginBottom: 16 }}>
-          <div className="panel-header">
-            <h3>Procurement Anomalies</h3>
+        <details className="panel panel-details" open>
+          <summary>
+            <span>Procurement anomalies</span>
             <span className="muted">{data.procurementAnomalies.length} detected</span>
+          </summary>
+          <div className="panel-header">
+            <h3>Procurement anomalies</h3>
           </div>
           <div style={{ overflowX: "auto" }}>
             <table className="data-table">
@@ -235,12 +308,15 @@ export default function CorruptionIntel({ data, onRunLeakage, leakageActionLabel
               </tbody>
             </table>
           </div>
-        </div>
+        </details>
       )}
 
-      {/* Guardrail decisions */}
       {data.guardrailDecisions.length > 0 && (
-        <div className="panel" style={{ marginBottom: 16 }}>
+        <details className="panel panel-details">
+          <summary>
+            <span>Payment controls and guardrails</span>
+            <span className="muted">{data.guardrailDecisions.length} decisions</span>
+          </summary>
           <div className="panel-header">
             <h3>
               <Shield size={14} style={{ verticalAlign: "middle", marginRight: 6 }} />
@@ -281,12 +357,15 @@ export default function CorruptionIntel({ data, onRunLeakage, leakageActionLabel
               ))}
             </tbody>
           </table>
-        </div>
+        </details>
       )}
 
-      {/* Integrity alerts */}
       {data.integrityAlerts.length > 0 && (
-        <div className="panel">
+        <details className="panel panel-details">
+          <summary>
+            <span>Integrity alerts</span>
+            <span className="muted">{data.integrityAlerts.length} alerts</span>
+          </summary>
           <div className="panel-header">
             <h3>
               <AlertTriangle size={14} style={{ verticalAlign: "middle", marginRight: 6 }} />
@@ -330,7 +409,7 @@ export default function CorruptionIntel({ data, onRunLeakage, leakageActionLabel
               ))}
             </tbody>
           </table>
-        </div>
+        </details>
       )}
 
       {data.procurementAnomalies.length === 0 &&

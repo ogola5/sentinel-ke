@@ -121,7 +121,7 @@ export const SCREEN_CHROME: Record<ScreenId, ScreenChrome> = {
   },
   investigate: {
     title: "Investigation",
-    subtitle: "Explain one entity clearly.",
+    subtitle: "Trace one entity from score to decision.",
     showEntitySearch: true,
     entitySearchLabel: "Entity key",
     entitySearchPlaceholder: "Search a service or entity key",
@@ -150,11 +150,11 @@ export const SCREEN_CHROME: Record<ScreenId, ScreenChrome> = {
   },
   reports: {
     title: "Reports",
-    subtitle: "Generate readable outputs fast.",
+    subtitle: "Turn platform output into clear operator and executive reports.",
   },
   command: {
     title: "Command",
-    subtitle: "Keep the national picture focused.",
+    subtitle: "Read national posture from agency signals, federation, and readiness.",
   },
   timeline: {
     title: "Threat Forecast",
@@ -170,7 +170,7 @@ export const SCREEN_CHROME: Record<ScreenId, ScreenChrome> = {
   },
   gnn: {
     title: "GNN Intelligence",
-    subtitle: "Review model state and caveats.",
+    subtitle: "Follow the graph path from input to score to analyst review.",
   },
   crypto: {
     title: "Crypto Posture",
@@ -182,7 +182,7 @@ export const SCREEN_CHROME: Record<ScreenId, ScreenChrome> = {
   },
   federation: {
     title: "Federation",
-    subtitle: "Track partner posture and correlations.",
+    subtitle: "See how partner edges share hashes and how the hub correlates them.",
   },
   audit: {
     title: "Audit",

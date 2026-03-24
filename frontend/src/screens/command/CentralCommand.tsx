@@ -1,18 +1,16 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
-  Activity,
-  AlertTriangle,
   Database,
   Globe,
   Loader,
   Network,
-  Radio,
   RefreshCw,
   Shield,
   TrendingUp,
   Users,
 } from "lucide-react";
 
+import ArchitectureFlow from "../../app/ArchitectureFlow";
 import { fetchFederationCorrelations, fetchFederationPartners } from "../../api/federation";
 import { apiListUsers } from "../../api/auth";
 import { fetchDriftReports, fetchPlatformTrustSummary, runDriftCheck } from "../../api/ai";
@@ -56,28 +54,6 @@ function threatLevel(critCount: number, highCount: number): { level: string; col
     return { level: "ELEVATED", color: "var(--risk-medium)", note: "Multiple queues need review." };
   }
   return { level: "GUARDED", color: "var(--accent)", note: "No critical queue is active right now." };
-}
-
-function CommandStat({
-  label,
-  value,
-  icon,
-  tone,
-}: {
-  label: string;
-  value: number | string;
-  icon: ReactNode;
-  tone?: string;
-}) {
-  return (
-    <div className="metric-card">
-      <div className="metric-label" style={{ display: "flex", alignItems: "center", gap: 6 }}>
-        {icon}
-        {label}
-      </div>
-      <div className="metric-value" style={{ color: tone }}>{value}</div>
-    </div>
-  );
 }
 
 export default function CentralCommand({
@@ -164,7 +140,6 @@ export default function CentralCommand({
   );
   const forecast = threatSummaryData.forecast;
   const highRiskPredictions = operationsData.predictions.filter((item) => isHighRisk(item.score));
-  const blockedGuardrails = operationsData.guardrailDecisions.filter((item) => item.decision === "block");
   const mfaEnabled = users.filter((item) => item.mfa_enabled).length;
   const lockedCount = users.filter((item) => item.locked_until).length;
   const centralUsers = users.filter((item) => item.access_level === "central").length;
@@ -181,11 +156,47 @@ export default function CentralCommand({
   const schemaContractOk = hasPlatformHealth && healthPlatformStatus.schema_contract_ok === true;
   const schemaMissingCount = Number(healthPlatformStatus.schema_missing_count ?? 0);
   const federationSignedRequired = hasPlatformHealth && healthPlatformStatus.federation_signed_requests_required === true;
-  const legalAnchorIntegrity = hasPlatformHealth ? String(healthPlatformStatus.legal_anchor_integrity ?? "unknown") : "unknown";
-  const legalAnchorModes =
-    healthPlatformStatus.legal_anchor_modes && typeof healthPlatformStatus.legal_anchor_modes === "object"
-      ? (healthPlatformStatus.legal_anchor_modes as Record<string, unknown>)
-      : {};
+  const leadCorrelation = correlations[0] ?? null;
+  const topThreatLead = topThreats[0] ?? null;
+  const activePartners = onlinePartnerIds.size;
+  const attentionPartners = partners.filter((item) => item.status !== "online").length;
+  const priorityQueues = [
+    {
+      title: "AI review queue",
+      value: `${highRiskPredictions.length}`,
+      note: `${highRiskPredictions.length} entities are above the review threshold and need analyst judgment.`,
+      action: "Open GNN Intelligence",
+      screen: "gnn",
+      tone: "var(--risk-high)",
+    },
+    {
+      title: "Campaign escalation",
+      value: `${threatSummaryData.campaign_risk.critical} critical`,
+      note: `${threatSummaryData.campaign_risk.high} high campaign indicators are still active across the current window.`,
+      action: "Open Campaigns",
+      screen: "campaigns",
+      tone: "var(--warning)",
+    },
+    {
+      title: "Integrity leakage review",
+      value: `KES ${operationsData.leakageSummary.suspectedAmountTotal.toLocaleString()}`,
+      note: `${operationsData.integrityAlerts.length} integrity alerts and ${operationsData.leakageSummary.totalAlerts} leakage alerts are open for operational follow-up.`,
+      action: "Open Operations",
+      screen: "ops",
+      tone: "var(--danger)",
+    },
+  ];
+  const readinessHeadline =
+    trustSummary?.overall_status === "pass"
+      ? "Operationally ready"
+      : trustSummary?.overall_status === "fail"
+        ? "Readiness gap detected"
+        : "Readiness requires attention";
+  const readinessSummary =
+    trustSummary?.headline ??
+    (healthGnnLoaded
+      ? "Core analytics are available. Use this view to confirm policy, evidence, and operator readiness."
+      : "Core analytics are not currently loaded. Treat this as a platform recovery and readiness issue.");
   const handleBackupAttestation = async () => {
     if (!backupAssetId.trim() || !backupId.trim()) return;
     setOpsBusy(true);
@@ -258,7 +269,7 @@ export default function CentralCommand({
           <p className="eyebrow">C1</p>
           <h2>National Command Centre</h2>
           <p className="subtle">
-            A lean national view: first understand the threat level, then the network, then readiness.
+            National posture from agency signals, federation matches, and operational readiness.
           </p>
         </div>
         <div className="screen-header-actions">
@@ -285,98 +296,72 @@ export default function CentralCommand({
         </div>
       </div>
 
-      <div
-        className="panel"
-        style={{
-          borderColor: nationalThreat.color,
-          background: `${nationalThreat.color}10`,
-        }}
-      >
-        <div style={{ display: "flex", gap: 24, flexWrap: "wrap", alignItems: "flex-end" }}>
-          <div>
-            <p className="label">National threat level</p>
-            <p style={{ fontSize: "2.2rem", fontWeight: 800, color: nationalThreat.color, margin: "2px 0" }}>
-              {nationalThreat.level}
-            </p>
-            <p className="muted">{nationalThreat.note}</p>
-          </div>
-
-          <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginLeft: "auto" }}>
-            <CommandStat label="Campaigns" value={activeCampaignCount} icon={<Radio size={13} />} tone="var(--warning)" />
-            <CommandStat label="Live events" value={activeEventCount} icon={<Activity size={13} />} tone="var(--info)" />
-            <CommandStat label="High-risk AI queue" value={highRiskPredictions.length} icon={<AlertTriangle size={13} />} tone="var(--risk-high)" />
-            <CommandStat label="Cross-agency hits" value={correlations.length} icon={<Network size={13} />} tone="var(--accent)" />
-          </div>
-        </div>
-      </div>
+      <ArchitectureFlow
+        label="Architecture flow"
+        title="How this screen should be read"
+        summary="Start with agency and partner signals, then read the shared national picture, then assign response priority."
+        steps={[
+          { stage: "Agency edge", title: "Local detections", detail: "Each agency scores and triages its own telemetry first.", tone: "info" },
+          { stage: "Federation hub", title: "Shared warning layer", detail: "The hub aggregates partner freshness and correlation signals.", tone: "accent" },
+          { stage: "Command", title: "National posture", detail: "Command sees queue pressure, partner coverage, and cross-agency risk.", tone: "warning" },
+          { stage: "Action", title: "Set priorities", detail: "Push analysts toward the next queue, report, or response track.", tone: "danger" },
+        ]}
+      />
 
       {view === "brief" && (
         <>
-          <div className="metric-grid">
-            <CommandStat
-              label="Forecast"
-              value={forecast.forecast_score != null ? `${formatRiskScore(forecast.forecast_score)} / 100` : "No forecast"}
-              icon={<TrendingUp size={13} />}
-              tone={forecast.trend === "rising" ? "var(--risk-high)" : "var(--accent)"}
-            />
-            <CommandStat
-              label="Critical campaign queue"
-              value={threatSummaryData.campaign_risk.critical}
-              icon={<AlertTriangle size={13} />}
-              tone="var(--risk-critical)"
-            />
-            <CommandStat
-              label="Leakage alerts"
-              value={operationsData.leakageSummary.totalAlerts}
-              icon={<Shield size={13} />}
-              tone="var(--warning)"
-            />
-            <CommandStat
-              label="Guardrail blocks"
-              value={blockedGuardrails.length}
-              icon={<Shield size={13} />}
-              tone="var(--risk-critical)"
-            />
-          </div>
-
-          <div className="grid-two">
-            <div className="panel">
-              <div className="panel-header">
-                <h3>What needs attention first</h3>
-                <span className="muted">One queue at a time</span>
-              </div>
-              <div className="list">
-                <div className="list-item">
-                  <p style={{ fontWeight: 600, marginBottom: 4 }}>AI high-risk review queue</p>
-                  <p className="muted">
-                    {highRiskPredictions.length} entities are above the operational review threshold.
-                  </p>
-                  <button className="ghost" type="button" onClick={() => onNavigate("gnn")}>
-                    Open GNN Intelligence
-                  </button>
+          <div className="focus-layout">
+            <div className={`panel focus-hero ${criticalQueueCount > 0 ? "focus-hero-danger" : highQueueCount > 0 ? "focus-hero-warning" : "focus-hero-accent"}`}>
+              <p className="focus-kicker">National posture</p>
+              <p className="focus-value" style={{ color: nationalThreat.color }}>{nationalThreat.level}</p>
+              <p className="focus-copy">
+                {nationalThreat.note} {forecast.forecast_score != null ? `Forecast pressure is ${formatRiskScore(forecast.forecast_score)} / 100 and the current trend is ${forecast.trend}.` : "Forecast data is still building for the current national window."}
+              </p>
+              <div className="focus-stat-grid">
+                <div className="focus-stat-card">
+                  <div className="focus-stat-label">Campaigns</div>
+                  <div className="focus-stat-value">{activeCampaignCount}</div>
                 </div>
-                <div className="list-item">
-                  <p style={{ fontWeight: 600, marginBottom: 4 }}>Campaign escalation</p>
-                  <p className="muted">
-                    {threatSummaryData.campaign_risk.critical} critical and {threatSummaryData.campaign_risk.high} high campaign indicators are active.
-                  </p>
-                  <button className="ghost" type="button" onClick={() => onNavigate("campaigns")}>
-                    Open Campaigns
-                  </button>
+                <div className="focus-stat-card">
+                  <div className="focus-stat-label">Live events</div>
+                  <div className="focus-stat-value">{activeEventCount}</div>
                 </div>
-                <div className="list-item">
-                  <p style={{ fontWeight: 600, marginBottom: 4 }}>Operational integrity</p>
-                  <p className="muted">
-                    {operationsData.integrityAlerts.length} integrity alerts and KES{" "}
-                    {operationsData.leakageSummary.suspectedAmountTotal.toLocaleString()} suspected leakage in the current window.
-                  </p>
-                  <button className="ghost" type="button" onClick={() => onNavigate("ops")}>
-                    Open Operations
-                  </button>
+                <div className="focus-stat-card">
+                  <div className="focus-stat-label">AI queue</div>
+                  <div className="focus-stat-value">{highRiskPredictions.length}</div>
+                </div>
+                <div className="focus-stat-card">
+                  <div className="focus-stat-label">Cross-agency hits</div>
+                  <div className="focus-stat-value">{correlations.length}</div>
                 </div>
               </div>
             </div>
 
+            <div className="panel priority-stack">
+              <div className="panel-header">
+                <h3>First moves</h3>
+                <span className="muted">One decision queue at a time</span>
+              </div>
+              {priorityQueues.map((item) => (
+                <div key={item.title} className="priority-card">
+                  <div className="priority-card-head">
+                    <div>
+                      <h4 className="priority-card-title">{item.title}</h4>
+                      <p className="priority-card-copy">{item.note}</p>
+                    </div>
+                    <span style={{ color: item.tone, fontWeight: 700, whiteSpace: "nowrap" }}>{item.value}</span>
+                  </div>
+                  <div className="priority-card-actions">
+                    <button className="ghost" type="button" onClick={() => onNavigate(item.screen)}>
+                      {item.action}
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="grid-two">
             <div className="panel">
               <div className="panel-header">
                 <h3>Top threat entities</h3>
@@ -412,207 +397,258 @@ export default function CentralCommand({
                 </table>
               )}
             </div>
+
+            <div className="panel priority-stack">
+              <div className="panel-header">
+                <h3>Why command is watching</h3>
+                <span className="muted">Short national brief</span>
+              </div>
+              <div className="priority-card">
+                <div className="priority-card-head">
+                  <div>
+                    <h4 className="priority-card-title">Forecast pressure</h4>
+                    <p className="priority-card-copy">
+                      {forecast.forecast_score != null
+                        ? `Projected score ${formatRiskScore(forecast.forecast_score)} / 100 with a ${forecast.trend} posture.`
+                        : "Forecast signal is not populated yet for this cycle."}
+                    </p>
+                  </div>
+                  <TrendingUp size={16} color={forecast.trend === "rising" ? "var(--risk-high)" : "var(--accent)"} />
+                </div>
+              </div>
+              <div className="priority-card">
+                <div className="priority-card-head">
+                  <div>
+                    <h4 className="priority-card-title">Top flagged entity</h4>
+                    <p className="priority-card-copy">
+                      {topThreatLead
+                        ? `${topThreatLead.entity_key} is ${topThreatLead.severity.toLowerCase()} risk at ${formatRiskScore(topThreatLead.score)} / 100.`
+                        : "No top threat entity has been published yet."}
+                    </p>
+                  </div>
+                  {topThreatLead ? <span className={`risk-badge ${topThreatLead.severity.toLowerCase()}`}>{topThreatLead.severity}</span> : null}
+                </div>
+              </div>
+              <div className="priority-card">
+                <div className="priority-card-head">
+                  <div>
+                    <h4 className="priority-card-title">Integrity exposure</h4>
+                    <p className="priority-card-copy">
+                      {operationsData.integrityAlerts.length} integrity alerts and KES {operationsData.leakageSummary.suspectedAmountTotal.toLocaleString()} suspected leakage remain in the current review window.
+                    </p>
+                  </div>
+                  <Shield size={16} color="var(--warning)" />
+                </div>
+              </div>
+            </div>
           </div>
         </>
       )}
 
       {view === "network" && (
         <>
-          <div className="panel">
-            <div className="panel-header">
-              <h3>Agency network status</h3>
-              <span className="muted">{onlinePartnerIds.size} / {ALL_AGENCIES.length} active partners</span>
-            </div>
-            <div className="agency-presence-grid">
-              {ALL_AGENCIES.map((code) => {
-                const partner = partners.find((item) => item.partner_id.toUpperCase() === code);
-                const online = onlinePartnerIds.has(code);
-                const color = agencyColor(code);
-                return (
-                  <div key={code} className={`agency-presence-card ${online ? "online" : "offline"}`}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                      <span style={{ fontFamily: "JetBrains Mono, monospace", fontWeight: 700, color: online ? color : "var(--ink-muted)" }}>
-                        {code}
-                      </span>
-                      <span className={`status-dot ${online ? "live" : "offline"}`} />
-                    </div>
-                    <div style={{ fontSize: "0.72rem", opacity: 0.7, marginTop: 4 }}>{agencyName(code)}</div>
-                    <div className="muted" style={{ marginTop: 6 }}>
-                      {partner
-                        ? `${partner.status.replace("_", " ")}${partner.last_seen_at ? ` · ${new Date(partner.last_seen_at).toLocaleDateString("en-KE")}` : ""}`
-                        : "Not registered"}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
-          <div className="grid-two">
-            <div className="panel">
-              <div className="panel-header">
-                <h3>Cross-agency correlations</h3>
-                <span className="muted">{correlations.length} active matches</span>
+          <div className="focus-layout">
+            <div className="panel focus-hero focus-hero-accent">
+              <p className="focus-kicker">Agency coverage</p>
+              <p className="focus-value">{activePartners}/{ALL_AGENCIES.length}</p>
+              <p className="focus-copy">
+                Agencies with healthy partner presence at the hub. Use this view to show who is online, where freshness is weak, and where federation is already producing shared warning value.
+              </p>
+              <div className="focus-stat-grid">
+                <div className="focus-stat-card">
+                  <div className="focus-stat-label">Live partners</div>
+                  <div className="focus-stat-value">{activePartners}</div>
+                </div>
+                <div className="focus-stat-card">
+                  <div className="focus-stat-label">Need attention</div>
+                  <div className="focus-stat-value">{attentionPartners}</div>
+                </div>
+                <div className="focus-stat-card">
+                  <div className="focus-stat-label">Correlations</div>
+                  <div className="focus-stat-value">{correlations.length}</div>
+                </div>
+                <div className="focus-stat-card">
+                  <div className="focus-stat-label">Agency users</div>
+                  <div className="focus-stat-value">{sectionUsers}</div>
+                </div>
               </div>
-              {correlations.length === 0 ? (
-                <div className="state-box">
-                  <Network size={22} />
-                  <p>No active cross-agency correlations yet.</p>
+              <div className="agency-presence-grid" style={{ marginTop: 18 }}>
+                {ALL_AGENCIES.map((code) => {
+                  const partner = partners.find((item) => item.partner_id.toUpperCase() === code);
+                  const online = onlinePartnerIds.has(code);
+                  const color = agencyColor(code);
+                  return (
+                    <div key={code} className={`agency-presence-card ${online ? "online" : "offline"}`}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                        <span style={{ fontFamily: "JetBrains Mono, monospace", fontWeight: 700, color: online ? color : "var(--ink-muted)" }}>
+                          {code}
+                        </span>
+                        <span className={`status-dot ${online ? "live" : "offline"}`} />
+                      </div>
+                      <div style={{ fontSize: "0.72rem", opacity: 0.7, marginTop: 4 }}>{agencyName(code)}</div>
+                      <div className="muted" style={{ marginTop: 6 }}>
+                        {partner
+                          ? `${partner.status.replace("_", " ")}${partner.last_seen_at ? ` · ${new Date(partner.last_seen_at).toLocaleDateString("en-KE")}` : ""}`
+                          : "Not registered"}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="panel priority-stack">
+              <div className="panel-header">
+                <h3>Cross-agency moment</h3>
+                <span className="muted">What command should point to</span>
+              </div>
+              {leadCorrelation ? (
+                <div className="priority-card">
+                  <div className="priority-card-head">
+                    <div>
+                      <h4 className="priority-card-title">{leadCorrelation.partner_count}-partner match</h4>
+                      <p className="priority-card-copy">
+                        Hash {leadCorrelation.entity_key_hash.slice(0, 16)}… is shared by {leadCorrelation.partner_ids.join(", ")} at {leadCorrelation.max_confidence.toFixed(2)} max confidence.
+                      </p>
+                    </div>
+                    <span className={`risk-badge ${leadCorrelation.risk_level.toLowerCase()}`}>{leadCorrelation.risk_level}</span>
+                  </div>
                 </div>
               ) : (
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      <th>Entity hash</th>
-                      <th>Partners</th>
-                      <th>Risk</th>
-                      <th>Last seen</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {correlations.slice(0, 8).map((item) => (
-                      <tr key={item.entity_key_hash}>
-                        <td className="mono" style={{ fontSize: "0.78rem" }}>{item.entity_key_hash.slice(0, 16)}…</td>
-                        <td>{item.partner_count} · <span className="muted">{item.partner_ids.join(", ")}</span></td>
-                        <td><span className={`risk-badge ${item.risk_level.toLowerCase()}`}>{item.risk_level}</span></td>
-                        <td className="muted">{new Date(item.last_seen).toLocaleDateString("en-KE")}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                <div className="priority-card">
+                  <h4 className="priority-card-title">No shared warning yet</h4>
+                  <p className="priority-card-copy">Once two or more agencies publish the same hash family, the correlation layer will surface it here first.</p>
+                </div>
               )}
-            </div>
 
-            <div className="panel">
-              <div className="panel-header">
-                <h3>Partner coverage</h3>
-                <span className="muted">Active user footprint</span>
-              </div>
-              <div className="list">
-                {agencyUserCounts.length === 0 ? (
-                  <div className="state-box">
-                    <Users size={22} />
-                    <p>No active agency users found.</p>
+              <div className="priority-card">
+                <div className="priority-card-head">
+                  <div>
+                    <h4 className="priority-card-title">Coverage by operators</h4>
+                    <p className="priority-card-copy">Show that the hub has both partner heartbeat coverage and actual human users in agency workflows.</p>
                   </div>
-                ) : (
-                  agencyUserCounts.slice(0, 8).map((item) => (
+                  <Users size={16} color="var(--accent)" />
+                </div>
+                <div className="list" style={{ marginTop: 12 }}>
+                  {agencyUserCounts.slice(0, 4).map((item) => (
                     <div key={item.code} className="list-item" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                       <div>
-                        <p style={{ fontWeight: 600, marginBottom: 2 }}>{item.label}</p>
-                        <p className="muted">{agencyName(item.code)}</p>
+                        <strong>{item.label}</strong>
+                        <p className="muted" style={{ marginTop: 2 }}>{agencyName(item.code)}</p>
                       </div>
                       <span className="stat mono">{item.count}</span>
                     </div>
-                  ))
-                )}
+                  ))}
+                </div>
               </div>
             </div>
           </div>
+
+          <details className="panel panel-details" open>
+            <summary>
+              <span>Cross-agency correlations</span>
+              <span className="muted">{correlations.length} active matches</span>
+            </summary>
+            {correlations.length === 0 ? (
+              <div className="state-box">
+                <Network size={22} />
+                <p>No active cross-agency correlations yet.</p>
+              </div>
+            ) : (
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Entity hash</th>
+                    <th>Partners</th>
+                    <th>Risk</th>
+                    <th>Last seen</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {correlations.slice(0, 8).map((item) => (
+                    <tr key={item.entity_key_hash}>
+                      <td className="mono" style={{ fontSize: "0.78rem" }}>{item.entity_key_hash.slice(0, 16)}…</td>
+                      <td>{item.partner_count} · <span className="muted">{item.partner_ids.join(", ")}</span></td>
+                      <td><span className={`risk-badge ${item.risk_level.toLowerCase()}`}>{item.risk_level}</span></td>
+                      <td className="muted">{new Date(item.last_seen).toLocaleDateString("en-KE")}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </details>
         </>
       )}
 
       {view === "readiness" && (
         <>
-          <div className="grid-two">
-            <div className="panel">
-              <div className="panel-header">
-                <h3>Readiness snapshot</h3>
-                <span className="muted">People and model state</span>
-              </div>
-              <div className="detail-grid">
-                <div>
-                  <p className="label">Central users</p>
-                  <p className="stat">{centralUsers}</p>
+          <div className="focus-layout">
+            <div className={`panel focus-hero ${trustSummary?.overall_status === "fail" ? "focus-hero-danger" : trustSummary?.overall_status === "warn" ? "focus-hero-warning" : "focus-hero-accent"}`}>
+              <p className="focus-kicker">Operational readiness</p>
+              <p className="focus-value" style={{ color: trustTone }}>{readinessHeadline}</p>
+              <p className="focus-copy">{readinessSummary}</p>
+              <div className="focus-stat-grid">
+                <div className="focus-stat-card">
+                  <div className="focus-stat-label">Central users</div>
+                  <div className="focus-stat-value">{centralUsers}</div>
                 </div>
-                <div>
-                  <p className="label">Agency users</p>
-                  <p className="stat">{sectionUsers}</p>
+                <div className="focus-stat-card">
+                  <div className="focus-stat-label">Agency users</div>
+                  <div className="focus-stat-value">{sectionUsers}</div>
                 </div>
-                <div>
-                  <p className="label">MFA enrolled</p>
-                  <p className="stat">{mfaEnabled}</p>
+                <div className="focus-stat-card">
+                  <div className="focus-stat-label">MFA enrolled</div>
+                  <div className="focus-stat-value">{mfaEnabled}</div>
                 </div>
-                <div>
-                  <p className="label">Locked accounts</p>
-                  <p className="stat">{lockedCount}</p>
+                <div className="focus-stat-card">
+                  <div className="focus-stat-label">Model state</div>
+                  <div className="focus-stat-value">{healthGnnLoaded ? "Live" : "Offline"}</div>
                 </div>
-                <div>
-                  <p className="label">Primary model</p>
-                  <p>{healthGnnLoaded ? "Loaded" : "Offline"}</p>
-                </div>
-                <div>
-                  <p className="label">Model version</p>
-                  <p className="mono">{healthModelVersion ?? "—"}</p>
-                </div>
-              </div>
-              <div className="chip-row" style={{ marginTop: 12 }}>
-                <button className="chip ghost" type="button" onClick={() => onNavigate("users")}>
-                  Open User Management
-                </button>
-                <button className="chip ghost" type="button" onClick={() => onNavigate("gnn")}>
-                  Open GNN Intelligence
-                </button>
               </div>
             </div>
 
-            <div className="panel">
+            <div className="panel priority-stack">
               <div className="panel-header">
-                <h3>Platform integrity</h3>
-                <span className="muted">Core platform checks</span>
+                <h3>Immediate checks</h3>
+                <span className="muted">What leadership should confirm</span>
               </div>
-              <div className="list">
-                <div className="list-item">
-                  <strong style={{ color: schemaContractOk ? "var(--accent)" : "var(--risk-critical)" }}>
-                    {!hasPlatformHealth ? "Schema status loading" : schemaContractOk ? "Schema clean" : "Schema drift detected"}
-                  </strong>
-                  <p className="muted" style={{ marginTop: 4 }}>
-                    {!hasPlatformHealth
-                      ? "Waiting for platform health data."
-                      : schemaContractOk
-                        ? "No required columns are missing."
-                        : `${schemaMissingCount} required columns are missing.`}
-                  </p>
-                </div>
-                <div className="list-item">
-                  <strong>
-                    {!hasPlatformHealth
-                      ? "Federation policy loading"
-                      : federationSignedRequired
-                        ? "Signed federation requests required"
-                        : "Unsigned partner requests still allowed"}
-                  </strong>
-                  <p className="muted" style={{ marginTop: 4 }}>
-                    Partner payloads must include HMAC signatures before the hub accepts them.
-                  </p>
-                </div>
-                <div className="list-item">
-                  <strong>
-                    {legalAnchorIntegrity === "live"
-                      ? "Live evidence anchoring"
-                      : legalAnchorIntegrity === "simulated"
-                        ? "Simulated evidence anchoring"
-                        : legalAnchorIntegrity === "disabled"
-                          ? "Evidence anchoring disabled"
-                          : legalAnchorIntegrity === "partial"
-                            ? "Partial evidence anchoring"
-                            : "Anchoring status unknown"}
-                  </strong>
-                  <p className="muted" style={{ marginTop: 4 }}>
-                    MinIO {String(legalAnchorModes.minio ?? "unknown")} · immudb {String(legalAnchorModes.immudb ?? "unknown")}
-                  </p>
-                </div>
-                {trustSummary && (
-                  <div className="list-item">
-                    <strong style={{ color: trustTone }}>{trustSummary.overall_status.toUpperCase()}</strong>
-                    <p className="muted" style={{ marginTop: 4 }}>{trustSummary.headline}</p>
+              <div className="priority-card">
+                <div className="priority-card-head">
+                  <div>
+                    <h4 className="priority-card-title">Access and oversight</h4>
+                    <p className="priority-card-copy">
+                      {lockedCount} locked account{lockedCount === 1 ? "" : "s"}, {mfaEnabled} MFA-enrolled users, and {federationSignedRequired ? "signed federation is enforced." : "federation signing still needs enforcement."}
+                    </p>
                   </div>
-                )}
+                  <Shield size={16} color="var(--accent)" />
+                </div>
+                <div className="priority-card-actions">
+                  <button className="ghost" type="button" onClick={() => onNavigate("users")}>
+                    Open User Management
+                  </button>
+                </div>
+              </div>
+              <div className="priority-card">
+                <div className="priority-card-head">
+                  <div>
+                    <h4 className="priority-card-title">Model and schema health</h4>
+                    <p className="priority-card-copy">
+                      {schemaContractOk ? "Schema contract is clean and ready for operators." : `${schemaMissingCount} required schema fields are still missing.`} Model version is {healthModelVersion ?? "unknown"}.
+                    </p>
+                  </div>
+                  <Database size={16} color={schemaContractOk ? "var(--accent)" : "var(--risk-critical)"} />
+                </div>
+                <div className="priority-card-actions">
+                  <button className="ghost" type="button" onClick={() => onNavigate("gnn")}>
+                    Open GNN Intelligence
+                  </button>
+                </div>
               </div>
             </div>
           </div>
 
           <div className="grid-two">
-            <details className="panel panel-details">
+            <details className="panel panel-details" open>
               <summary>
                 <span>Trust and model governance</span>
                 <span className="muted">Open deeper AI readiness</span>
@@ -686,7 +722,7 @@ export default function CentralCommand({
               )}
             </details>
 
-            <details className="panel panel-details">
+            <details className="panel panel-details" open>
               <summary>
                 <span>Resilience operations</span>
                 <span className="muted">Open backup and restore evidence</span>
@@ -786,17 +822,23 @@ export default function CentralCommand({
               <h3>Economic integrity</h3>
               <span className="muted">Public-sector snapshot</span>
             </div>
-            <div className="list">
-              <div className="list-item"><strong>{operationsData.procurementAnomalies.length}</strong> procurement anomalies</div>
-              <div className="list-item"><strong>{operationsData.integrityAlerts.length}</strong> integrity alerts</div>
-              <div className="list-item"><strong>{operationsData.leakageSummary.totalAlerts}</strong> leakage alerts</div>
-              <div className="list-item">
-                <strong>KES {operationsData.leakageSummary.suspectedAmountTotal.toLocaleString()}</strong> suspected amount
+            <div className="story-rail">
+              <div className="story-card">
+                <p className="story-card-label">Procurement</p>
+                <h4>{operationsData.procurementAnomalies.length} anomalies</h4>
+                <p>Track tender irregularities before they become payment leakage.</p>
+              </div>
+              <div className="story-card">
+                <p className="story-card-label">Integrity</p>
+                <h4>{operationsData.integrityAlerts.length} alerts</h4>
+                <p>Use this lane for IFMIS, payroll, and internal control review.</p>
               </div>
             </div>
-            <button className="ghost" type="button" onClick={() => onNavigate("reports")}>
-              Open Reports
-            </button>
+            <div className="priority-card-actions">
+              <button className="ghost" type="button" onClick={() => onNavigate("reports")}>
+                Open Reports
+              </button>
+            </div>
           </div>
         </>
       )}

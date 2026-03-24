@@ -24,6 +24,7 @@ import {
   Zap,
 } from "lucide-react";
 
+import ArchitectureFlow from "../../app/ArchitectureFlow";
 import {
   bootstrapDemoData,
   fetchAIFeedback,
@@ -108,8 +109,8 @@ const GNN_VIEW_CONTENT: Record<GNNView, {
 }> = {
   overview: {
     kicker: "Model snapshot",
-    title: "Check model state first.",
-    summary: "Read artifact status and headline metrics before touching the queue.",
+    title: "Read model state first.",
+    summary: "Confirm artifact, data posture, and queue pressure before acting.",
     steps: [
       "Check the artifact and core metrics.",
       "Read the latest run trend.",
@@ -119,7 +120,7 @@ const GNN_VIEW_CONTENT: Record<GNNView, {
   review: {
     kicker: "Review queue",
     title: "Work the analyst queue.",
-    summary: "Handle uncertain rows first, then high-risk rows, then feedback.",
+    summary: "Start with uncertain or high-risk entities, then label the outcome.",
     steps: [
       "Start with uncertain or high-risk rows.",
       "Read the top driver before labeling.",
@@ -128,8 +129,8 @@ const GNN_VIEW_CONTENT: Record<GNNView, {
   },
   ops: {
     kicker: "Model operations",
-    title: "Use this view for seeding and training.",
-    summary: "Keep retraining controls separate from daily analyst review.",
+    title: "Seed, retrain, and rehearse here.",
+    summary: "Keep model operations separate from daily review.",
     steps: [
       "Seed only when you need fresh data.",
       "Run training for the selected domain.",
@@ -545,7 +546,7 @@ export default function GNNIntelligence({
         <h2>
           <Brain size={20} color="var(--accent)" />
           GNN Intelligence Hub
-          <span className="subtitle">— network analysis model · active learning review queue</span>
+          <span className="subtitle">— graph scores, review queue, and model operations</span>
         </h2>
         <div className="screen-header-actions">
           <div className="gnn-domain-tabs">
@@ -567,21 +568,17 @@ export default function GNNIntelligence({
         </div>
       </div>
 
-      <div className="panel workflow-guide-panel" style={{ background: "rgba(var(--accent-rgb), 0.07)", borderColor: "rgba(var(--accent-rgb), 0.24)" }}>
-        <p className="workflow-stage-kicker">{viewContent.kicker}</p>
-        <div className="detail-grid">
-          <div>
-            <strong>{viewContent.title}</strong>
-            <p className="workflow-stage-copy" style={{ marginTop: 6 }}>{viewContent.summary}</p>
-          </div>
-          <div>
-            <strong>Best flow</strong>
-            <ul className="inspector-compact-list" style={{ marginTop: 8 }}>
-              {viewContent.steps.map((step) => <li key={step}>{step}</li>)}
-            </ul>
-          </div>
-        </div>
-      </div>
+      <ArchitectureFlow
+        label={viewContent.kicker}
+        title={viewContent.title}
+        summary={viewContent.summary}
+        steps={[
+          { stage: "Input", title: activeDomain === "cyber" ? "Canonical security events" : "Procurement and integrity events", detail: activeDomain === "cyber" ? "Telemetry is normalized before modeling." : "Awards, payments, registry links, and outcomes feed the same graph.", tone: "info" },
+          { stage: "Graph", title: "Entity snapshots", detail: `The model reads ${activeWindowKey} graph features rather than flat logs.`, tone: "accent" },
+          { stage: "Model", title: "Score and uncertainty", detail: "Risk, confidence, and caveats are written back into the platform.", tone: "warning" },
+          { stage: "Review", title: "Analyst feedback", detail: "Review decisions and labels feed the next training cycle.", tone: "danger" },
+        ]}
+      />
 
       <div className="chip-row">
         {[
@@ -637,18 +634,18 @@ export default function GNNIntelligence({
           <div className="grid-two">
             <div className="panel workflow-stage-panel">
               <div className="panel-header">
-                <h3>What this model means in plain language</h3>
-                <span className="muted">{activeDomain === "cyber" ? "Cyber explanation" : "Integrity explanation"}</span>
+                <h3>Model meaning</h3>
+                <span className="muted">{activeDomain === "cyber" ? "Cyber graph" : "Integrity graph"}</span>
               </div>
               <div className="list">
                 <div className="list-item">
-                  <strong>What the GNN is doing</strong>
+                  <strong>What the model is doing</strong>
                   <p className="muted" style={{ marginTop: 4 }}>{modelMeaningStatement}</p>
                 </div>
                 <div className="list-item">
                   <strong>How to read the score</strong>
                   <p className="muted" style={{ marginTop: 4 }}>
-                    Low scores usually mean monitor only. Mid-range scores mean investigate soon. High scores mean review now and prepare response. The score is a likelihood-style attention signal, not proof.
+                    Low means monitor. Mid-range means investigate. High means review now and prepare action. The score is an attention signal, not proof.
                   </p>
                 </div>
                 <div className="list-item">
@@ -660,8 +657,8 @@ export default function GNNIntelligence({
 
             <div className="panel workflow-stage-panel">
               <div className="panel-header">
-                <h3>Current data realism</h3>
-                <span className="muted">Public feeds + synthetic scenarios + analyst feedback</span>
+                <h3>Data posture</h3>
+                <span className="muted">Real feeds, simulation, and review labels</span>
               </div>
               <div className="list">
                 <div className="list-item">
@@ -669,9 +666,9 @@ export default function GNNIntelligence({
                   <p className="muted" style={{ marginTop: 4 }}>{dataRealismStatement}</p>
                 </div>
                 <div className="list-item">
-                  <strong>How to present it</strong>
+                  <strong>Judge-safe framing</strong>
                   <p className="muted" style={{ marginTop: 4 }}>
-                    Be explicit that this MVP uses mixed-source data. The strength is that Sentinel-KE shows the provenance and lets analyst feedback improve future runs.
+                    Present this as a mixed-source operational model. The strength is visible provenance and a review loop, not a claim of perfect ground truth.
                   </p>
                 </div>
               </div>

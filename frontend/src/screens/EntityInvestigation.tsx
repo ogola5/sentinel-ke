@@ -11,6 +11,7 @@ import {
   Wrench,
 } from "lucide-react";
 
+import ArchitectureFlow from "../app/ArchitectureFlow";
 import {
   fetchEntityFusion,
   fetchEntityPaths,
@@ -31,8 +32,7 @@ import { downloadReport, generateReport } from "../api/reports";
 import type { AIPrediction, EntityTrustSummary } from "../types/ai";
 import type { Principal } from "../types/auth";
 import type { WebhookDeliveryRecord, WebhookRecord } from "../types/defense";
-import { formatPercent } from "../utils/formatters";
-import { clampRiskPercent, formatRiskScore, riskColor, riskSeverityLabel } from "../utils/risk";
+import { clampRiskPercent, formatRiskScore, riskSeverityLabel } from "../utils/risk";
 
 type InvestigationProps = {
   initialEntityKey: string | null;
@@ -84,33 +84,6 @@ type FusionRecord = {
   decision?: string;
   signals?: { gnn_score?: number; path_score?: number; anomaly_score?: number };
 };
-
-function ScoreRing({ value, label, color }: { value: number; label: string; color: string }) {
-  const size = 88;
-  const radius = 30;
-  const circumference = 2 * Math.PI * radius;
-  const dash = (Math.max(0, Math.min(100, value)) / 100) * circumference;
-
-  return (
-    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
-      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} style={{ transform: "rotate(-90deg)" }}>
-        <circle cx={size / 2} cy={size / 2} r={radius} fill="none" stroke="rgba(255,255,255,0.08)" strokeWidth={8} />
-        <circle
-          cx={size / 2}
-          cy={size / 2}
-          r={radius}
-          fill="none"
-          stroke={color}
-          strokeWidth={8}
-          strokeDasharray={`${dash} ${circumference}`}
-          strokeLinecap="round"
-        />
-      </svg>
-      <div style={{ marginTop: -64, fontWeight: 700, fontSize: "1rem", color }}>{Math.round(value)}</div>
-      <div style={{ fontSize: "0.72rem", color: "var(--ink-muted)" }}>{label}</div>
-    </div>
-  );
-}
 
 function extractFirstItem<T>(payload: Record<string, unknown> | null): T | null {
   if (!payload) return null;
@@ -441,6 +414,11 @@ export default function EntityInvestigation({ initialEntityKey, analystId, princ
   );
   const activeWebhooks = webhooks.filter((item) => item.is_active);
   const containmentGuidance = containmentReadinessMessage(entityKey, actionType, activeWebhooks, principal.access_level);
+  const actionHookCount = activeWebhooks.filter((item) => item.action_type === actionType).length;
+  const primaryReasons = (explanation?.reason_codes ?? prediction?.reason_codes ?? []).slice(0, 4);
+  const recommendedControls = explanation?.recommended_controls ?? [];
+  const leadingNextActions = trustBrief?.next_actions.slice(0, 2) ?? [];
+  const leadingWhyItMatters = trustBrief?.why_it_matters.slice(0, 2) ?? [];
 
   return (
     <section className="screen">
@@ -449,42 +427,22 @@ export default function EntityInvestigation({ initialEntityKey, analystId, princ
           <p className="eyebrow">S3</p>
           <h2>Entity Investigation</h2>
           <p className="subtle">
-            One entity, one explanation flow: score, evidence, graph paths, tool attribution, and downloadable reports.
+            Trace one entity from model score to analyst decision and controlled action.
           </p>
         </div>
       </div>
 
-      <div className="panel" style={{ background: "rgba(var(--accent-rgb), 0.08)", borderColor: "rgba(var(--accent-rgb), 0.28)" }}>
-        <div className="panel-header">
-          <h3>How to use this page</h3>
-          <span className="muted">One entity, one decision flow</span>
-        </div>
-        <div className="detail-grid">
-          <div>
-            <p className="label">Step 1</p>
-            <p>Search one real entity key, not a broad keyword.</p>
-          </div>
-          <div>
-            <p className="label">Step 2</p>
-            <p>Read the trust brief and trust checks before taking action.</p>
-          </div>
-          <div>
-            <p className="label">Step 3</p>
-            <p>Use analyst review to mark malicious, benign, or uncertain.</p>
-          </div>
-          <div>
-            <p className="label">Step 4</p>
-            <p>Use containment only after review, then confirm webhook receipts.</p>
-          </div>
-        </div>
-        <div className="chip-row" style={{ marginTop: 14 }}>
-          <span className="chip">Start: search box</span>
-          <span className="chip">Review: trust brief</span>
-          <span className="chip">Label: analyst review</span>
-          <span className="chip">Act: containment state</span>
-          <span className="chip">Export: reports</span>
-        </div>
-      </div>
+      <ArchitectureFlow
+        label="Decision flow"
+        title="How one entity moves through the platform"
+        summary="Use this page to explain a single entity clearly, record analyst judgment, then act or export."
+        steps={[
+          { stage: "Entity", title: "Choose one real key", detail: "Search a concrete IP, service, account, or procurement entity.", tone: "info" },
+          { stage: "Evidence", title: "Read paths and reasons", detail: "Check score, graph paths, and backend trust signals together.", tone: "accent" },
+          { stage: "Decision", title: "Apply analyst judgment", detail: "Mark malicious, benign, or uncertain before escalation.", tone: "warning" },
+          { stage: "Action", title: "Contain or export", detail: "Use bounded response and verify delivery or report output.", tone: "danger" },
+        ]}
+      />
 
       <div className="panel">
         <div className="topbar-search-row" style={{ width: "100%" }}>
@@ -504,7 +462,7 @@ export default function EntityInvestigation({ initialEntityKey, analystId, princ
               }}
             />
           </div>
-          <button className="chip active" type="button" disabled={loading || !query.trim()} onClick={() => void investigate(query)}>
+          <button className="btn-accent" type="button" disabled={loading || !query.trim()} onClick={() => void investigate(query)}>
             {loading ? "Investigating…" : "Investigate"}
           </button>
         </div>
@@ -527,119 +485,226 @@ export default function EntityInvestigation({ initialEntityKey, analystId, princ
 
       {prediction && (
         <>
-          <div className="panel">
-            <div className="panel-header">
-              <h3>Plain-English summary</h3>
-              <span className={`risk-badge ${riskSeverityLabel(prediction.score).toLowerCase()}`}>
-                {riskSeverityLabel(prediction.score)}
-              </span>
+          <div className="focus-layout">
+            <div className={`panel focus-hero ${prediction.score >= 85 ? "focus-hero-danger" : prediction.score >= 60 ? "focus-hero-warning" : "focus-hero-accent"}`}>
+              <p className="focus-kicker">Entity briefing</p>
+              <p className="focus-value">{formatRiskScore(prediction.score)} / 100</p>
+              <p className="focus-copy">{summaryText}</p>
+              <div className="focus-stat-grid">
+                <div className="focus-stat-card">
+                  <div className="focus-stat-label">Risk</div>
+                  <div className="focus-stat-value">{formatRiskScore(predictionScore)}</div>
+                </div>
+                <div className="focus-stat-card">
+                  <div className="focus-stat-label">Uncertainty</div>
+                  <div className="focus-stat-value">{Math.round(uncertaintyValue)}%</div>
+                </div>
+                <div className="focus-stat-card">
+                  <div className="focus-stat-label">Path</div>
+                  <div className="focus-stat-value">{formatRiskScore(pathScoreValue)}</div>
+                </div>
+                <div className="focus-stat-card">
+                  <div className="focus-stat-label">Fusion</div>
+                  <div className="focus-stat-value">{formatRiskScore(fusedScoreValue)}</div>
+                </div>
+              </div>
+              <div className="chip-row" style={{ marginTop: 16 }}>
+                <span className="chip">Entity: {prediction.entity_key}</span>
+                <span className="chip">Prediction: {prediction.prediction_type}</span>
+                <span className="chip">Stage: {prediction.kill_chain_stage ?? "—"}</span>
+                <span className="chip">Model: {prediction.model_version ?? "—"}</span>
+              </div>
             </div>
-            <p style={{ lineHeight: 1.7, marginBottom: 12 }}>{summaryText}</p>
-            <div className="detail-grid" style={{ marginBottom: 12 }}>
-              <div>
-                <p className="label">Recommended posture</p>
-                <p>{trustBrief?.operator_decision ?? "Review the trust brief before acting."}</p>
+
+            <div className="panel priority-stack">
+              <div className="panel-header">
+                <h3>Primary decision</h3>
+                <span className="muted">{actionHookCount} matching active hooks</span>
               </div>
-              <div>
-                <p className="label">Likelihood indicator</p>
-                <p>{trustBrief?.likelihood_indicator ?? `${Math.round(prediction.score)}/100 cyber-risk indicator`}</p>
+
+              <div className="priority-card">
+                <div className="priority-card-head">
+                  <div>
+                    <h4 className="priority-card-title">Recommended posture</h4>
+                    <p className="priority-card-copy">{trustBrief?.operator_decision ?? "Review the evidence chain before acting."}</p>
+                  </div>
+                  <span className={`risk-badge ${riskSeverityLabel(prediction.score).toLowerCase()}`}>
+                    {riskSeverityLabel(prediction.score)}
+                  </span>
+                </div>
+                {(leadingNextActions.length > 0 || leadingWhyItMatters.length > 0) && (
+                  <div className="list" style={{ marginTop: 12 }}>
+                    {leadingNextActions.map((item) => (
+                      <div key={item} className="list-item">
+                        <strong>Next move</strong>
+                        <p className="muted" style={{ marginTop: 4 }}>{item}</p>
+                      </div>
+                    ))}
+                    {leadingWhyItMatters.map((item) => (
+                      <div key={item} className="list-item">
+                        <strong>Why it matters</strong>
+                        <p className="muted" style={{ marginTop: 4 }}>{item}</p>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
-              <div>
-                <p className="label">Data realism</p>
-                <p>{trustBrief?.data_realism ?? "No current provenance statement is attached."}</p>
+
+              <div className="priority-card">
+                <div className="priority-card-head">
+                  <div>
+                    <h4 className="priority-card-title">Analyst review</h4>
+                    <p className="priority-card-copy">
+                      {trustSummary?.feedback?.latest_label != null
+                        ? `Latest review ${trustSummary.feedback.latest_label} · ${trustSummary.feedback.latest_status ?? "recorded"}`
+                        : "No analyst review has been recorded yet for this entity."}
+                    </p>
+                  </div>
+                  <Shield size={16} color="var(--accent)" />
+                </div>
+                <textarea
+                  className="search"
+                  style={{ minHeight: 82, resize: "vertical", marginTop: 12 }}
+                  placeholder="Add plain-English review notes for the next training cycle or case packet."
+                  value={feedbackNotes}
+                  onChange={(event) => setFeedbackNotes(event.target.value)}
+                />
+                <div className="priority-card-actions">
+                  <button className="chip active" type="button" disabled={feedbackBusy} onClick={() => void recordFeedback(1)}>
+                    Mark malicious
+                  </button>
+                  <button className="chip ghost" type="button" disabled={feedbackBusy} onClick={() => void recordFeedback(0)}>
+                    Mark benign
+                  </button>
+                  <button className="chip ghost" type="button" disabled={feedbackBusy} onClick={() => void recordFeedback(2)}>
+                    Mark uncertain
+                  </button>
+                </div>
+                {feedbackStatus && <p className="muted" style={{ marginTop: 10 }}>{feedbackStatus}</p>}
               </div>
-              <div>
-                <p className="label">Containment readiness</p>
-                <p>{trustBrief?.containment_readiness ?? containmentGuidance}</p>
+
+              <div className="priority-card">
+                <div className="priority-card-head">
+                  <div>
+                    <h4 className="priority-card-title">Containment path</h4>
+                    <p className="priority-card-copy">{trustBrief?.containment_readiness ?? containmentGuidance}</p>
+                  </div>
+                  <ShieldAlert size={16} color="var(--warning)" />
+                </div>
+                <div className="detail-grid" style={{ marginTop: 12 }}>
+                  <div>
+                    <p className="label">Action</p>
+                    <select value={actionType} onChange={(event) => setActionType(event.target.value)} style={{ width: "100%" }}>
+                      <option value="block_ip">block_ip</option>
+                      <option value="isolate_host">isolate_host</option>
+                      <option value="revoke_user">revoke_user</option>
+                    </select>
+                  </div>
+                  <div>
+                    <p className="label">Target</p>
+                    <input
+                      className="search"
+                      value={actionTarget}
+                      onChange={(event) => setActionTarget(event.target.value)}
+                      placeholder="Containment target"
+                    />
+                  </div>
+                </div>
+                <div className="priority-card-actions">
+                  <button className="btn-accent" type="button" disabled={actionBusy || !actionTarget.trim()} onClick={() => void triggerContainment()}>
+                    {actionBusy ? <RefreshCw size={13} className="spin" /> : "Execute"}
+                  </button>
+                  <span className="chip">Receipts: {relatedDeliveries.length}</span>
+                </div>
+                {actionStatus && <p className="muted" style={{ marginTop: 10 }}>{actionStatus}</p>}
+                {containmentAccessNote && <p className="muted" style={{ marginTop: 10 }}>{containmentAccessNote}</p>}
               </div>
-            </div>
-            <div className="chip-row">
-              <span className="chip">Entity: {prediction.entity_key}</span>
-              <span className="chip">Prediction: {prediction.prediction_type}</span>
-              <span className="chip">Model: {prediction.model_version ?? "—"}</span>
-              <span className="chip">Decision source: {prediction.decision_source ?? "—"}</span>
             </div>
           </div>
 
-          {trustBrief && (
-            <div className="grid-two">
-              <div className="panel">
-                <div className="panel-header">
-                  <h3>What the system saw</h3>
-                  <span className="muted">Operator trust brief</span>
-                </div>
-                <div className="list">
-                  <div className="list-item">
-                    <strong>{trustBrief.headline}</strong>
-                    <p className="muted" style={{ marginTop: 4 }}>{trustBrief.caveat}</p>
+          <div className="grid-two">
+            <div className="panel">
+              <div className="panel-header">
+                <h3><Sparkles size={14} /> Why it was flagged</h3>
+                <span className="muted">{primaryReasons.length} lead reasons</span>
+              </div>
+              <div className="chip-row" style={{ marginBottom: 12 }}>
+                {primaryReasons.map((reason) => (
+                  <span key={reason} className="chip">{reason.replaceAll("_", " ").toLowerCase()}</span>
+                ))}
+              </div>
+              <div className="list">
+                {trustBrief?.what_system_saw?.map((item) => (
+                  <div key={item} className="list-item">
+                    <p style={{ margin: 0 }}>{item}</p>
                   </div>
-                  {trustBrief.what_system_saw.map((item) => (
-                    <div key={item} className="list-item">
-                      <p style={{ margin: 0 }}>{item}</p>
+                ))}
+                {recommendedControls.length > 0 ? (
+                  recommendedControls.map((control) => (
+                    <div key={control} className="list-item">
+                      <strong>Recommended control</strong>
+                      <p className="muted" style={{ marginTop: 4 }}>{control}</p>
                     </div>
-                  ))}
-                </div>
+                  ))
+                ) : (
+                  <div className="list-item">
+                    <strong>No recommended controls returned</strong>
+                    <p className="muted" style={{ marginTop: 4 }}>
+                      Use the Defense workspace for manual response execution once an incident run exists.
+                    </p>
+                  </div>
+                )}
               </div>
+            </div>
 
-              <div className="panel">
-                <div className="panel-header">
-                  <h3>What to do next</h3>
-                  <span className="muted">Actionable without flooding the analyst</span>
+            <div className="panel">
+              <div className="panel-header">
+                <h3><GitBranch size={14} /> Evidence chain</h3>
+                <span className="muted">{trustSummary?.evidence_summary?.linked_campaign_count ?? 0} linked campaigns</span>
+              </div>
+              <div className="story-rail">
+                <div className="story-card">
+                  <p className="story-card-label">Graph meaning</p>
+                  <h4>{pathScore?.hop_count ?? 0} hops</h4>
+                  <p>{trustBrief?.graph_meaning ?? "The graph score measures how strongly this entity is linked to risky neighbours and shared events."}</p>
                 </div>
-                <div className="list">
-                  {trustBrief.next_actions.map((item) => (
-                    <div key={item} className="list-item">
-                      <strong>Next action</strong>
-                      <p className="muted" style={{ marginTop: 4 }}>{item}</p>
-                    </div>
-                  ))}
-                  {trustBrief.why_it_matters.map((item) => (
-                    <div key={item} className="list-item">
-                      <strong>Why it matters</strong>
-                      <p className="muted" style={{ marginTop: 4 }}>{item}</p>
-                    </div>
-                  ))}
+                <div className="story-card">
+                  <p className="story-card-label">Evidence volume</p>
+                  <h4>{trustSummary?.evidence_summary?.evidence_hash_count ?? explanation?.evidence_hashes?.length ?? 0} hashes</h4>
+                  <p>{trustSummary?.evidence_summary?.counterfactual_available ? "Counterfactual evidence is available." : "Counterfactual evidence is not attached yet."}</p>
                 </div>
               </div>
-            </div>
-          )}
-
-          <div className="panel">
-            <div className="panel-header">
-              <h3>Decision posture</h3>
-              <span className="muted">Corrected score scales from the backend</span>
-            </div>
-            <div className="list" style={{ marginBottom: 16 }}>
-              <div className="list-item">
-                <strong>How to read this</strong>
-                <p className="muted" style={{ marginTop: 4 }}>
-                  Risk score tells you how much attention this entity deserves. Uncertainty tells you how careful the analyst should be before escalation. Path score tells you how strongly the graph links this entity to risky neighbours and shared events.
-                </p>
+              <div className="panel-subsection">
+                <h4>Evidence paths</h4>
+                {explanation?.evidence_paths?.length ? (
+                  <div className="list">
+                    {explanation.evidence_paths.slice(0, 4).map((item, index) => (
+                      <div key={`${item.path?.join("->") ?? "path"}-${index}`} className="list-item">
+                        <p className="mono" style={{ fontSize: "0.78rem" }}>{item.path?.join(" → ") ?? "Path unavailable"}</p>
+                        <p className="muted" style={{ marginTop: 4 }}>
+                          {item.hop_count ?? 0} hops · {item.shared_events ?? 0} shared events
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="muted">No graph paths are attached to this explanation yet.</p>
+                )}
               </div>
-            </div>
-            <div style={{ display: "flex", gap: 24, flexWrap: "wrap" }}>
-              <ScoreRing value={predictionScore} label="Risk score" color={riskColor(prediction.score)} />
-              <ScoreRing value={uncertaintyValue} label="Uncertainty" color="var(--warning)" />
-              <ScoreRing value={pathScoreValue} label="Path score" color="var(--accent)" />
-              <ScoreRing value={fusedScoreValue} label="Fused score" color="var(--info)" />
-            </div>
-            <div className="detail-grid" style={{ marginTop: 20 }}>
-              <div>
-                <p className="label">Kill-chain stage</p>
-                <p>{prediction.kill_chain_stage ?? "—"}</p>
-              </div>
-              <div>
-                <p className="label">Confidence</p>
-                <p>{prediction.confidence != null ? formatPercent(prediction.confidence, 0) : "—"}</p>
-              </div>
-              <div>
-                <p className="label">Decision fusion</p>
-                <p>{fusion?.decision ?? "Not available"}</p>
-              </div>
-              <div>
-                <p className="label">Window end</p>
-                <p className="mono">{prediction.window_end ?? "—"}</p>
-              </div>
+              {trustSummary?.linked_campaigns?.length ? (
+                <div className="panel-subsection">
+                  <h4>Linked campaigns</h4>
+                  <div className="list">
+                    {trustSummary.linked_campaigns.slice(0, 4).map((item) => (
+                      <div key={item.campaign_id} className="list-item">
+                        <strong>{item.severity} · {formatRiskScore(item.score)} / 100</strong>
+                        <p className="muted" style={{ marginTop: 4 }}>{item.flagged_entity_count} flagged entities</p>
+                        <p className="mono" style={{ marginTop: 4, fontSize: "0.78rem" }}>{item.campaign_id}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
             </div>
           </div>
 
@@ -669,229 +734,6 @@ export default function EntityInvestigation({ initialEntityKey, analystId, princ
               </div>
             </details>
           )}
-
-          <div className="grid-two">
-            <div className="panel">
-              <div className="panel-header">
-                <h3><Shield size={14} /> Analyst review</h3>
-                <span className="muted">
-                  {trustSummary?.feedback?.count ?? 0} prior reviews
-                </span>
-              </div>
-              <div className="detail-grid" style={{ marginBottom: 12 }}>
-                <div>
-                  <p className="label">Analyst</p>
-                  <p className="mono">{analystId}</p>
-                </div>
-                <div>
-                  <p className="label">Latest feedback</p>
-                  <p>
-                    {trustSummary?.feedback?.latest_label != null
-                      ? `${trustSummary.feedback.latest_label} · ${trustSummary.feedback.latest_status ?? "recorded"}`
-                      : "No analyst review yet"}
-                  </p>
-                </div>
-              </div>
-              <textarea
-                className="search"
-                style={{ minHeight: 90, resize: "vertical" }}
-                placeholder="Add plain-English review notes for the next training cycle or case packet."
-                value={feedbackNotes}
-                onChange={(event) => setFeedbackNotes(event.target.value)}
-              />
-              <div className="chip-row" style={{ marginTop: 12 }}>
-                <button className="chip active" type="button" disabled={feedbackBusy} onClick={() => void recordFeedback(1)}>
-                  Mark malicious
-                </button>
-                <button className="chip ghost" type="button" disabled={feedbackBusy} onClick={() => void recordFeedback(0)}>
-                  Mark benign
-                </button>
-                <button className="chip ghost" type="button" disabled={feedbackBusy} onClick={() => void recordFeedback(2)}>
-                  Mark uncertain
-                </button>
-              </div>
-              {feedbackStatus && (
-                <p className="muted" style={{ marginTop: 10 }}>{feedbackStatus}</p>
-              )}
-            </div>
-
-            <div className="panel">
-              <div className="panel-header">
-                <h3><ShieldAlert size={14} /> Containment and delivery state</h3>
-                <span className="muted">{activeWebhooks.length} active hooks</span>
-              </div>
-              <div className="list" style={{ marginBottom: 12 }}>
-                <div className="list-item">
-                  <strong>Containment readiness</strong>
-                  <p className="muted" style={{ marginTop: 4 }}>{containmentGuidance}</p>
-                </div>
-              </div>
-              <div className="detail-grid" style={{ marginBottom: 12 }}>
-                <div>
-                  <p className="label">Suggested target</p>
-                  <p className="mono">{actionTarget || "Choose a concrete target"}</p>
-                </div>
-                <div>
-                  <p className="label">Recent receipts</p>
-                  <p>{relatedDeliveries.length}</p>
-                </div>
-                <div>
-                  <p className="label">Selected action hooks</p>
-                  <p>{activeWebhooks.filter((item) => item.action_type === actionType).length}</p>
-                </div>
-                <div>
-                  <p className="label">Entity family</p>
-                  <p className="mono">{entityFamily(entityKey ?? "")}</p>
-                </div>
-              </div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1.4fr auto", gap: 10, alignItems: "end" }}>
-                <div>
-                  <p className="label" style={{ marginBottom: 6 }}>Action</p>
-                  <select value={actionType} onChange={(event) => setActionType(event.target.value)} style={{ width: "100%" }}>
-                    <option value="block_ip">block_ip</option>
-                    <option value="isolate_host">isolate_host</option>
-                    <option value="revoke_user">revoke_user</option>
-                  </select>
-                </div>
-                <div>
-                  <p className="label" style={{ marginBottom: 6 }}>Target</p>
-                  <input
-                    className="search"
-                    value={actionTarget}
-                    onChange={(event) => setActionTarget(event.target.value)}
-                    placeholder="Containment target"
-                  />
-                </div>
-                <button className="chip active" type="button" disabled={actionBusy || !actionTarget.trim()} onClick={() => void triggerContainment()}>
-                  {actionBusy ? <RefreshCw size={13} className="spin" /> : "Execute"}
-                </button>
-              </div>
-              {actionStatus && (
-                <p className="muted" style={{ marginTop: 10 }}>{actionStatus}</p>
-              )}
-              {containmentAccessNote && (
-                <p className="muted" style={{ marginTop: 10 }}>{containmentAccessNote}</p>
-              )}
-              <div className="panel-subsection">
-                <h4>Webhook delivery receipts</h4>
-                {relatedDeliveries.length ? (
-                  <div className="list">
-                    {relatedDeliveries.slice(0, 4).map((item) => (
-                      <div key={item.id} className="list-item">
-                        <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
-                          <strong>{item.action_type}</strong>
-                          <span className="chip">{item.status}</span>
-                        </div>
-                        <p className="muted" style={{ marginTop: 4 }}>
-                          {item.target} · HTTP {item.http_status_code ?? "—"} · attempts {item.attempt_count}
-                        </p>
-                        {item.error_message ? <p className="muted" style={{ marginTop: 4 }}>{item.error_message}</p> : null}
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="muted">No containment webhook deliveries are recorded yet for this entity target.</p>
-                )}
-              </div>
-            </div>
-          </div>
-
-          <div className="grid-two">
-            <div className="panel">
-              <div className="panel-header">
-                <h3><Sparkles size={14} /> Why it was flagged</h3>
-                <span className="muted">{(explanation?.reason_codes ?? prediction.reason_codes ?? []).length} reasons</span>
-              </div>
-              <div className="chip-row" style={{ marginBottom: 12 }}>
-                {(explanation?.reason_codes ?? prediction.reason_codes ?? []).map((reason) => (
-                  <span key={reason} className="chip">{reason.replaceAll("_", " ").toLowerCase()}</span>
-                ))}
-              </div>
-              <div className="list">
-                {(explanation?.recommended_controls ?? []).length > 0 ? (
-                  explanation?.recommended_controls?.map((control) => (
-                    <div key={control} className="list-item">
-                      <strong>Recommended control</strong>
-                      <p className="muted" style={{ marginTop: 4 }}>{control}</p>
-                    </div>
-                  ))
-                ) : (
-                  <div className="list-item">
-                    <strong>No recommended controls returned</strong>
-                    <p className="muted" style={{ marginTop: 4 }}>
-                      Use the Defense workspace for manual response execution once an incident run exists.
-                    </p>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            <div className="panel">
-              <div className="panel-header">
-                <h3><GitBranch size={14} /> Graph and evidence</h3>
-                <span className="muted">{trustSummary?.evidence_summary?.linked_campaign_count ?? 0} linked campaigns</span>
-              </div>
-              <div className="list" style={{ marginBottom: 12 }}>
-                <div className="list-item">
-                  <strong>What the graph means</strong>
-                  <p className="muted" style={{ marginTop: 4 }}>
-                    {trustBrief?.graph_meaning ?? "The graph score is a structural signal showing how strongly this entity is linked to risky neighbours, shared events, or campaign routes."}
-                  </p>
-                </div>
-              </div>
-              <div className="detail-grid">
-                <div>
-                  <p className="label">Path score</p>
-                  <p>{pathScore?.path_score != null ? `${formatRiskScore(pathScore.path_score)} / 100` : "—"}</p>
-                </div>
-                <div>
-                  <p className="label">Hop count</p>
-                  <p>{pathScore?.hop_count ?? "—"}</p>
-                </div>
-                <div>
-                  <p className="label">Evidence hashes</p>
-                  <p>{trustSummary?.evidence_summary?.evidence_hash_count ?? explanation?.evidence_hashes?.length ?? 0}</p>
-                </div>
-                <div>
-                  <p className="label">Counterfactual</p>
-                  <p>{trustSummary?.evidence_summary?.counterfactual_available ? "Available" : "Missing"}</p>
-                </div>
-              </div>
-              <div className="panel-subsection">
-                <h4>Evidence paths</h4>
-                {explanation?.evidence_paths?.length ? (
-                  <div className="list">
-                    {explanation.evidence_paths.slice(0, 4).map((item, index) => (
-                      <div key={`${item.path?.join("->") ?? "path"}-${index}`} className="list-item">
-                        <p className="mono" style={{ fontSize: "0.78rem" }}>{item.path?.join(" → ") ?? "Path unavailable"}</p>
-                        <p className="muted" style={{ marginTop: 4 }}>
-                          {item.hop_count ?? 0} hops · {item.shared_events ?? 0} shared events
-                        </p>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="muted">No graph paths are attached to this explanation yet.</p>
-                )}
-              </div>
-              {trustSummary?.linked_campaigns?.length ? (
-                <div className="panel-subsection">
-                  <h4>Linked campaigns</h4>
-                  <div className="list">
-                    {trustSummary.linked_campaigns.slice(0, 4).map((item) => (
-                      <div key={item.campaign_id} className="list-item">
-                        <strong>{item.severity} · {formatRiskScore(item.score)} / 100</strong>
-                        <p className="muted" style={{ marginTop: 4 }}>
-                          {item.flagged_entity_count} flagged entities
-                        </p>
-                        <p className="mono" style={{ marginTop: 4, fontSize: "0.78rem" }}>{item.campaign_id}</p>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ) : null}
-            </div>
-          </div>
 
           <div className="grid-two">
             <details className="panel panel-details">
@@ -1072,11 +914,11 @@ export default function EntityInvestigation({ initialEntityKey, analystId, princ
             </details>
           </div>
 
-          <div className="panel">
-            <div className="panel-header">
-              <h3><Bot size={14} /> Analyst assistant</h3>
-              <span className="muted">Local question answering over current context</span>
-            </div>
+          <details className="panel panel-details">
+            <summary>
+              <span><Bot size={14} /> Analyst assistant</span>
+              <span className="muted">Ask only when you need more detail</span>
+            </summary>
             <div className="topbar-search-row" style={{ width: "100%" }}>
               <input
                 className="search"
@@ -1113,7 +955,7 @@ export default function EntityInvestigation({ initialEntityKey, analystId, princ
                 </div>
               </div>
             )}
-          </div>
+          </details>
         </>
       )}
 

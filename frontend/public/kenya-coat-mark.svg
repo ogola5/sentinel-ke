@@ -1,0 +1,132 @@
+<svg width="900" height="900" viewBox="0 0 900 900" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <title>Kenyan civic watermark</title>
+  <desc>A subtle Kenyan coat-of-arms-inspired watermark with shield, spears, and civic crest elements.</desc>
+
+  <g opacity="0.92">
+    <path
+      d="M206 760L448 170"
+      stroke="#F5F1E8"
+      stroke-opacity="0.38"
+      stroke-width="18"
+      stroke-linecap="round"
+    />
+    <path
+      d="M694 760L452 170"
+      stroke="#F5F1E8"
+      stroke-opacity="0.38"
+      stroke-width="18"
+      stroke-linecap="round"
+    />
+
+    <path
+      d="M183 807L219 706L283 741L239 780L183 807Z"
+      fill="#C9A23F"
+      fill-opacity="0.34"
+      stroke="#F5F1E8"
+      stroke-opacity="0.28"
+      stroke-width="8"
+      stroke-linejoin="round"
+    />
+    <path
+      d="M717 807L681 706L617 741L661 780L717 807Z"
+      fill="#C9A23F"
+      fill-opacity="0.34"
+      stroke="#F5F1E8"
+      stroke-opacity="0.28"
+      stroke-width="8"
+      stroke-linejoin="round"
+    />
+    <path
+      d="M429 141L450 92L471 141L450 166L429 141Z"
+      fill="#C9A23F"
+      fill-opacity="0.38"
+      stroke="#F5F1E8"
+      stroke-opacity="0.32"
+      stroke-width="8"
+      stroke-linejoin="round"
+    />
+
+    <path
+      d="M450 226C532 226 611 243 660 275V418C660 600 536 727 450 777C364 727 240 600 240 418V275C289 243 368 226 450 226Z"
+      fill="#101411"
+      fill-opacity="0.2"
+      stroke="#F5F1E8"
+      stroke-opacity="0.46"
+      stroke-width="14"
+      stroke-linejoin="round"
+    />
+
+    <defs>
+      <clipPath id="shield-clip">
+        <path d="M450 226C532 226 611 243 660 275V418C660 600 536 727 450 777C364 727 240 600 240 418V275C289 243 368 226 450 226Z" />
+      </clipPath>
+    </defs>
+
+    <g clip-path="url(#shield-clip)">
+      <rect x="222" y="214" width="456" height="92" fill="#090B09" fill-opacity="0.72" />
+      <rect x="222" y="306" width="456" height="16" fill="#F5F1E8" fill-opacity="0.8" />
+      <rect x="222" y="322" width="456" height="134" fill="#BF2F3F" fill-opacity="0.72" />
+      <rect x="222" y="456" width="456" height="16" fill="#F5F1E8" fill-opacity="0.8" />
+      <rect x="222" y="472" width="456" height="245" fill="#117A46" fill-opacity="0.72" />
+      <rect x="423" y="214" width="54" height="503" fill="#F5F1E8" fill-opacity="0.8" />
+    </g>
+
+    <path
+      d="M450 226C532 226 611 243 660 275V418C660 600 536 727 450 777C364 727 240 600 240 418V275C289 243 368 226 450 226Z"
+      stroke="#F5F1E8"
+      stroke-opacity="0.46"
+      stroke-width="14"
+      stroke-linejoin="round"
+    />
+
+    <path
+      d="M450 169V270"
+      stroke="#F5F1E8"
+      stroke-opacity="0.32"
+      stroke-width="10"
+      stroke-linecap="round"
+    />
+    <path
+      d="M421 234H479"
+      stroke="#F5F1E8"
+      stroke-opacity="0.32"
+      stroke-width="10"
+      stroke-linecap="round"
+    />
+
+    <path
+      d="M472 176C491 177 509 187 519 201C529 215 531 232 523 245C512 264 490 274 468 278C441 282 414 279 389 268C372 261 354 250 346 233C339 218 342 199 354 187C364 177 381 172 397 172C407 172 418 174 426 180C434 185 438 195 436 204C433 214 424 222 415 227C435 227 454 224 472 217C481 214 490 210 497 203C501 199 504 194 505 188C505 182 503 177 499 172C492 165 481 161 472 160L472 176Z"
+      fill="#F5F1E8"
+      fill-opacity="0.32"
+    />
+    <path
+      d="M445 242C459 252 480 258 498 260"
+      stroke="#090B09"
+      stroke-opacity="0.18"
+      stroke-width="8"
+      stroke-linecap="round"
+    />
+
+    <path
+      d="M321 736C356 708 384 676 404 641"
+      stroke="#F5F1E8"
+      stroke-opacity="0.24"
+      stroke-width="10"
+      stroke-linecap="round"
+    />
+    <path
+      d="M579 736C544 708 516 676 496 641"
+      stroke="#F5F1E8"
+      stroke-opacity="0.24"
+      stroke-width="10"
+      stroke-linecap="round"
+    />
+    <path
+      d="M350 773H550"
+      stroke="#F5F1E8"
+      stroke-opacity="0.24"
+      stroke-width="12"
+      stroke-linecap="round"
+    />
+  </g>
+</svg>

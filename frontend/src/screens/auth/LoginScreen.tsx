@@ -181,11 +181,12 @@ export default function LoginScreen({ onLogin }: Props) {
 
   return (
     <div className="login-root">
-      <div className="ke-bar">
-        <div style={{ flex: 1, background: "#006600" }} />
-        <div style={{ flex: 1, background: "#BB0000" }} />
-        <div style={{ flex: 1, background: "#000000" }} />
-        <div style={{ flex: 1, background: "#FFFFFF" }} />
+      <div className="ke-bar" aria-hidden="true">
+        <span className="ke-bar-segment black" />
+        <span className="ke-bar-segment white" />
+        <span className="ke-bar-segment red" />
+        <span className="ke-bar-segment white" />
+        <span className="ke-bar-segment green" />
       </div>
 
       <div className="landing-shell">

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { FileText, Loader2, ShieldCheck } from "lucide-react";
 
+import ArchitectureFlow from "../app/ArchitectureFlow";
 import {
   type ReportCatalog,
   type ReportFormat,
@@ -175,10 +176,22 @@ export default function ReportsCenter({ principal }: { principal: Principal }) {
           <p className="eyebrow">S8</p>
           <h2>Operational Reports</h2>
           <p className="subtle">
-            Build one report, preview it, then download it.
+            Turn predictions, campaigns, and cases into readable outputs without losing audit context.
           </p>
         </div>
       </div>
+
+      <ArchitectureFlow
+        label="Report flow"
+        title="How reports fit into the operating loop"
+        summary="Reports should package one operational object clearly: a prediction, campaign, entity, or evidence bundle."
+        steps={[
+          { stage: "Source", title: "Choose one subject", detail: "Start from a prediction, entity, campaign, or legal bundle.", tone: "info" },
+          { stage: "Brief", title: "Preview plain language", detail: "Read the executive summary before exporting anything.", tone: "accent" },
+          { stage: "Evidence", title: "Keep governance attached", detail: "Attach findings, model state, and evidence references.", tone: "warning" },
+          { stage: "Export", title: "Send the right format", detail: "Download the operator or leadership output you actually need.", tone: "danger" },
+        ]}
+      />
 
       <div className="grid-two reports-layout">
         <div className="panel workflow-stage-panel">
@@ -382,7 +395,7 @@ export default function ReportsCenter({ principal }: { principal: Principal }) {
               )}
 
               <div className="chip-row" style={{ marginTop: 4 }}>
-                <button className="ghost" type="button" onClick={() => void handlePreview()} disabled={loading}>
+                <button className="btn-accent" type="button" onClick={() => void handlePreview()} disabled={loading}>
                   {loading ? "Generating…" : "Preview JSON"}
                 </button>
                 <button className="ghost" type="button" onClick={() => void handleDownload()} disabled={downloading}>
@@ -399,7 +412,7 @@ export default function ReportsCenter({ principal }: { principal: Principal }) {
         <div className="panel workflow-stage-panel">
           <div className="panel-header">
             <h3>Preview and findings</h3>
-            <span className="muted">Plain-English first</span>
+            <span className="muted">Executive summary first</span>
           </div>
 
           {!preview ? (
@@ -461,7 +474,7 @@ export default function ReportsCenter({ principal }: { principal: Principal }) {
               <div className="panel-subsection" style={{ display: "flex", alignItems: "center", gap: 12 }}>
                 <ShieldCheck size={18} />
                 <p className="muted" style={{ margin: 0 }}>
-                  Reports are designed in three layers: plain-English summary, analyst detail, and evidence appendix.
+                  Each report is structured as summary, analyst detail, and evidence appendix.
                 </p>
               </div>
 
