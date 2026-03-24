@@ -135,40 +135,17 @@ export default function DefenseCenter({ principal }: { principal: Principal }) {
   return (
     <div>
       <div className="screen-header">
-        <h2>
-          <Shield size={20} color="var(--danger)" />
-          Defense & Containment Center
-          <span className="subtitle">— block_ip · isolate_host · webhook dispatch</span>
-        </h2>
+        <div>
+          <p className="eyebrow">S13</p>
+          <h2 style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <Shield size={20} color="var(--danger)" />
+            Defense & Containment
+          </h2>
+          <p className="subtle">Choose a run, dispatch an action, verify delivery.</p>
+        </div>
         <button className="btn-ghost" onClick={() => void load()} disabled={loading}>
           <RefreshCw size={13} /> &nbsp;Refresh
         </button>
-      </div>
-
-      <div className="panel workflow-guide-panel" style={{ background: "rgba(var(--danger-rgb), 0.08)", borderColor: "rgba(var(--danger-rgb), 0.24)", marginBottom: 12 }}>
-        <div className="panel-header">
-          <h3>How to use this page</h3>
-          <span className="muted">Act only after the incident run is clear</span>
-        </div>
-        <div className="detail-grid">
-          <div>
-            <p className="label">Step 1</p>
-            <p>Select one incident run from the left. Do not execute actions without a run.</p>
-          </div>
-          <div>
-            <p className="label">Step 2</p>
-            <p>Choose the action and target carefully. This page is for verified response, not exploration.</p>
-          </div>
-          <div>
-            <p className="label">Step 3</p>
-            <p>Check execution results and the webhook delivery log before closing the incident.</p>
-          </div>
-        </div>
-        <div className="chip-row" style={{ marginTop: 12 }}>
-          <span className="chip">Select run</span>
-          <span className="chip">Execute action</span>
-          <span className="chip">Confirm webhook receipt</span>
-        </div>
       </div>
 
       <div className="metric-grid" style={{ marginBottom: 18 }}>
@@ -208,24 +185,11 @@ export default function DefenseCenter({ principal }: { principal: Principal }) {
         </div>
       )}
 
-      <div className="workflow-summary-banner" style={{ marginBottom: 18 }}>
-        <div>
-          <strong>Current selected run</strong>
-          <p className="muted" style={{ margin: "4px 0 0" }}>
-            {activeRun ? `${activeRun.incident_key} · ${activeRun.severity} · ${activeRun.status}` : "Select an incident run from the left first."}
-          </p>
-        </div>
-        <div>
-          <div className="label">Next move</div>
-          <div>{activeRun ? "Choose the safest action and verify delivery receipts." : "Choose an incident run before any action."}</div>
-        </div>
-      </div>
-
       <div className="pane-layout">
         {/* Left: Playbook runs */}
         <div className="pane-left">
           <div className="panel-header" style={{ padding: "12px 16px", borderBottom: "1px solid var(--line)" }}>
-            <h3>1. Choose Incident Run</h3>
+            <h3>Incident runs</h3>
             <span className="muted">{runs.length}</span>
           </div>
           {loading ? (
@@ -267,8 +231,10 @@ export default function DefenseCenter({ principal }: { principal: Principal }) {
           {/* Execute action panel */}
           <div className="panel workflow-stage-panel">
             <div className="panel-header">
-              <h3>2. Execute Containment Action</h3>
-              <span className="muted">{activeRun ? activeRun.incident_key : "Select an incident run"}</span>
+              <h3>Execute action</h3>
+              <span className="muted">
+                {activeRun ? `${activeRun.incident_key} · ${activeRun.severity} · ${activeRun.status}` : "Select an incident run"}
+              </span>
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr auto", gap: 10, alignItems: "end" }}>
               <div>
@@ -308,7 +274,7 @@ export default function DefenseCenter({ principal }: { principal: Principal }) {
           {/* Containment actions table */}
           <div className="panel workflow-stage-panel">
             <div className="panel-header">
-              <h3>3. Execution Results (session)</h3>
+              <h3>Session results</h3>
               <span className="muted">{actions.length} actions captured</span>
             </div>
             {actions.length === 0 ? (
@@ -367,7 +333,7 @@ export default function DefenseCenter({ principal }: { principal: Principal }) {
           {/* Delivery audit log */}
           <div className="panel workflow-stage-panel">
             <div className="panel-header">
-              <h3>4. Webhook Delivery Log</h3>
+              <h3>Delivery log</h3>
               <span className="muted">{deliveries.length} recent</span>
             </div>
             {deliveries.length === 0 ? (

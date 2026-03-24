@@ -271,9 +271,7 @@ export default function GraphExplorer({ graph, onSelectNode, onSelectEdge, onInv
           <p className="eyebrow">S3</p>
           <h2>Threat Graph Explorer</h2>
           <p className="subtle">
-            Who is attacking whom — and how they're linked.
-            Each <strong>node</strong> is an entity; each <strong>line</strong> is an
-            evidence-backed connection. Thicker lines = more observed events.
+            Services, attack infrastructure, and campaigns linked by evidence.
           </p>
         </div>
         <div className="chip-row">
@@ -287,10 +285,10 @@ export default function GraphExplorer({ graph, onSelectNode, onSelectEdge, onInv
             </span>
           )}
           <button className="ghost" type="button" onClick={() => { setShowPath(p => !p); setPathResult(null); setPathError(""); }}>
-            {showPath ? "Close path finder" : "🔗 Find path"}
+            {showPath ? "Close path finder" : "Find path"}
           </button>
           <button className="ghost" type="button" onClick={() => setShowGuide(g => !g)}>
-            {showGuide ? "Hide guide" : "❓ How to read this"}
+            {showGuide ? "Hide guide" : "How to read"}
           </button>
         </div>
       </div>
@@ -302,21 +300,17 @@ export default function GraphExplorer({ graph, onSelectNode, onSelectEdge, onInv
           border: "1px solid rgba(47,214,125,0.18)",
           marginBottom: 0,
         }}>
-          <p style={{ fontWeight: 700, marginBottom: 12, fontSize: "0.9rem" }}>
-            How to read the Threat Graph
-          </p>
+          <p style={{ fontWeight: 700, marginBottom: 12, fontSize: "0.9rem" }}>How to read the graph</p>
           <div style={{
             display: "grid",
             gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))",
             gap: 16,
           }}>
             {[
-              { icon: "🟢", title: "Target Services", body: "Kenyan government portals, financial institutions, and telecoms that are actively targeted by detected attacks." },
-              { icon: "🔵", title: "Attack Infrastructure", body: "Command & Control (C2) servers, malicious IP clusters, and botnets used to carry out the attacks — often hosted abroad." },
-              { icon: "🟡", title: "Campaigns", body: "Named threat operations. One campaign can target multiple services using multiple infra nodes simultaneously." },
-              { icon: "↔", title: "Lines (Edges)", body: "A confirmed relationship backed by real observed events. Click any line to see evidence: sources, timestamps, and event count." },
-              { icon: "⚡", title: "Live Pulse Ring", body: "A glowing ring around a node means a real threat event was detected on it within the last 12 seconds." },
-              { icon: "🔍", title: "Click to Investigate", body: "Click any node to see its connections. Click any line to see who is talking to whom and the evidence behind it." },
+              { icon: "🟢", title: "Target services", body: "Services under attack or pressure." },
+              { icon: "🔵", title: "Attack infrastructure", body: "IPs, clusters, and providers linked to the activity." },
+              { icon: "🟡", title: "Campaigns", body: "Coordinated operations that connect multiple entities." },
+              { icon: "↔", title: "Edges and live pulse", body: "Lines are observed relationships. A glowing ring means a fresh event touched that node." },
             ].map(item => (
               <div key={item.title}>
                 <p style={{ fontWeight: 600, marginBottom: 3, fontSize: "0.85rem" }}>
@@ -627,7 +621,7 @@ export default function GraphExplorer({ graph, onSelectNode, onSelectEdge, onInv
             </span>
           ))}
           <span className="muted" style={{ fontSize: "0.72rem", marginLeft: "auto" }}>
-            Hover nodes/lines for details · click to investigate · ①badge = connection count
+            Hover for details · click to inspect · badge = connection count
           </span>
         </div>
       </div>
@@ -693,11 +687,12 @@ export default function GraphExplorer({ graph, onSelectNode, onSelectEdge, onInv
               </div>
 
               {selectedEdge.evidence.length > 0 && (
-                <div>
-                  <p className="label" style={{ marginBottom: 6 }}>
-                    Forensic trail — {selectedEdge.evidence.length} event hash{selectedEdge.evidence.length !== 1 ? "es" : ""}
-                  </p>
-                  <div className="list" style={{ maxHeight: 110, overflowY: "auto" }}>
+                <details className="panel panel-details">
+                  <summary>
+                    <span>Forensic trail</span>
+                    <span className="muted">{selectedEdge.evidence.length} event hash{selectedEdge.evidence.length !== 1 ? "es" : ""}</span>
+                  </summary>
+                  <div className="list" style={{ maxHeight: 110, overflowY: "auto", marginTop: 12 }}>
                     {selectedEdge.evidence.slice(0, 6).map((item) => (
                       <div key={item.event_hash} className="list-item mono"
                         style={{ fontSize: "0.66rem", opacity: 0.65, padding: "4px 8px" }}>
@@ -710,7 +705,7 @@ export default function GraphExplorer({ graph, onSelectNode, onSelectEdge, onInv
                       </p>
                     )}
                   </div>
-                </div>
+                </details>
               )}
             </div>
           ) : (
@@ -842,11 +837,12 @@ export default function GraphExplorer({ graph, onSelectNode, onSelectEdge, onInv
                 </p>
               )}
               {liveNeighbours && liveNeighbours.neighbours.length > 0 && (
-                <div style={{ marginBottom: 12 }}>
-                  <p className="label" style={{ marginBottom: 6 }}>
-                    Live graph connections — {liveNeighbours.neighbours.length} neighbour{liveNeighbours.neighbours.length !== 1 ? "s" : ""} (Neo4j)
-                  </p>
-                  <div className="list" style={{ maxHeight: 130, overflowY: "auto" }}>
+                <details className="panel panel-details" style={{ marginBottom: 12 }}>
+                  <summary>
+                    <span>Live graph connections</span>
+                    <span className="muted">{liveNeighbours.neighbours.length} neighbour{liveNeighbours.neighbours.length !== 1 ? "s" : ""}</span>
+                  </summary>
+                  <div className="list" style={{ maxHeight: 130, overflowY: "auto", marginTop: 12 }}>
                     {liveNeighbours.neighbours.map(n => (
                       <div key={n.id} className="list-item" style={{ fontSize: "0.78rem", padding: "5px 10px", display: "flex", justifyContent: "space-between" }}>
                         <span>
@@ -865,7 +861,7 @@ export default function GraphExplorer({ graph, onSelectNode, onSelectEdge, onInv
                       </div>
                     ))}
                   </div>
-                </div>
+                </details>
               )}
 
               {/* Pin / compare */}
@@ -899,9 +895,12 @@ export default function GraphExplorer({ graph, onSelectNode, onSelectEdge, onInv
               </div>
 
               {pinned.length > 0 && (
-                <div style={{ marginTop: 10 }}>
-                  <p className="label" style={{ marginBottom: 5 }}>Pinned for comparison</p>
-                  <div className="pinned">
+                <details className="panel panel-details" style={{ marginTop: 10 }}>
+                  <summary>
+                    <span>Pinned for comparison</span>
+                    <span className="muted">{pinned.length} node{pinned.length !== 1 ? "s" : ""}</span>
+                  </summary>
+                  <div className="pinned" style={{ marginTop: 12 }}>
                     {pinned.map(node => (
                       <span
                         key={node.id}
@@ -918,7 +917,7 @@ export default function GraphExplorer({ graph, onSelectNode, onSelectEdge, onInv
                       </span>
                     ))}
                   </div>
-                </div>
+                </details>
               )}
             </div>
           ) : (

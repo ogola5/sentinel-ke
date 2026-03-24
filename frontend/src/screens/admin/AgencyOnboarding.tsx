@@ -158,28 +158,17 @@ export default function AgencyOnboarding() {
   return (
     <div>
       <div className="screen-header">
-        <h2>
-          <Zap size={20} color="var(--accent)" />
-          Agency Onboarding &amp; Setup
-          <span className="subtitle">— test accounts · connection guide · solo dev workflow</span>
-        </h2>
+        <div>
+          <p className="eyebrow">S14</p>
+          <h2 style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <Zap size={20} color="var(--accent)" />
+            Agency Onboarding
+          </h2>
+          <p className="subtle">Accounts, integration paths, demo data, and test workflow.</p>
+        </div>
         <button className="btn-ghost" onClick={() => void load()} disabled={loading}>
           {loading ? <Loader size={13} /> : <RefreshCw size={13} />} &nbsp;Refresh
         </button>
-      </div>
-
-      {/* ── How it works overview ── */}
-      <div className="panel" style={{ marginBottom: 16, borderColor: "rgba(49,255,144,.2)", background: "rgba(49,255,144,.03)" }}>
-        <div style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
-          <Info size={15} color="var(--accent)" style={{ marginTop: 2, flexShrink: 0 }} />
-          <div style={{ fontSize: "0.84rem", lineHeight: 1.7 }}>
-            <strong>Architecture:</strong> Sentinel-KE is a single hub. Each agency logs in with their
-            own account scoped to their <span className="mono-inline">section_code</span> — they see only
-            their data. The Central Command account sees everything across all agencies.
-            As a solo developer you can create test accounts here, switch between them, and simulate
-            each agency's perspective without running separate instances.
-          </div>
-        </div>
       </div>
 
       {/* ════════════════════════════════════════════════
@@ -285,16 +274,19 @@ export default function AgencyOnboarding() {
             </div>
 
             {/* Login instructions */}
-            <div style={{ marginTop: 16, padding: "14px 16px", background: "rgba(255,255,255,.03)", borderRadius: 10, border: "1px solid var(--line)" }}>
-              <p style={{ fontSize: "0.8rem", marginBottom: 8, fontWeight: 600 }}>To test each agency:</p>
+            <details className="collapsible-panel" style={{ marginTop: 16 }}>
+              <summary>
+                <span>How to test an agency account</span>
+                <span className="muted">Login, verify scoped view, switch back to admin</span>
+              </summary>
               <ol style={{ fontSize: "0.78rem", lineHeight: 1.8, margin: 0, paddingLeft: 20, opacity: 0.75 }}>
-                <li>Click <strong>Logout</strong> (bottom of sidebar)</li>
-                <li>On the login screen, enter the agency username manually (for example <span className="mono-inline">kps_test</span>)</li>
-                <li>Password: <span className="mono-inline">{DEFAULT_TEST_PASSWORD}</span> (unless you changed it)</li>
-                <li>You will see only <strong>that agency&apos;s data</strong> — scoped by section_code</li>
-                <li>Log out, log back in as <strong>admin</strong> to see everything</li>
+                <li>Click <strong>Logout</strong> from the sidebar.</li>
+                <li>Enter the agency username manually, for example <span className="mono-inline">kps_test</span>.</li>
+                <li>Use <span className="mono-inline">{DEFAULT_TEST_PASSWORD}</span> unless you changed it.</li>
+                <li>Confirm the user sees only that agency&apos;s section-scoped data.</li>
+                <li>Log back in as <strong>admin</strong> to return to the central view.</li>
               </ol>
-            </div>
+            </details>
           </>
         )}
       </div>
@@ -350,8 +342,7 @@ export default function AgencyOnboarding() {
               {connTab === "ingest" && (
                 <div>
                   <p style={{ fontSize: "0.83rem", marginBottom: 14, opacity: 0.75, lineHeight: 1.6 }}>
-                    The simplest integration. {sel.name} ({sel.code}) sends security events directly
-                    to the Sentinel-KE Ingest API. No additional infrastructure needed.
+                    Simplest path: {sel.name} sends canonical events straight to the ingest API.
                   </p>
                   <CodeBlock
                     label="Send a security event"
@@ -406,9 +397,7 @@ export default function AgencyOnboarding() {
               {connTab === "federation" && (
                 <div>
                   <p style={{ fontSize: "0.83rem", marginBottom: 14, opacity: 0.75, lineHeight: 1.6 }}>
-                    Federation allows {sel.name} to share <strong>privacy-preserving pattern hashes</strong> with
-                    the hub — raw identifiers (phone numbers, account numbers) never leave the agency&apos;s premises.
-                    This enables cross-agency threat correlation.
+                    Federation shares privacy-preserving pattern hashes with the hub for cross-agency correlation.
                   </p>
 
                   {/* ── Live register button ── */}
@@ -500,9 +489,7 @@ curl -X POST ${API_BASE}/v1/federation/patterns \\
               {connTab === "edge" && (
                 <div>
                   <p style={{ fontSize: "0.83rem", marginBottom: 14, opacity: 0.75, lineHeight: 1.6 }}>
-                    For agencies with their own SOC infrastructure, deploy a lightweight Sentinel Edge Agent
-                    that runs locally and forwards normalised events to the hub. Add this to the
-                    agency&apos;s <span className="mono-inline">docker-compose.yml</span>:
+                    Use the edge agent when an agency wants a local node that forwards normalised events to the hub.
                   </p>
                   <CodeBlock
                     label="docker-compose.yml (add to agency's stack)"
@@ -542,7 +529,7 @@ X-API-Key: <INGEST_API_KEY>
               {connTab === "scoping" && (
                 <div>
                   <p style={{ fontSize: "0.83rem", marginBottom: 14, opacity: 0.75, lineHeight: 1.6 }}>
-                    Understanding how data scoping works is critical for multi-agency deployments.
+                    Section users stay inside one agency. Central users see the full national view.
                   </p>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 14 }}>
                     <div className="scope-card">
@@ -614,8 +601,7 @@ Authorization: Bearer <central-admin-token>
         {expandedSection === "demo" && (
           <div style={{ marginTop: 14 }}>
             <p style={{ fontSize: "0.83rem", marginBottom: 14, opacity: 0.75, lineHeight: 1.6 }}>
-              As a solo developer you won&apos;t have real agency feeds. Use the backend&apos;s built-in
-              bootstrap route to populate the platform with realistic Kenyan security scenarios and write usable predictions in one flow.
+              Use bootstrap to seed realistic scenarios and write predictions in one flow.
             </p>
             <CodeBlock
               label="Bootstrap cyber demo data end to end"

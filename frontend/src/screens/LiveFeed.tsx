@@ -93,7 +93,7 @@ export default function LiveFeed({
         <div>
           <p className="eyebrow">S1</p>
           <h2>National Live Feed</h2>
-          <p className="subtle">Multi-agency signal ingestion · provenance · event hashes</p>
+          <p className="subtle">Incoming events, live status, and quick evidence review.</p>
         </div>
         <div className="lf-header-right">
           <span className={`stream-badge ${isLive ? "stream-live" : "stream-poll"}`}>
@@ -160,7 +160,7 @@ export default function LiveFeed({
         {/* ── Timeline bar chart ────────────────────────────────────────── */}
         <div className="panel">
           <div className="panel-header">
-            <h3>Events per minute</h3>
+            <h3>Events over time</h3>
             <span className="muted lf-interval-label">last 30 min</span>
           </div>
           <BarChart data={timeline.map((p) => p.value)} />
@@ -169,16 +169,9 @@ export default function LiveFeed({
           </div>
           {timeline.length === 0 && <p className="muted">No timeline data yet.</p>}
 
-          <div className="insight-row lf-insight-row">
-            <div>
-              <p className="label">Live stream</p>
-              <p className="stat">{liveEvents.length} new this session</p>
-            </div>
-            <div>
-              <p className="label">Audit trail</p>
-              <p className="stat">{merged.length} event hashes</p>
-            </div>
-          </div>
+          <p className="muted" style={{ marginTop: 12 }}>
+            {liveEvents.length} new this session · {merged.length} event hashes in view
+          </p>
         </div>
       </div>
 
@@ -240,9 +233,12 @@ export default function LiveFeed({
             )}
 
             {selected.evidence.length > 0 && (
-              <div className="dp-evidence-row">
-                <p className="label">Evidence ({selected.evidence.length})</p>
-                <div className="list">
+              <details className="panel panel-details dp-evidence-row">
+                <summary>
+                  <span>Evidence</span>
+                  <span className="muted">{selected.evidence.length} related event hash{selected.evidence.length !== 1 ? "es" : ""}</span>
+                </summary>
+                <div className="list" style={{ marginTop: 12 }}>
                   {selected.evidence.map((ev) => (
                     <div key={ev.event_hash} className="list-item">
                       <span className="mono">{shortHash(ev.event_hash)}</span>
@@ -250,7 +246,7 @@ export default function LiveFeed({
                     </div>
                   ))}
                 </div>
-              </div>
+              </details>
             )}
 
             <div className="dp-actions">

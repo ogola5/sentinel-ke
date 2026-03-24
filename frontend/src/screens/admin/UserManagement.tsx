@@ -112,11 +112,14 @@ export default function UserManagement() {
   return (
     <div>
       <div className="screen-header">
-        <h2>
-          <Users size={20} color="var(--info)" />
-          User Management
-          <span className="subtitle">— agency accounts · roles · access levels</span>
-        </h2>
+        <div>
+          <p className="eyebrow">S16</p>
+          <h2 style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <Users size={20} color="var(--info)" />
+            User Management
+          </h2>
+          <p className="subtle">Create users, filter accounts, and review access quickly.</p>
+        </div>
         <div style={{ display: "flex", gap: 8 }}>
           <button className="btn-ghost" onClick={() => void load()} disabled={loading}>
             {loading ? <Loader size={13} /> : <RefreshCw size={13} />} &nbsp;Refresh
@@ -139,7 +142,8 @@ export default function UserManagement() {
       {showCreate && (
         <div className="panel" style={{ marginBottom: 16, borderColor: "rgba(49,255,144,.3)" }}>
           <div className="panel-header">
-            <h3><UserPlus size={14} style={{ verticalAlign: "middle", marginRight: 6 }} />Create New User</h3>
+            <h3><UserPlus size={14} style={{ verticalAlign: "middle", marginRight: 6 }} />Create user</h3>
+            <span className="muted">Username, role, and access scope</span>
           </div>
           <form onSubmit={(e) => void handleCreate(e)}>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 14 }}>
@@ -315,31 +319,40 @@ export default function UserManagement() {
         {selected && (
           <div className="panel" style={{ alignSelf: "start" }}>
             <div className="panel-header">
-              <h3>User Detail</h3>
+              <h3>User detail</h3>
               <button className="btn-ghost" style={{ padding: "2px 8px" }} onClick={() => setSelected(null)}>×</button>
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: 10, fontSize: "0.82rem" }}>
-              <DetailRow label="User ID"      value={selected.user_id} mono small />
               <DetailRow label="Username"     value={selected.username} mono />
-              <DetailRow label="Display name" value={selected.display_name ?? "—"} />
               <DetailRow label="Agency"       value={agencyName(selected.section_code)} />
               <DetailRow label="Role"         value={selected.role} />
               <DetailRow label="Access level" value={selected.access_level} />
               <DetailRow label="MFA"          value={selected.mfa_enabled ? "Enrolled" : "Not enrolled"} />
-              <DetailRow label="Failed logins" value={selected.failed_login_count.toString()} />
-              <DetailRow label="Locked until" value={selected.locked_until ?? "Not locked"} />
-              <DetailRow label="Created"      value={fmtDate(selected.created_at)} />
-              <DetailRow label="Updated"      value={fmtDate(selected.updated_at)} />
-              {selected.scopes.length > 0 && (
-                <div>
-                  <p className="label" style={{ marginBottom: 4 }}>Scopes</p>
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
-                    {selected.scopes.map((s) => (
-                      <span key={s} className="risk-badge info" style={{ fontSize: "0.62rem" }}>{s}</span>
-                    ))}
-                  </div>
+              <DetailRow label="Status" value={selected.locked_until ? "Locked" : selected.is_active ? "Active" : "Inactive"} />
+              {selected.display_name && <DetailRow label="Display name" value={selected.display_name} />}
+              <details className="panel panel-details">
+                <summary>
+                  <span>Identifiers and scopes</span>
+                  <span className="muted">Audit fields and permissions</span>
+                </summary>
+                <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 12 }}>
+                  <DetailRow label="User ID" value={selected.user_id} mono small />
+                  <DetailRow label="Failed logins" value={selected.failed_login_count.toString()} />
+                  <DetailRow label="Locked until" value={selected.locked_until ?? "Not locked"} />
+                  <DetailRow label="Created" value={fmtDate(selected.created_at)} />
+                  <DetailRow label="Updated" value={fmtDate(selected.updated_at)} />
+                  {selected.scopes.length > 0 && (
+                    <div>
+                      <p className="label" style={{ marginBottom: 4 }}>Scopes</p>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                        {selected.scopes.map((s) => (
+                          <span key={s} className="risk-badge info" style={{ fontSize: "0.62rem" }}>{s}</span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
-              )}
+              </details>
               <button
                 className="btn-ghost"
                 style={{ marginTop: 6, fontSize: "0.78rem" }}
