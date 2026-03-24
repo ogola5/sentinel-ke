@@ -117,15 +117,19 @@ export default function FederationDashboard() {
   const offlinePartners = partners.filter((p) => p.status === "offline").length;
   const totalPatterns = patterns.length;
   const criticalCorrelations = correlations.filter((c) => c.risk_level.toLowerCase() === "critical").length;
+  const attentionPartners = stalePartners + offlinePartners;
 
   return (
     <div>
       <div className="screen-header">
-        <h2>
-          <Globe size={20} color="var(--accent)" />
-          Federation Intelligence Network
-          <span className="subtitle">— cross-partner threat correlation · privacy-preserving HMAC</span>
-        </h2>
+        <div>
+          <p className="eyebrow">S15</p>
+          <h2 style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <Globe size={20} color="var(--accent)" />
+            Federation Network
+          </h2>
+          <p className="subtle">Partner freshness first, shared patterns second.</p>
+        </div>
         <button className="btn-ghost" onClick={() => void load()} disabled={loading}>
           {loading ? <Loader size={13} /> : <RefreshCw size={13} />}
           &nbsp;Refresh
@@ -141,37 +145,26 @@ export default function FederationDashboard() {
         </div>
       )}
 
-      {/* Metric bar */}
-      <div className="metric-grid" style={{ gridTemplateColumns: "repeat(6, 1fr)" }}>
+      <div className="metric-grid" style={{ gridTemplateColumns: "repeat(4, 1fr)" }}>
         <div className="metric-card accent">
-          <div className="metric-label">Active partners</div>
+          <div className="metric-label">Online partners</div>
           <div className="metric-value">{activePartners}</div>
           <div className="metric-sub">{partners.length} registered</div>
         </div>
         <div className="metric-card">
-          <div className="metric-label">Stale partners</div>
-          <div className="metric-value" style={{ color: stalePartners > 0 ? "var(--warning)" : "var(--accent)" }}>{stalePartners}</div>
-          <div className="metric-sub">Heartbeat aging out</div>
-        </div>
-        <div className="metric-card">
-          <div className="metric-label">Offline partners</div>
-          <div className="metric-value" style={{ color: offlinePartners > 0 ? "var(--risk-high)" : "var(--accent)" }}>{offlinePartners}</div>
-          <div className="metric-sub">No recent partner signal</div>
+          <div className="metric-label">Need attention</div>
+          <div className="metric-value" style={{ color: attentionPartners > 0 ? "var(--warning)" : "var(--accent)" }}>{attentionPartners}</div>
+          <div className="metric-sub">{stalePartners} stale · {offlinePartners} offline</div>
         </div>
         <div className="metric-card">
           <div className="metric-label">Pattern submissions</div>
           <div className="metric-value">{totalPatterns}</div>
           <div className="metric-sub">Anonymised entity patterns</div>
         </div>
-        <div className="metric-card info">
+        <div className={`metric-card ${criticalCorrelations > 0 ? "danger" : ""}`}>
           <div className="metric-label">Cross-partner matches</div>
           <div className="metric-value">{correlations.length}</div>
-          <div className="metric-sub">Same entity across 2+ partners</div>
-        </div>
-        <div className={`metric-card ${criticalCorrelations > 0 ? "danger" : ""}`}>
-          <div className="metric-label">Critical correlations</div>
-          <div className="metric-value">{criticalCorrelations}</div>
-          <div className="metric-sub">Risk level = CRITICAL</div>
+          <div className="metric-sub">{criticalCorrelations} critical</div>
         </div>
       </div>
 
@@ -191,12 +184,12 @@ export default function FederationDashboard() {
       ) : (
         <>
           {edgeSync?.is_edge_node && (
-            <div className="panel" style={{ marginBottom: 16, borderColor: "rgba(var(--info-rgb), 0.24)", background: "rgba(var(--info-rgb), 0.07)" }}>
-              <div className="panel-header">
-                <h3>Local edge sync state</h3>
+            <details className="panel panel-details" style={{ marginBottom: 16, borderColor: "rgba(var(--info-rgb), 0.24)", background: "rgba(var(--info-rgb), 0.07)" }}>
+              <summary>
+                <span>Local edge sync state</span>
                 <span className="muted">{edgeSync.partner_id}</span>
-              </div>
-              <div className="detail-grid">
+              </summary>
+              <div className="detail-grid" style={{ marginTop: 12 }}>
                 <div>
                   <strong>Status</strong>
                   <p className="muted" style={{ marginTop: 4 }}>
@@ -214,7 +207,7 @@ export default function FederationDashboard() {
                   <p className="muted" style={{ marginTop: 4 }}>{edgeSync.last_error ?? "None"}</p>
                 </div>
               </div>
-            </div>
+            </details>
           )}
 
           {/* Partner cards */}
@@ -289,92 +282,91 @@ export default function FederationDashboard() {
             })}
           </div>
 
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
-            {/* Pattern submission chart */}
-            <div className="panel">
-              <div className="panel-header">
-                <h3>Patterns by Partner</h3>
-              </div>
-              <ResponsiveContainer width="100%" height={200}>
-                <BarChart data={patternsByPartner} margin={{ top: 4, right: 8, left: -16, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="name" tick={{ fontSize: 10, fill: "var(--ink-muted)" }} />
-                  <YAxis tick={{ fontSize: 10, fill: "var(--ink-muted)" }} />
-                  <Tooltip
-                    contentStyle={{ background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 8, fontSize: 12 }}
-                  />
-                  <Bar dataKey="patterns" fill="var(--accent)" opacity={0.8} radius={[3, 3, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-
-            {/* Selected partner patterns */}
-            <div className="panel">
-              <div className="panel-header">
-                <h3>Recent patterns</h3>
-                <span className="muted">{selectedPartner}</span>
-              </div>
-              <div style={{ overflowY: "auto", maxHeight: 200 }}>
-                {selectedPartnerPatterns.length === 0 ? (
-                  <div className="state-box" style={{ padding: 24 }}>
-                    <p>No patterns for this partner</p>
-                  </div>
-                ) : (
-                  <table className="data-table">
-                    <thead>
-                      <tr>
-                        <th>Entity hash</th>
-                        <th>Type</th>
-                        <th>Confidence</th>
-                        <th>Flags</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {selectedPartnerPatterns.slice(0, 10).map((pt) => (
-                        <tr key={pt.id}>
-                          <td>
-                            <span className="mono" style={{ fontSize: "0.75rem" }}>{shortHash(pt.entity_key_hash)}</span>
-                          </td>
-                          <td className="muted" style={{ fontSize: "0.78rem" }}>{pt.pattern_type}</td>
-                          <td>
-                            <div className="score-bar-wrap">
-                              <div className="score-bar-track">
-                                <div
-                                  className="score-bar-fill"
-                                  style={{
-                                    width: `${pt.confidence * 100}%`,
-                                    background: pt.confidence >= 0.7 ? "var(--risk-high)" : "var(--accent)",
-                                  }}
-                                />
-                              </div>
-                              <span style={{ fontSize: "0.75rem", minWidth: 30 }}>{pt.confidence.toFixed(2)}</span>
-                            </div>
-                          </td>
-                          <td>
-                            {pt.risk_flags.slice(0, 2).map((f) => (
-                              <span key={f} className="risk-badge medium" style={{ fontSize: "0.62rem", marginRight: 2 }}>
-                                {f.replace(/_/g, " ")}
-                              </span>
-                            ))}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
-              </div>
-            </div>
-          </div>
-
-          {/* Cross-partner correlations */}
-          <div className="panel">
+          <details className="panel panel-details" open>
+            <summary>
+              <span>Patterns by partner</span>
+              <span className="muted">{totalPatterns} total submissions</span>
+            </summary>
             <div className="panel-header">
-              <h3>
-                <Link2 size={14} style={{ verticalAlign: "middle", marginRight: 6 }} />
-                Cross-Partner Correlations
-              </h3>
-              <span className="muted">Same entity_key_hash seen across multiple partners</span>
+              <h3>Patterns by partner</h3>
             </div>
+            <ResponsiveContainer width="100%" height={200}>
+              <BarChart data={patternsByPartner} margin={{ top: 4, right: 8, left: -16, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="name" tick={{ fontSize: 10, fill: "var(--ink-muted)" }} />
+                <YAxis tick={{ fontSize: 10, fill: "var(--ink-muted)" }} />
+                <Tooltip
+                  contentStyle={{ background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 8, fontSize: 12 }}
+                />
+                <Bar dataKey="patterns" fill="var(--accent)" opacity={0.8} radius={[3, 3, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </details>
+
+          <details className="panel panel-details">
+            <summary>
+              <span>Recent patterns</span>
+              <span className="muted">{selectedPartner || "No partner selected"}</span>
+            </summary>
+            <div style={{ overflowY: "auto", maxHeight: 200 }}>
+              {selectedPartnerPatterns.length === 0 ? (
+                <div className="state-box" style={{ padding: 24 }}>
+                  <p>No patterns for this partner</p>
+                </div>
+              ) : (
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Entity hash</th>
+                      <th>Type</th>
+                      <th>Confidence</th>
+                      <th>Flags</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {selectedPartnerPatterns.slice(0, 10).map((pt) => (
+                      <tr key={pt.id}>
+                        <td>
+                          <span className="mono" style={{ fontSize: "0.75rem" }}>{shortHash(pt.entity_key_hash)}</span>
+                        </td>
+                        <td className="muted" style={{ fontSize: "0.78rem" }}>{pt.pattern_type}</td>
+                        <td>
+                          <div className="score-bar-wrap">
+                            <div className="score-bar-track">
+                              <div
+                                className="score-bar-fill"
+                                style={{
+                                  width: `${pt.confidence * 100}%`,
+                                  background: pt.confidence >= 0.7 ? "var(--risk-high)" : "var(--accent)",
+                                }}
+                              />
+                            </div>
+                            <span style={{ fontSize: "0.75rem", minWidth: 30 }}>{pt.confidence.toFixed(2)}</span>
+                          </div>
+                        </td>
+                        <td>
+                          {pt.risk_flags.slice(0, 2).map((f) => (
+                            <span key={f} className="risk-badge medium" style={{ fontSize: "0.62rem", marginRight: 2 }}>
+                              {f.replace(/_/g, " ")}
+                            </span>
+                          ))}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </details>
+
+          <details className="panel panel-details">
+            <summary>
+              <span>
+                <Link2 size={14} style={{ verticalAlign: "middle", marginRight: 6 }} />
+                Cross-partner correlations
+              </span>
+              <span className="muted">{correlations.length} matches</span>
+            </summary>
             {correlations.length === 0 ? (
               <div className="state-box" style={{ padding: 24 }}>
                 <Network size={22} />
@@ -420,20 +412,23 @@ export default function FederationDashboard() {
                 </tbody>
               </table>
             )}
-          </div>
+          </details>
 
-          {/* Architecture note */}
-          <div className="panel" style={{ borderColor: "rgba(79,195,247,.2)", marginTop: 0 }}>
-            <div style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
+          <details className="panel panel-details" style={{ borderColor: "rgba(79,195,247,.2)", marginTop: 0 }}>
+            <summary>
+              <span>Privacy model</span>
+              <span className="muted">How correlation stays privacy-preserving</span>
+            </summary>
+            <div style={{ display: "flex", gap: 12, alignItems: "flex-start", marginTop: 12 }}>
               <AlertTriangle size={15} color="var(--info)" style={{ marginTop: 2, flexShrink: 0 }} />
               <p style={{ fontSize: "0.8rem", opacity: 0.7, lineHeight: 1.6 }}>
                 <strong>Privacy model:</strong> Edge agents hash entity identifiers with the shared{" "}
                 <span className="mono">NATIONAL_SALT</span> before sending to the hub. Raw phone numbers, account
-                numbers and IPs never leave the partner's premises. The hub sees only HMAC-SHA256 digests — correlation
-                is possible because all partners use the same salt.
+                numbers and IPs never leave the partner's premises. The hub sees only HMAC-SHA256 digests and can
+                correlate only because all partners use the same salt.
               </p>
             </div>
-          </div>
+          </details>
         </>
       )}
     </div>

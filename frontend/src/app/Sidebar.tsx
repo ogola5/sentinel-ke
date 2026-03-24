@@ -79,7 +79,7 @@ export default function Sidebar({
       {!collapsed && (
         <div className="nav-header">
           <p className="nav-wordmark">Sentinel-KE</p>
-          <h1 className="nav-title">National SOC</h1>
+          <h1 className="nav-title">Workspace</h1>
 
           {/* Agency badge — dynamic border/bg from agencyColor */}
           <div
@@ -99,20 +99,9 @@ export default function Sidebar({
           {syncError && <p className="nav-sync-error">{syncError}</p>}
           {actionStatus && <p className="nav-action-status">{actionStatus}</p>}
 
-          <div className="nav-badges">
-            <span className="status-badge status-badge-sm">
-              {backendStatus === "connected" ? "● Live" : backendStatus === "degraded" ? "◐ Degraded" : "○ Offline"}
-            </span>
-            {healthGnnLoaded && (
-              <span className="status-badge status-badge-sm status-badge-gnn">GNN ✓</span>
-            )}
-            <span
-              className="status-badge status-badge-sm"
-              style={{ background: `${color}18`, color, border: `1px solid ${color}30` }}
-            >
-              {principal.role}
-            </span>
-          </div>
+          <p className="nav-role-label">
+            {principal.role}{healthGnnLoaded ? " · GNN ready" : ""}
+          </p>
         </div>
       )}
 

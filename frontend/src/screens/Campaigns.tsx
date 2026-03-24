@@ -12,13 +12,6 @@ type CampaignsProps = {
   onOpenEvidence: () => void;
 };
 
-const severityClass = (severity: string) => {
-  if (severity === "high") return "banner banner-high";
-  if (severity === "medium") return "banner banner-medium";
-  if (severity === "low") return "banner banner-low";
-  return "banner";
-};
-
 export default function Campaigns({
   campaigns,
   selectedId,
@@ -53,7 +46,7 @@ export default function Campaigns({
         <div>
           <p className="eyebrow">S4</p>
           <h2>Campaign Console</h2>
-          <p className="subtle">Coordinated operations with confidence growth.</p>
+          <p className="subtle">Choose one campaign, review it, then act.</p>
         </div>
         <div className="chip-row">
           <button className="ghost" type="button" onClick={onOpenGraph}>
@@ -62,37 +55,11 @@ export default function Campaigns({
         </div>
       </div>
 
-      <div className="panel" style={{ background: "rgba(var(--warning-rgb), 0.08)", borderColor: "rgba(var(--warning-rgb), 0.26)" }}>
-        <div className="panel-header">
-          <h3>How to use this page</h3>
-          <span className="muted">Campaigns are for coordinated activity, not single alerts</span>
-        </div>
-        <div className="detail-grid">
-          <div>
-            <p className="label">Step 1</p>
-            <p>Choose one campaign from the left and read its confidence and severity first.</p>
-          </div>
-          <div>
-            <p className="label">Step 2</p>
-            <p>Review top entities, factors, and history before deciding to escalate.</p>
-          </div>
-          <div>
-            <p className="label">Step 3</p>
-            <p>Open graph or evidence for deeper review, then generate a case only when justified.</p>
-          </div>
-        </div>
-      </div>
-
-      <div className={severityClass(selected.severity)}>
-        <strong>{selected.severity.toUpperCase()} severity</strong>
-        <span>{selected.name} / {selected.type} / {selected.status}</span>
-      </div>
-
       <div className="grid-two">
         <div className="panel">
           <div className="panel-header">
-            <h3>1. Choose Campaign</h3>
-            <span className="muted">Operational objects</span>
+            <h3>Campaigns</h3>
+            <span className="muted">{campaigns.length} active</span>
           </div>
           <div className="campaign-list">
             {campaigns.map((campaign) => (
@@ -116,14 +83,13 @@ export default function Campaigns({
 
         <div className="panel">
           <div className="panel-header">
-            <h3>2. Review Campaign</h3>
-            <span className="muted">{selected.id}</span>
+            <h3>{selected.name}</h3>
+            <span className={`risk-badge ${selected.severity.toLowerCase()}`}>{selected.severity}</span>
           </div>
-          <div className="list-item" style={{ marginBottom: 12 }}>
-            <strong>{selected.name}</strong>
-            <p className="muted" style={{ marginTop: 4 }}>
-              Read this summary first, then use the sections below to decide whether this campaign is ready for graph pivoting or case generation.
-            </p>
+          <div className="chip-row" style={{ marginBottom: 12 }}>
+            <span className="chip">{selected.type}</span>
+            <span className="chip">{selected.status}</span>
+            <span className="chip mono">{selected.id}</span>
           </div>
           <div className="detail-grid">
             <div>
@@ -143,12 +109,29 @@ export default function Campaigns({
               <p className="stat">{selected.severity}</p>
             </div>
           </div>
-          <div className="panel-subsection">
-            <h4>Confidence history</h4>
-            <Sparkline data={selected.confidence_history} stroke="var(--accent)" />
+          <div className="chip-row">
+            <button className="chip ghost" type="button" onClick={onOpenInfra}>
+              View Infra Clusters
+            </button>
+            <button className="chip ghost" type="button" onClick={onOpenEvidence}>
+              Evidence references
+            </button>
+            <button className="chip active" type="button" onClick={onGenerateCase}>
+              Generate Case Packet
+            </button>
           </div>
-          <div className="panel-subsection">
-            <h4>Top entities & roles</h4>
+          <details className="panel-subsection collapsible-panel">
+            <summary>
+              <span>Confidence history</span>
+              <span className="muted">Open trend</span>
+            </summary>
+            <Sparkline data={selected.confidence_history} stroke="var(--accent)" />
+          </details>
+          <details className="panel-subsection collapsible-panel">
+            <summary>
+              <span>Entities and drivers</span>
+              <span className="muted">Open detail</span>
+            </summary>
             <div className="entity-roles">
               {selected.top_entities.map((entity) => (
                 <div key={entity.label} className="entity-role">
@@ -157,28 +140,14 @@ export default function Campaigns({
                 </div>
               ))}
             </div>
-          </div>
-          <div className="panel-subsection">
-            <h4>AI confidence drivers</h4>
-            <div className="factors">
+            <div className="factors" style={{ marginTop: 12 }}>
               {selected.factors.map((factor) => (
                 <span key={factor} className="factor">
                   {factor}
                 </span>
               ))}
             </div>
-          </div>
-          <div className="chip-row">
-            <button className="ghost" type="button" onClick={onOpenInfra}>
-              View Infra Clusters
-            </button>
-            <button className="ghost" type="button" onClick={onOpenEvidence}>
-              Evidence references
-            </button>
-            <button className="ghost" type="button" onClick={onGenerateCase}>
-              3. Generate Case Packet
-            </button>
-          </div>
+          </details>
         </div>
       </div>
     </section>

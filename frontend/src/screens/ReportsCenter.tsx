@@ -175,41 +175,16 @@ export default function ReportsCenter({ principal }: { principal: Principal }) {
           <p className="eyebrow">S8</p>
           <h2>Operational Reports</h2>
           <p className="subtle">
-            Generate downloadable legal, explainability, investigation, and governance reports in plain English.
+            Build one report, preview it, then download it.
           </p>
-        </div>
-      </div>
-
-      <div className="panel workflow-guide-panel" style={{ background: "rgba(var(--accent-rgb), 0.08)", borderColor: "rgba(var(--accent-rgb), 0.28)" }}>
-        <div className="panel-header">
-          <h3>How to use this page</h3>
-          <span className="muted">Build one report at a time</span>
-        </div>
-        <div className="detail-grid">
-          <div>
-            <p className="label">Step 1</p>
-            <p>Choose the report type first. That decides what subject fields matter.</p>
-          </div>
-          <div>
-            <p className="label">Step 2</p>
-            <p>Use a real entity, campaign, bundle, or prediction instead of a placeholder example.</p>
-          </div>
-          <div>
-            <p className="label">Step 3</p>
-            <p>Preview before download so the plain-English summary is checked first.</p>
-          </div>
-          <div>
-            <p className="label">Best use</p>
-            <p>Use entity reports for operators, campaign reports for escalation, decision explanations for oversight, and legal bundles for evidence handling.</p>
-          </div>
         </div>
       </div>
 
       <div className="grid-two reports-layout">
         <div className="panel workflow-stage-panel">
           <div className="panel-header">
-            <h3>1. Report Builder</h3>
-            <span className="muted">HTML, PDF, or JSON download</span>
+            <h3>Report builder</h3>
+            <span className="muted">Choose output and subject</span>
           </div>
 
           {!catalog ? (
@@ -219,12 +194,6 @@ export default function ReportsCenter({ principal }: { principal: Principal }) {
             </div>
           ) : (
             <div className="workflow-stack">
-              <div className="panel-subsection">
-                <h4>Choose the output</h4>
-                <p className="muted" style={{ marginTop: 6 }}>
-                  Start with the type, period, format, prediction family, and classification.
-                </p>
-              </div>
               <label>
                 <p className="label">Report type</p>
                 <select
@@ -255,7 +224,6 @@ export default function ReportsCenter({ principal }: { principal: Principal }) {
               {selectedType && (
                 <div className="workflow-summary-banner">
                   <strong>{selectedType.title}</strong>
-                  <p className="muted" style={{ margin: "4px 0 0" }}>{selectedType.description}</p>
                   <div className="chip-row" style={{ marginTop: 10 }}>
                     {selectedType.audience.map((item) => (
                       <span key={item} className="chip mono">
@@ -332,13 +300,6 @@ export default function ReportsCenter({ principal }: { principal: Principal }) {
                   <option value="INTERNAL">INTERNAL</option>
                 </select>
               </label>
-
-              <div className="panel-subsection">
-                <h4>Choose the subject</h4>
-                <p className="muted" style={{ marginTop: 6 }}>
-                  Only fill the fields required for the selected report type.
-                </p>
-              </div>
 
               {(requiresField(request.report_type, "entity_key") || request.report_type === "ai_decision_explanation") && (
                 <div style={{ display: "grid", gap: 8 }}>
@@ -420,13 +381,6 @@ export default function ReportsCenter({ principal }: { principal: Principal }) {
                 </label>
               )}
 
-              <div className="panel-subsection">
-                <h4>Preview or download</h4>
-                <p className="muted" style={{ marginTop: 6 }}>
-                  Preview is the safe first step. Download when the summary and findings look right.
-                </p>
-              </div>
-
               <div className="chip-row" style={{ marginTop: 4 }}>
                 <button className="ghost" type="button" onClick={() => void handlePreview()} disabled={loading}>
                   {loading ? "Generating…" : "Preview JSON"}
@@ -444,8 +398,8 @@ export default function ReportsCenter({ principal }: { principal: Principal }) {
 
         <div className="panel workflow-stage-panel">
           <div className="panel-header">
-            <h3>2. Preview and findings</h3>
-            <span className="muted">Non-technical first</span>
+            <h3>Preview and findings</h3>
+            <span className="muted">Plain-English first</span>
           </div>
 
           {!preview ? (
@@ -486,8 +440,11 @@ export default function ReportsCenter({ principal }: { principal: Principal }) {
                 </div>
               </div>
 
-              <div className="panel-subsection">
-                <h4>Governance snapshot</h4>
+              <details className="panel panel-details">
+                <summary>
+                  <span>Governance snapshot</span>
+                  <span className="muted">Model and real-data state</span>
+                </summary>
                 <div className="chip-row">
                   <span className="chip mono">
                     model {String(governance.model_version ?? "n/a")}
@@ -499,7 +456,7 @@ export default function ReportsCenter({ principal }: { principal: Principal }) {
                     real-data gate {String((governance.real_data_gate as Record<string, unknown> | undefined)?.passed ?? "n/a")}
                   </span>
                 </div>
-              </div>
+              </details>
 
               <div className="panel-subsection" style={{ display: "flex", alignItems: "center", gap: 12 }}>
                 <ShieldCheck size={18} />

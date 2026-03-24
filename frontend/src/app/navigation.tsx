@@ -103,7 +103,7 @@ export type ScreenId =
 export const SCREEN_CHROME: Record<ScreenId, ScreenChrome> = {
   live: {
     title: "Live Feed",
-    subtitle: "Monitor national event flow and open a single event at a time.",
+    subtitle: "Watch the current event flow.",
     showSourceFilters: true,
     showTimeWindow: true,
     showEntitySearch: true,
@@ -112,7 +112,7 @@ export const SCREEN_CHROME: Record<ScreenId, ScreenChrome> = {
   },
   graph: {
     title: "Threat Graph",
-    subtitle: "Trace relationships between services, attack infrastructure, and campaigns.",
+    subtitle: "Trace connected entities and campaigns.",
     showSourceFilters: true,
     showTimeWindow: true,
     showEntitySearch: true,
@@ -121,84 +121,84 @@ export const SCREEN_CHROME: Record<ScreenId, ScreenChrome> = {
   },
   investigate: {
     title: "Investigation",
-    subtitle: "Explain one entity clearly: score, evidence, graph paths, and reports.",
+    subtitle: "Explain one entity clearly.",
     showEntitySearch: true,
     entitySearchLabel: "Entity key",
     entitySearchPlaceholder: "Search a service or entity key",
   },
   campaigns: {
     title: "Campaigns",
-    subtitle: "Review coordinated activity and escalate only the highest-risk clusters.",
+    subtitle: "Review coordinated activity.",
     showEntitySearch: true,
     entitySearchLabel: "Find linked entity",
     entitySearchPlaceholder: "Search entity to pivot into investigation",
   },
   cases: {
     title: "Cases",
-    subtitle: "Export clean case packets with evidence and recommended actions.",
+    subtitle: "Export evidence-backed case packets.",
     showEntitySearch: true,
     entitySearchLabel: "Entity jump",
     entitySearchPlaceholder: "Search entity to investigate before export",
   },
   defense: {
     title: "Defense",
-    subtitle: "Execute verified response actions and review webhook deliveries.",
+    subtitle: "Run verified response actions.",
   },
   ops: {
     title: "Operations",
-    subtitle: "Triage operational queues without mixing them with command or admin tasks.",
+    subtitle: "Triage the current operational picture.",
   },
   reports: {
     title: "Reports",
-    subtitle: "Generate readable reports by cadence, audience, and subject.",
+    subtitle: "Generate readable outputs fast.",
   },
   command: {
     title: "Command",
-    subtitle: "Keep the national picture focused: threat level, network posture, and readiness.",
+    subtitle: "Keep the national picture focused.",
   },
   timeline: {
     title: "Threat Forecast",
-    subtitle: "Read the time-based threat picture, forecast, and top threat movement.",
+    subtitle: "Read the time-based threat picture.",
     showSourceFilters: true,
     showTimeWindow: true,
   },
   infra: {
     title: "Infrastructure Correlation",
-    subtitle: "Inspect shared attack infrastructure and correlated clusters.",
+    subtitle: "Inspect shared attack infrastructure.",
     showSourceFilters: true,
     showTimeWindow: true,
   },
   gnn: {
     title: "GNN Intelligence",
-    subtitle: "Review model health, queue quality, and training runs without hiding caveats.",
+    subtitle: "Review model state and caveats.",
   },
   crypto: {
     title: "Crypto Posture",
-    subtitle: "Audit platform cryptography, self-tests, and key-management posture.",
+    subtitle: "Audit platform cryptography.",
   },
   corruption: {
     title: "Corruption Intelligence",
-    subtitle: "Review procurement, leakage, and integrity signals in one governed view.",
+    subtitle: "Review integrity and leakage signals.",
   },
   federation: {
     title: "Federation",
-    subtitle: "Track partner posture, correlations, and privacy-preserving exchange health.",
+    subtitle: "Track partner posture and correlations.",
   },
   audit: {
     title: "Audit",
-    subtitle: "Inspect traceability, accountability, and control events.",
+    subtitle: "Inspect traceability and control events.",
   },
   exec: {
     title: "Crisis Brief",
-    subtitle: "Prepare a short executive view for central emergency leadership.",
+    subtitle: "Prepare a short executive brief.",
   },
   onboard: {
     title: "Agency Onboarding",
-    subtitle: "Register new agencies and prepare them for controlled federation.",
+    subtitle: "Prepare agencies for controlled federation.",
   },
   users: {
     title: "User Management",
-    subtitle: "Control access, roles, and user readiness without cluttering the analyst flow.",
+    subtitle: "Control access and user readiness.",
   },
 };
 

@@ -108,32 +108,32 @@ const GNN_VIEW_CONTENT: Record<GNNView, {
 }> = {
   overview: {
     kicker: "Model snapshot",
-    title: "Start with whether the model is trustworthy enough to use right now.",
-    summary: "This view keeps the current model state readable before you move into queue work or retraining.",
+    title: "Check model state first.",
+    summary: "Read artifact status and headline metrics before touching the queue.",
     steps: [
-      "Check the artifact and headline metrics.",
-      "Read the latest run trend before trusting the queue.",
-      "Move to Review Queue only after the model state is clear.",
+      "Check the artifact and core metrics.",
+      "Read the latest run trend.",
+      "Only then move into review.",
     ],
   },
   review: {
     kicker: "Review queue",
-    title: "Work the analyst queue, not the training dashboard.",
-    summary: "This view is for entity-level review only: uncertain rows first, then high-risk rows, then analyst feedback.",
+    title: "Work the analyst queue.",
+    summary: "Handle uncertain rows first, then high-risk rows, then feedback.",
     steps: [
-      "Start with rows marked uncertain or high risk.",
-      "Read the top driver and kill-chain stage before labeling.",
-      "Submit analyst feedback directly from the queue.",
+      "Start with uncertain or high-risk rows.",
+      "Read the top driver before labeling.",
+      "Submit feedback from the queue.",
     ],
   },
   ops: {
     kicker: "Model operations",
-    title: "Use this view only when you need to seed, train, or inspect deeper model caveats.",
-    summary: "This keeps retraining controls and diagnostics separate from day-to-day analyst review.",
+    title: "Use this view for seeding and training.",
+    summary: "Keep retraining controls separate from daily analyst review.",
     steps: [
-      "Seed only when the environment needs fresh demo data.",
-      "Run training for the selected domain and wait for completion.",
-      "Open deeper diagnostics only when you need fairness or loss-curve detail.",
+      "Seed only when you need fresh data.",
+      "Run training for the selected domain.",
+      "Open diagnostics only when needed.",
     ],
   },
 };

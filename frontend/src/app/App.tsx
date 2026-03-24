@@ -415,24 +415,6 @@ function AuthenticatedApp({
           )}
         </div>
 
-        <footer className="workspace-footer">
-          <div className="workspace-footer-block">
-            <p className="workspace-footer-label">What This Page Is For</p>
-            <p className="workspace-footer-copy">{screenGuide.purpose}</p>
-          </div>
-          <div className="workspace-footer-block">
-            <p className="workspace-footer-label">Use It In 3 Steps</p>
-            <ol className="workspace-footer-steps">
-              {screenGuide.steps.map((step) => (
-                <li key={step}>{step}</li>
-              ))}
-            </ol>
-          </div>
-          <div className="workspace-footer-block">
-            <p className="workspace-footer-label">Best Next Move</p>
-            <p className="workspace-footer-copy">{screenGuide.next ?? "Stay on this page until one action is complete."}</p>
-          </div>
-        </footer>
       </div>
 
       <EvidenceDrawer open={evidence.open} title={evidence.title} items={evidence.items} onClose={closeEvidence} />

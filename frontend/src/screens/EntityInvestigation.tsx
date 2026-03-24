@@ -644,11 +644,11 @@ export default function EntityInvestigation({ initialEntityKey, analystId, princ
           </div>
 
           {trustChecks.length > 0 && (
-            <div className="panel">
-              <div className="panel-header">
-                <h3>Trust checks</h3>
-                <span className="muted">Why an operator should or should not trust this score</span>
-              </div>
+            <details className="panel panel-details">
+              <summary>
+                <span>Trust checks</span>
+                <span className="muted">Open detailed trust signals</span>
+              </summary>
               <div className="list">
                 {trustChecks.map((item) => (
                   <div key={`${item.label}-${item.status}`} className="list-item">
@@ -667,7 +667,7 @@ export default function EntityInvestigation({ initialEntityKey, analystId, princ
                   </div>
                 ))}
               </div>
-            </div>
+            </details>
           )}
 
           <div className="grid-two">
@@ -894,13 +894,13 @@ export default function EntityInvestigation({ initialEntityKey, analystId, princ
           </div>
 
           <div className="grid-two">
-            <div className="panel">
-              <div className="panel-header">
-                <h3><Wrench size={14} /> Tool and technique attribution</h3>
+            <details className="panel panel-details">
+              <summary>
+                <span><Wrench size={14} /> Tool and technique attribution</span>
                 <span className="muted">
                   {toolAttribution?.summary?.tool_count ?? toolAttribution?.tools?.length ?? 0} tools
                 </span>
-              </div>
+              </summary>
               <div className="panel-subsection">
                 <h4>Tools</h4>
                 {toolAttribution?.tools?.length ? (
@@ -940,13 +940,13 @@ export default function EntityInvestigation({ initialEntityKey, analystId, princ
                   <p className="muted">No ATT&CK techniques are attached yet.</p>
                 )}
               </div>
-            </div>
+            </details>
 
-            <div className="panel">
-              <div className="panel-header">
-                <h3><FileText size={14} /> Downloadable reports</h3>
-                <span className="muted">Readable artifacts for operators and reviewers</span>
-              </div>
+            <details className="panel panel-details">
+              <summary>
+                <span><FileText size={14} /> Reports and downloads</span>
+                <span className="muted">Open export actions</span>
+              </summary>
               <div className="list">
                 <div className="list-item">
                   <strong>Entity investigation report</strong>
@@ -1069,7 +1069,7 @@ export default function EntityInvestigation({ initialEntityKey, analystId, princ
                   </div>
                 </div>
               )}
-            </div>
+            </details>
           </div>
 
           <div className="panel">

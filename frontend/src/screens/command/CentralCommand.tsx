@@ -186,34 +186,6 @@ export default function CentralCommand({
     healthPlatformStatus.legal_anchor_modes && typeof healthPlatformStatus.legal_anchor_modes === "object"
       ? (healthPlatformStatus.legal_anchor_modes as Record<string, unknown>)
       : {};
-  const viewGuide =
-    view === "brief"
-      ? {
-          title: "How to use National Brief",
-          steps: [
-            "Start with the national threat level banner.",
-            "Open only one queue that needs attention first.",
-            "Move to Campaigns, Operations, or GNN only after the brief is clear.",
-          ],
-        }
-      : view === "network"
-        ? {
-            title: "How to use Agency Network",
-            steps: [
-              "Check which agencies are active first.",
-              "Review cross-agency correlations second.",
-              "Use this page to coordinate, not to do deep entity analysis.",
-            ],
-          }
-        : {
-            title: "How to use Readiness",
-            steps: [
-              "Check identity and model readiness first.",
-              "Record backup or restore evidence in Resilience operations.",
-              "Run a drift check when governance looks stale or risky.",
-            ],
-          };
-
   const handleBackupAttestation = async () => {
     if (!backupAssetId.trim() || !backupId.trim()) return;
     setOpsBusy(true);
@@ -335,21 +307,6 @@ export default function CentralCommand({
             <CommandStat label="High-risk AI queue" value={highRiskPredictions.length} icon={<AlertTriangle size={13} />} tone="var(--risk-high)" />
             <CommandStat label="Cross-agency hits" value={correlations.length} icon={<Network size={13} />} tone="var(--accent)" />
           </div>
-        </div>
-      </div>
-
-      <div className="panel" style={{ background: "rgba(var(--info-rgb), 0.08)", borderColor: "rgba(var(--info-rgb), 0.22)" }}>
-        <div className="panel-header">
-          <h3>{viewGuide.title}</h3>
-          <span className="muted">Keep this workspace calm and sequential</span>
-        </div>
-        <div className="list">
-          {viewGuide.steps.map((item, index) => (
-            <div key={item} className="list-item">
-              <strong>Step {index + 1}</strong>
-              <p className="muted" style={{ marginTop: 4 }}>{item}</p>
-            </div>
-          ))}
         </div>
       </div>
 
@@ -555,317 +512,279 @@ export default function CentralCommand({
       )}
 
       {view === "readiness" && (
-        <div className="grid-three">
-          <div className="panel">
-            <div className="panel-header">
-              <h3>Identity readiness</h3>
-              <span className="muted">People and access</span>
+        <>
+          <div className="grid-two">
+            <div className="panel">
+              <div className="panel-header">
+                <h3>Readiness snapshot</h3>
+                <span className="muted">People and model state</span>
+              </div>
+              <div className="detail-grid">
+                <div>
+                  <p className="label">Central users</p>
+                  <p className="stat">{centralUsers}</p>
+                </div>
+                <div>
+                  <p className="label">Agency users</p>
+                  <p className="stat">{sectionUsers}</p>
+                </div>
+                <div>
+                  <p className="label">MFA enrolled</p>
+                  <p className="stat">{mfaEnabled}</p>
+                </div>
+                <div>
+                  <p className="label">Locked accounts</p>
+                  <p className="stat">{lockedCount}</p>
+                </div>
+                <div>
+                  <p className="label">Primary model</p>
+                  <p>{healthGnnLoaded ? "Loaded" : "Offline"}</p>
+                </div>
+                <div>
+                  <p className="label">Model version</p>
+                  <p className="mono">{healthModelVersion ?? "—"}</p>
+                </div>
+              </div>
+              <div className="chip-row" style={{ marginTop: 12 }}>
+                <button className="chip ghost" type="button" onClick={() => onNavigate("users")}>
+                  Open User Management
+                </button>
+                <button className="chip ghost" type="button" onClick={() => onNavigate("gnn")}>
+                  Open GNN Intelligence
+                </button>
+              </div>
             </div>
-            <div className="list">
-              <div className="list-item"><strong>{centralUsers}</strong> central users</div>
-              <div className="list-item"><strong>{sectionUsers}</strong> agency users</div>
-              <div className="list-item"><strong>{mfaEnabled}</strong> MFA-enrolled users</div>
-              <div className="list-item"><strong>{lockedCount}</strong> locked accounts</div>
-            </div>
-            <button className="ghost" type="button" onClick={() => onNavigate("users")}>
-              Open User Management
-            </button>
-          </div>
 
-          <div className="panel">
-            <div className="panel-header">
-              <h3>Model readiness</h3>
-              <span className="muted">AI and explainability</span>
-            </div>
-            <div className="list">
-              <div className="list-item"><strong>{healthGnnLoaded ? "Loaded" : "Offline"}</strong> primary GNN artifact</div>
-              <div className="list-item"><strong>{healthModelVersion ?? "—"}</strong> active model version</div>
-              <div className="list-item"><strong>{operationsData.predictions.length}</strong> predictions in current operational snapshot</div>
-              <div className="list-item"><strong>{highRiskPredictions.length}</strong> predictions above operational threshold</div>
-            </div>
-            <button className="ghost" type="button" onClick={() => onNavigate("gnn")}>
-              Open GNN Intelligence
-            </button>
-          </div>
-
-          <div className="panel">
-            <div className="panel-header">
-              <h3>AI trust and operations</h3>
-              <span className="muted">Freshness, governance, response, resilience</span>
-            </div>
-            {trustSummary ? (
-              <>
-                <div className="list">
+            <div className="panel">
+              <div className="panel-header">
+                <h3>Platform integrity</h3>
+                <span className="muted">Core platform checks</span>
+              </div>
+              <div className="list">
+                <div className="list-item">
+                  <strong style={{ color: schemaContractOk ? "var(--accent)" : "var(--risk-critical)" }}>
+                    {!hasPlatformHealth ? "Schema status loading" : schemaContractOk ? "Schema clean" : "Schema drift detected"}
+                  </strong>
+                  <p className="muted" style={{ marginTop: 4 }}>
+                    {!hasPlatformHealth
+                      ? "Waiting for platform health data."
+                      : schemaContractOk
+                        ? "No required columns are missing."
+                        : `${schemaMissingCount} required columns are missing.`}
+                  </p>
+                </div>
+                <div className="list-item">
+                  <strong>
+                    {!hasPlatformHealth
+                      ? "Federation policy loading"
+                      : federationSignedRequired
+                        ? "Signed federation requests required"
+                        : "Unsigned partner requests still allowed"}
+                  </strong>
+                  <p className="muted" style={{ marginTop: 4 }}>
+                    Partner payloads must include HMAC signatures before the hub accepts them.
+                  </p>
+                </div>
+                <div className="list-item">
+                  <strong>
+                    {legalAnchorIntegrity === "live"
+                      ? "Live evidence anchoring"
+                      : legalAnchorIntegrity === "simulated"
+                        ? "Simulated evidence anchoring"
+                        : legalAnchorIntegrity === "disabled"
+                          ? "Evidence anchoring disabled"
+                          : legalAnchorIntegrity === "partial"
+                            ? "Partial evidence anchoring"
+                            : "Anchoring status unknown"}
+                  </strong>
+                  <p className="muted" style={{ marginTop: 4 }}>
+                    MinIO {String(legalAnchorModes.minio ?? "unknown")} · immudb {String(legalAnchorModes.immudb ?? "unknown")}
+                  </p>
+                </div>
+                {trustSummary && (
                   <div className="list-item">
                     <strong style={{ color: trustTone }}>{trustSummary.overall_status.toUpperCase()}</strong>
                     <p className="muted" style={{ marginTop: 4 }}>{trustSummary.headline}</p>
                   </div>
-                  <div className="list-item">
-                    <strong>{trustSummary.action_readiness.active_webhooks}</strong> active containment webhooks
-                  </div>
-                  <div className="list-item">
-                    <strong>{trustSummary.action_readiness.executed_actions_24h}</strong> containment actions in 24h
-                  </div>
-                  <div className="list-item">
-                    <strong>{trustSummary.freshness.threat_intel_source_count}</strong> threat-intel sources contributing
-                  </div>
-                  <div className="list-item">
-                    <strong>{trustSummary.resilience.backup_attestations_30d}</strong> backup attestations in 30d
-                  </div>
-                  <div className="list-item">
-                    <strong>{cyberGovernance?.real_ratio != null ? `${Math.round(cyberGovernance.real_ratio * 100)}%` : "—"}</strong> cyber real-signal ratio
-                  </div>
-                  <div className="list-item">
-                    <strong>{corruptionGovernance?.real_ratio != null ? `${Math.round(corruptionGovernance.real_ratio * 100)}%` : "—"}</strong> corruption real-signal ratio
-                  </div>
-                  <div className="list-item">
-                    <strong>{(cyberGovernance?.feedback_override_count ?? 0) + (corruptionGovernance?.feedback_override_count ?? 0)}</strong> analyst feedback overrides in model runs
-                  </div>
-                </div>
-                <div className="panel-subsection">
-                  <h4>Trust checks</h4>
+                )}
+              </div>
+            </div>
+          </div>
+
+          <div className="grid-two">
+            <details className="panel panel-details">
+              <summary>
+                <span>Trust and model governance</span>
+                <span className="muted">Open deeper AI readiness</span>
+              </summary>
+              {trustSummary ? (
+                <>
                   <div className="list">
-                    {trustSummary.checks.slice(0, 4).map((item) => (
-                      <div key={item.label} className="list-item">
-                        <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
-                          <strong>{item.label}</strong>
-                          <span style={{ color: item.status === "pass" ? "var(--accent)" : item.status === "fail" ? "var(--risk-critical)" : "var(--warning)" }}>
-                            {item.status.toUpperCase()}
-                          </span>
-                        </div>
-                        <p className="muted" style={{ marginTop: 4 }}>{item.detail}</p>
+                    <div className="list-item">
+                      <strong>{trustSummary.action_readiness.active_webhooks}</strong> active containment webhooks
+                    </div>
+                    <div className="list-item">
+                      <strong>{trustSummary.action_readiness.executed_actions_24h}</strong> containment actions in 24h
+                    </div>
+                    <div className="list-item">
+                      <strong>{trustSummary.freshness.threat_intel_source_count}</strong> threat-intel sources contributing
+                    </div>
+                    <div className="list-item">
+                      <strong>{cyberGovernance?.real_ratio != null ? `${Math.round(cyberGovernance.real_ratio * 100)}%` : "—"}</strong> cyber real-signal ratio
+                    </div>
+                    <div className="list-item">
+                      <strong>{corruptionGovernance?.real_ratio != null ? `${Math.round(corruptionGovernance.real_ratio * 100)}%` : "—"}</strong> corruption real-signal ratio
+                    </div>
+                  </div>
+                  <div className="panel-subsection">
+                    <h4>Recent drift reports</h4>
+                    {driftReports.length === 0 ? (
+                      <p className="muted">No drift reports recorded yet.</p>
+                    ) : (
+                      <div className="list">
+                        {driftReports.slice(0, 4).map((item) => (
+                          <div key={item.id} className="list-item">
+                            <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+                              <strong>{item.prediction_type}</strong>
+                              <span
+                                style={{
+                                  color:
+                                    item.status === "critical" || item.status === "fail"
+                                      ? "var(--risk-critical)"
+                                      : item.status === "warn"
+                                        ? "var(--warning)"
+                                        : "var(--accent)",
+                                }}
+                              >
+                                {item.status}
+                              </span>
+                            </div>
+                            <p className="muted" style={{ marginTop: 4 }}>
+                              {item.model_version} · score {formatRiskScore(item.drift_score)}
+                            </p>
+                          </div>
+                        ))}
                       </div>
-                    ))}
+                    )}
                   </div>
-                </div>
-                <div className="panel-subsection">
-                  <h4>Model data realism</h4>
-                  <div className="list">
-                    {[cyberGovernance, corruptionGovernance].filter(Boolean).map((item) => (
-                      <div key={item?.prediction_type} className="list-item">
-                        <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
-                          <strong>{item?.prediction_type}</strong>
-                          <span>{item?.status?.toUpperCase()}</span>
-                        </div>
-                        <p className="muted" style={{ marginTop: 4 }}>
-                          Real ratio {item?.real_ratio != null ? `${Math.round(item.real_ratio * 100)}%` : "—"} ·
-                          Avg per-node real signal {item?.avg_real_signal_ratio != null ? ` ${Math.round(item.avg_real_signal_ratio * 100)}%` : " —"} ·
-                          Feedback overrides {item?.feedback_override_count ?? 0}
-                        </p>
-                      </div>
-                    ))}
+                  <div className="chip-row" style={{ marginTop: 12 }}>
+                    <select value={driftPredictionType} onChange={(event) => setDriftPredictionType(event.target.value as "risk_gnn" | "corruption_risk")}>
+                      <option value="risk_gnn">risk_gnn</option>
+                      <option value="corruption_risk">corruption_risk</option>
+                    </select>
+                    <button className="chip active" type="button" disabled={opsBusy} onClick={() => void handleRunDriftCheck()}>
+                      Run drift check
+                    </button>
                   </div>
-                </div>
-              </>
-            ) : (
-              <div className="list-item">
-                <Database size={14} />
-                <p className="muted" style={{ margin: 0 }}>Trust summary is unavailable right now.</p>
-              </div>
-            )}
-            <button className="ghost" type="button" onClick={() => onNavigate("reports")}>
-              Open Reports
-            </button>
-          </div>
-
-          <div className="panel">
-            <div className="panel-header">
-              <h3>Platform integrity</h3>
-              <span className="muted">Schema, federation auth, evidence anchoring</span>
-            </div>
-            <div className="list">
-              <div className="list-item">
-                <strong style={{ color: schemaContractOk ? "var(--accent)" : "var(--risk-critical)" }}>
-                  {!hasPlatformHealth ? "Schema status loading" : schemaContractOk ? "Schema clean" : "Schema drift detected"}
-                </strong>
-                <p className="muted" style={{ marginTop: 4 }}>
-                  {!hasPlatformHealth
-                    ? "Waiting for platform health data."
-                    : schemaContractOk
-                      ? "No required columns are missing on startup health checks."
-                      : `${schemaMissingCount} required columns are missing.`}
-                </p>
-              </div>
-              <div className="list-item">
-                <strong>
-                  {!hasPlatformHealth
-                    ? "Federation policy loading"
-                    : federationSignedRequired
-                      ? "Signed federation requests required"
-                      : "Unsigned partner requests still allowed"}
-                </strong>
-                <p className="muted" style={{ marginTop: 4 }}>
-                  Edge payloads must include HMAC signatures before the hub accepts them.
-                </p>
-              </div>
-              <div className="list-item">
-                <strong>
-                  {legalAnchorIntegrity === "live"
-                    ? "Live evidence anchoring"
-                    : legalAnchorIntegrity === "simulated"
-                      ? "Simulated evidence anchoring"
-                      : legalAnchorIntegrity === "disabled"
-                        ? "Evidence anchoring disabled"
-                        : legalAnchorIntegrity === "partial"
-                          ? "Partial evidence anchoring"
-                          : "Anchoring status unknown"}
-                </strong>
-                <p className="muted" style={{ marginTop: 4 }}>
-                  MinIO {String(legalAnchorModes.minio ?? "unknown")} · immudb {String(legalAnchorModes.immudb ?? "unknown")}
-                </p>
-              </div>
-            </div>
-          </div>
-
-          <div className="panel">
-            <div className="panel-header">
-              <h3>Resilience operations</h3>
-              <span className="muted">Record backup and restore evidence</span>
-            </div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-              <div>
-                <p className="label" style={{ marginBottom: 6 }}>Asset ID</p>
-                <input className="search" value={backupAssetId} onChange={(event) => setBackupAssetId(event.target.value)} />
-              </div>
-              <div>
-                <p className="label" style={{ marginBottom: 6 }}>Backup ID</p>
-                <input className="search" value={backupId} onChange={(event) => setBackupId(event.target.value)} />
-              </div>
-            </div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginTop: 10 }}>
-              <div>
-                <p className="label" style={{ marginBottom: 6 }}>Backup status</p>
-                <select value={backupStatus} onChange={(event) => setBackupStatus(event.target.value)} style={{ width: "100%" }}>
-                  <option value="healthy">healthy</option>
-                  <option value="degraded">degraded</option>
-                  <option value="failed">failed</option>
-                </select>
-              </div>
-              <div>
-                <p className="label" style={{ marginBottom: 6 }}>RPO hours</p>
-                <input className="search" value={backupRpoHours} onChange={(event) => setBackupRpoHours(event.target.value)} />
-              </div>
-              <label className="chip ghost" style={{ alignSelf: "end", justifyContent: "center" }}>
-                <input
-                  type="checkbox"
-                  checked={backupImmutable}
-                  onChange={(event) => setBackupImmutable(event.target.checked)}
-                  style={{ marginRight: 8 }}
-                />
-                Immutable
-              </label>
-            </div>
-            <div className="chip-row" style={{ marginTop: 12 }}>
-              <button className="chip active" type="button" disabled={opsBusy} onClick={() => void handleBackupAttestation()}>
-                Record backup attestation
-              </button>
-              <button className="chip ghost" type="button" disabled={opsBusy} onClick={() => void handleRestoreDrill()}>
-                Record restore drill
-              </button>
-            </div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginTop: 12 }}>
-              <div>
-                <p className="label" style={{ marginBottom: 6 }}>Restore result</p>
-                <select value={restoreSuccess ? "success" : "failed"} onChange={(event) => setRestoreSuccess(event.target.value === "success")} style={{ width: "100%" }}>
-                  <option value="success">success</option>
-                  <option value="failed">failed</option>
-                </select>
-              </div>
-              <div>
-                <p className="label" style={{ marginBottom: 6 }}>RTO target</p>
-                <input className="search" value={restoreTargetMinutes} onChange={(event) => setRestoreTargetMinutes(event.target.value)} />
-              </div>
-              <div>
-                <p className="label" style={{ marginBottom: 6 }}>RTO actual</p>
-                <input className="search" value={restoreActualMinutes} onChange={(event) => setRestoreActualMinutes(event.target.value)} />
-              </div>
-            </div>
-            <textarea
-              className="search"
-              style={{ marginTop: 10, minHeight: 72, resize: "vertical" }}
-              placeholder="Restore drill notes"
-              value={restoreNotes}
-              onChange={(event) => setRestoreNotes(event.target.value)}
-            />
-            {resilienceStatus && <p className="muted" style={{ marginTop: 10 }}>{resilienceStatus}</p>}
-            <div className="panel-subsection">
-              <h4>Recent resilience evidence</h4>
-              <div className="list">
-                {backupAttestations.slice(0, 3).map((item) => (
-                  <div key={item.id} className="list-item">
-                    <strong>{item.asset_id}</strong>
-                    <p className="muted" style={{ marginTop: 4 }}>
-                      {item.backup_id} · {item.status} · immutable {item.immutable ? "yes" : "no"}
-                    </p>
-                  </div>
-                ))}
-                {restoreDrills.slice(0, 2).map((item) => (
-                  <div key={item.id} className="list-item">
-                    <strong>{item.asset_id}</strong>
-                    <p className="muted" style={{ marginTop: 4 }}>
-                      restore {item.success ? "success" : "failed"} · actual {item.rto_actual_minutes ?? "—"} min
-                    </p>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-
-          <div className="panel">
-            <div className="panel-header">
-              <h3>Model drift operations</h3>
-              <span className="muted">Run and inspect drift governance</span>
-            </div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 10, alignItems: "end" }}>
-              <div>
-                <p className="label" style={{ marginBottom: 6 }}>Prediction type</p>
-                <select value={driftPredictionType} onChange={(event) => setDriftPredictionType(event.target.value as "risk_gnn" | "corruption_risk")} style={{ width: "100%" }}>
-                  <option value="risk_gnn">risk_gnn</option>
-                  <option value="corruption_risk">corruption_risk</option>
-                </select>
-              </div>
-              <button className="chip active" type="button" disabled={opsBusy} onClick={() => void handleRunDriftCheck()}>
-                Run drift check
-              </button>
-            </div>
-            {driftStatus && <p className="muted" style={{ marginTop: 10 }}>{driftStatus}</p>}
-            <div className="panel-subsection">
-              <h4>Recent drift reports</h4>
-              {driftReports.length === 0 ? (
-                <p className="muted">No drift reports recorded yet.</p>
+                  {driftStatus && <p className="muted" style={{ marginTop: 10 }}>{driftStatus}</p>}
+                </>
               ) : (
+                <div className="list-item">
+                  <Database size={14} />
+                  <p className="muted" style={{ margin: 0 }}>Trust summary is unavailable right now.</p>
+                </div>
+              )}
+            </details>
+
+            <details className="panel panel-details">
+              <summary>
+                <span>Resilience operations</span>
+                <span className="muted">Open backup and restore evidence</span>
+              </summary>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                <div>
+                  <p className="label" style={{ marginBottom: 6 }}>Asset ID</p>
+                  <input className="search" value={backupAssetId} onChange={(event) => setBackupAssetId(event.target.value)} />
+                </div>
+                <div>
+                  <p className="label" style={{ marginBottom: 6 }}>Backup ID</p>
+                  <input className="search" value={backupId} onChange={(event) => setBackupId(event.target.value)} />
+                </div>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginTop: 10 }}>
+                <div>
+                  <p className="label" style={{ marginBottom: 6 }}>Backup status</p>
+                  <select value={backupStatus} onChange={(event) => setBackupStatus(event.target.value)} style={{ width: "100%" }}>
+                    <option value="healthy">healthy</option>
+                    <option value="degraded">degraded</option>
+                    <option value="failed">failed</option>
+                  </select>
+                </div>
+                <div>
+                  <p className="label" style={{ marginBottom: 6 }}>RPO hours</p>
+                  <input className="search" value={backupRpoHours} onChange={(event) => setBackupRpoHours(event.target.value)} />
+                </div>
+                <label className="chip ghost" style={{ alignSelf: "end", justifyContent: "center" }}>
+                  <input
+                    type="checkbox"
+                    checked={backupImmutable}
+                    onChange={(event) => setBackupImmutable(event.target.checked)}
+                    style={{ marginRight: 8 }}
+                  />
+                  Immutable
+                </label>
+              </div>
+              <div className="chip-row" style={{ marginTop: 12 }}>
+                <button className="chip active" type="button" disabled={opsBusy} onClick={() => void handleBackupAttestation()}>
+                  Record backup attestation
+                </button>
+                <button className="chip ghost" type="button" disabled={opsBusy} onClick={() => void handleRestoreDrill()}>
+                  Record restore drill
+                </button>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginTop: 12 }}>
+                <div>
+                  <p className="label" style={{ marginBottom: 6 }}>Restore result</p>
+                  <select value={restoreSuccess ? "success" : "failed"} onChange={(event) => setRestoreSuccess(event.target.value === "success")} style={{ width: "100%" }}>
+                    <option value="success">success</option>
+                    <option value="failed">failed</option>
+                  </select>
+                </div>
+                <div>
+                  <p className="label" style={{ marginBottom: 6 }}>RTO target</p>
+                  <input className="search" value={restoreTargetMinutes} onChange={(event) => setRestoreTargetMinutes(event.target.value)} />
+                </div>
+                <div>
+                  <p className="label" style={{ marginBottom: 6 }}>RTO actual</p>
+                  <input className="search" value={restoreActualMinutes} onChange={(event) => setRestoreActualMinutes(event.target.value)} />
+                </div>
+              </div>
+              <textarea
+                className="search"
+                style={{ marginTop: 10, minHeight: 72, resize: "vertical" }}
+                placeholder="Restore drill notes"
+                value={restoreNotes}
+                onChange={(event) => setRestoreNotes(event.target.value)}
+              />
+              {resilienceStatus && <p className="muted" style={{ marginTop: 10 }}>{resilienceStatus}</p>}
+              <div className="panel-subsection">
+                <h4>Recent resilience evidence</h4>
                 <div className="list">
-                  {driftReports.slice(0, 4).map((item) => (
+                  {backupAttestations.slice(0, 3).map((item) => (
                     <div key={item.id} className="list-item">
-                      <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
-                        <strong>{item.prediction_type}</strong>
-                        <span
-                          style={{
-                            color:
-                              item.status === "critical" || item.status === "fail"
-                                ? "var(--risk-critical)"
-                                : item.status === "warn"
-                                  ? "var(--warning)"
-                                  : "var(--accent)",
-                          }}
-                        >
-                          {item.status}
-                        </span>
-                      </div>
+                      <strong>{item.asset_id}</strong>
                       <p className="muted" style={{ marginTop: 4 }}>
-                        {item.model_version} · score {formatRiskScore(item.drift_score)}
+                        {item.backup_id} · {item.status} · immutable {item.immutable ? "yes" : "no"}
+                      </p>
+                    </div>
+                  ))}
+                  {restoreDrills.slice(0, 2).map((item) => (
+                    <div key={item.id} className="list-item">
+                      <strong>{item.asset_id}</strong>
+                      <p className="muted" style={{ marginTop: 4 }}>
+                        restore {item.success ? "success" : "failed"} · actual {item.rto_actual_minutes ?? "—"} min
                       </p>
                     </div>
                   ))}
                 </div>
-              )}
-            </div>
+              </div>
+            </details>
           </div>
 
           <div className="panel">
             <div className="panel-header">
               <h3>Economic integrity</h3>
-              <span className="muted">Public-sector risk</span>
+              <span className="muted">Public-sector snapshot</span>
             </div>
             <div className="list">
               <div className="list-item"><strong>{operationsData.procurementAnomalies.length}</strong> procurement anomalies</div>
@@ -879,7 +798,7 @@ export default function CentralCommand({
               Open Reports
             </button>
           </div>
-        </div>
+        </>
       )}
     </section>
   );

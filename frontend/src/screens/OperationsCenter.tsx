@@ -23,44 +23,6 @@ const anomalyLabel = (score: number): "high" | "medium" | "low" => {
 const compactAmount = (value: number): string =>
   new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 }).format(value);
 
-const VIEW_GUIDES: Record<OperationsView, {
-  kicker: string;
-  title: string;
-  summary: string;
-  steps: [string, string, string];
-}> = {
-  overview: {
-    kicker: "Operational posture",
-    title: "Start with the short national posture before you open any queue.",
-    summary: "This view keeps posture, top pressure points, and next-action items in one place without mixing in all the detailed queues.",
-    steps: [
-      "Read the current pressure points.",
-      "Choose the next queue to clear.",
-      "Move into Review Queue for one queue at a time.",
-    ],
-  },
-  review: {
-    kicker: "Review queue",
-    title: "Work one operational queue at a time.",
-    summary: "This view is for analyst review only. Pick either AI predictions or anomalies, clear that queue, then move on.",
-    steps: [
-      "Choose one queue only.",
-      "Review the highest-priority rows first.",
-      "Open mitigations only after you understand the queue state.",
-    ],
-  },
-  integrity: {
-    kicker: "Integrity and leakage",
-    title: "Use this view for financial integrity, procurement risk, and leakage signals.",
-    summary: "This view narrows the problem to corruption and economic exposure instead of mixing it with cyber triage.",
-    steps: [
-      "Read the leakage summary first.",
-      "Check the priority integrity rows next.",
-      "Trigger a leakage run only when you need a fresh pass.",
-    ],
-  },
-};
-
 export default function OperationsCenter({ data, onRunLeakage, leakageActionLabel, onOpenCorruptionIntel }: OperationsCenterProps) {
   const [view, setView] = useState<OperationsView>("overview");
   const [reviewQueue, setReviewQueue] = useState<ReviewQueue>("predictions");
@@ -77,7 +39,6 @@ export default function OperationsCenter({ data, onRunLeakage, leakageActionLabe
     () => data.guardrailDecisions.filter((item) => item.decision === "block"),
     [data.guardrailDecisions],
   );
-  const viewGuide = VIEW_GUIDES[view];
   const primaryQueue = highRiskPredictions.length >= highAnomalies.length ? "AI risk queue" : "Anomaly queue";
   const reviewCount = reviewQueue === "predictions" ? data.predictions.length : data.anomalies.length;
 
@@ -88,7 +49,7 @@ export default function OperationsCenter({ data, onRunLeakage, leakageActionLabe
           <p className="eyebrow">S7</p>
           <h2>Operations</h2>
           <p className="subtle">
-            One operational queue at a time: posture first, review second, integrity third.
+            Posture, review queue, and integrity in one place.
           </p>
         </div>
         <div className="screen-header-actions">
@@ -111,22 +72,6 @@ export default function OperationsCenter({ data, onRunLeakage, leakageActionLabe
           <button className="ghost" type="button" onClick={onRunLeakage}>
             {leakageActionLabel}
           </button>
-        </div>
-      </div>
-
-      <div className="panel workflow-guide-panel" style={{ background: "rgba(var(--info-rgb), 0.08)", borderColor: "rgba(var(--info-rgb), 0.24)" }}>
-        <p className="workflow-stage-kicker">{viewGuide.kicker}</p>
-        <div className="detail-grid">
-          <div>
-            <strong>{viewGuide.title}</strong>
-            <p className="workflow-stage-copy" style={{ marginTop: 6 }}>{viewGuide.summary}</p>
-          </div>
-          <div>
-            <strong>Best flow</strong>
-            <ul className="inspector-compact-list" style={{ marginTop: 8 }}>
-              {viewGuide.steps.map((step) => <li key={step}>{step}</li>)}
-            </ul>
-          </div>
         </div>
       </div>
 
@@ -155,26 +100,11 @@ export default function OperationsCenter({ data, onRunLeakage, leakageActionLabe
             </div>
           </div>
 
-          <div className="workflow-summary-banner">
-            <div>
-              <strong>{primaryQueue}</strong>
-              <span className="muted">Recommended next queue to clear based on current pressure</span>
-            </div>
-            <div>
-              <strong>{highRiskPredictions.length + highAnomalies.length}</strong>
-              <span className="muted">High-priority review rows across the platform</span>
-            </div>
-            <div>
-              <strong>KES {data.leakageSummary.suspectedAmountTotal.toLocaleString()}</strong>
-              <span className="muted">Current suspected economic exposure</span>
-            </div>
-          </div>
-
           <div className="grid-two">
             <div className="panel workflow-stage-panel">
               <div className="panel-header">
                 <h3>Current posture</h3>
-                <span className="muted">What matters right now</span>
+                <span className="muted">{primaryQueue} next</span>
               </div>
               <div className="list">
                 <div className="list-item">
@@ -260,25 +190,12 @@ export default function OperationsCenter({ data, onRunLeakage, leakageActionLabe
             </button>
           </div>
 
-          <div className="workflow-summary-banner">
-            <div>
-              <strong>{reviewQueue === "predictions" ? "AI predictions" : "Anomalies"}</strong>
-              <span className="muted">Current active queue</span>
-            </div>
-            <div>
-              <strong>{reviewCount}</strong>
-              <span className="muted">Rows in the selected queue</span>
-            </div>
-            <div>
-              <strong>{reviewQueue === "predictions" ? highRiskPredictions.length : highAnomalies.length}</strong>
-              <span className="muted">Highest-priority rows in the selected queue</span>
-            </div>
-          </div>
-
           <div className="panel workflow-stage-panel">
             <div className="panel-header">
               <h3>{reviewQueue === "predictions" ? "AI predictions" : "Anomalies"}</h3>
-              <span className="muted">{reviewCount} rows</span>
+              <span className="muted">
+                {reviewCount} rows · {reviewQueue === "predictions" ? highRiskPredictions.length : highAnomalies.length} priority
+              </span>
             </div>
             {reviewQueue === "anomalies" ? (
               data.anomalies.length === 0 ? (
@@ -379,25 +296,6 @@ export default function OperationsCenter({ data, onRunLeakage, leakageActionLabe
 
       {view === "integrity" && (
         <div className="workflow-stack">
-          <div className="workflow-summary-banner">
-            <div>
-              <strong>{data.leakageSummary.totalAlerts}</strong>
-              <span className="muted">Leakage alerts in the current {data.leakageSummary.windowDays}-day window</span>
-            </div>
-            <div>
-              <strong>KES {data.leakageSummary.suspectedAmountTotal.toLocaleString()}</strong>
-              <span className="muted">Suspected amount at risk</span>
-            </div>
-            <div>
-              <strong>{data.procurementAnomalies.length + data.integrityAlerts.length}</strong>
-              <span className="muted">Priority integrity rows available for review</span>
-            </div>
-            <div>
-              <strong>Use Corruption Intel</strong>
-              <span className="muted">Open the dedicated corruption workspace for full tables and charts</span>
-            </div>
-          </div>
-
           <div className="grid-two">
             <div className="panel workflow-stage-panel">
               <div className="panel-header">
@@ -459,7 +357,7 @@ export default function OperationsCenter({ data, onRunLeakage, leakageActionLabe
           <div className="panel workflow-stage-panel">
             <div className="panel-header">
               <h3>Priority integrity snapshot</h3>
-              <span className="muted">Short queue only</span>
+              <span className="muted">{data.procurementAnomalies.length + data.integrityAlerts.length} priority rows</span>
             </div>
             <div className="info-note" style={{ marginBottom: 12 }}>
               <FileWarning size={13} style={{ flexShrink: 0 }} />
