@@ -3,7 +3,9 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from app.defense.actions import supported_action_keys
 
 
 class VulnerabilityUpsertRequest(BaseModel):
@@ -57,6 +59,15 @@ class ContainmentActionRequest(BaseModel):
     action_type: str = Field(..., min_length=1, max_length=64)
     target: str = Field(..., min_length=1, max_length=512)
     details: Dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("action_type")
+    @classmethod
+    def _validate_action_type(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in supported_action_keys():
+            allowed = ", ".join(sorted(supported_action_keys()))
+            raise ValueError(f"unsupported_action_type:{normalized}. allowed={allowed}")
+        return normalized
 
 
 class IncidentRunActionBatchRequest(BaseModel):

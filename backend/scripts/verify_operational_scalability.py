@@ -154,6 +154,22 @@ def auth_checks(
     return checks
 
 
+def bearer_headers_from_login(
+    client: httpx.Client,
+    *,
+    username: str,
+    password: str,
+    client_fingerprint: str = "operational-probe",
+) -> dict[str, str]:
+    token_payload = login_for_token(
+        client,
+        username=username,
+        password=password,
+        client_fingerprint=client_fingerprint,
+    )
+    return {"Authorization": f"Bearer {str(token_payload['access_token'])}"}
+
+
 def build_report(*, base_url: str, checks: list[dict[str, Any]]) -> dict[str, Any]:
     overall_ok = all(bool(item.get("ok")) for item in checks)
     return {
@@ -198,8 +214,25 @@ def main() -> None:
 
     checks: list[dict[str, Any]] = []
     with httpx.Client(base_url=args.base_url, timeout=15.0) as client:
+        central_headers: dict[str, str] | None = None
+        if args.central_username and args.central_password:
+            central_headers = bearer_headers_from_login(
+                client,
+                username=args.central_username,
+                password=args.central_password,
+                client_fingerprint="operational-probe-central",
+            )
         for path in paths:
-            checks.append(probe_endpoint(client, path=path, api_key=args.api_key or None, repeats=args.repeats))
+            use_central_session = path.startswith("/v1/federation/") and central_headers is not None
+            checks.append(
+                probe_endpoint(
+                    client,
+                    path=path,
+                    api_key=None if use_central_session else (args.api_key or None),
+                    repeats=args.repeats,
+                    headers=central_headers if use_central_session else None,
+                )
+            )
         if args.section_username and args.section_password:
             checks.extend(
                 auth_checks(

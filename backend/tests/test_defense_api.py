@@ -2,9 +2,16 @@ from __future__ import annotations
 
 import pytest
 from fastapi import HTTPException
+from pydantic import ValidationError
 from starlette.requests import Request
 
-from app.api.defense import execute_incident_actions, snapshot_crypto_posture, upsert_vulnerability
+from app.api.defense import (
+    WebhookRegisterRequest,
+    execute_incident_actions,
+    get_action_catalog,
+    snapshot_crypto_posture,
+    upsert_vulnerability,
+)
 from app.api.deps import AuthPrincipal
 from app.defense.schemas import (
     ContainmentActionRequest,
@@ -115,3 +122,26 @@ def test_snapshot_crypto_posture_forwards_to_service(monkeypatch):
     )
     assert out["snapshot_id"] == "snap-1"
     assert captured == {"section_code": "revenue", "actor_id": "u-2"}
+
+
+def test_action_catalog_exposes_known_actions():
+    out = get_action_catalog()
+    keys = {item["key"] for item in out["items"]}
+    assert "enable_waf_challenge" in keys
+    assert "reroute_to_scrubber" in keys
+    assert "revoke_user" in keys
+
+
+def test_containment_action_request_rejects_unknown_action():
+    with pytest.raises(ValidationError):
+        ContainmentActionRequest(action_type="drop_everything", target="1.1.1.1")
+
+
+def test_webhook_register_request_rejects_internal_action():
+    with pytest.raises(ValidationError):
+        WebhookRegisterRequest(
+            section_code="CBK",
+            action_type="revoke_user",
+            webhook_url="https://soc.example/api",
+            secret="1234567890abcdef",
+        )

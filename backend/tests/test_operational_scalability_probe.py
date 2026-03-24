@@ -84,6 +84,17 @@ def test_auth_checks_cover_section_and_central_paths():
     assert central_checks[1]["status_code"] == 200
 
 
+def test_bearer_headers_from_login_returns_authorization_header():
+    def _handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v1/auth/login"
+        return httpx.Response(200, json={"access_token": "central-token", "principal": {"access_level": "central"}})
+
+    with httpx.Client(transport=httpx.MockTransport(_handler), base_url="http://testserver") as client:
+        headers = probe.bearer_headers_from_login(client, username="central_user", password="pw")
+
+    assert headers == {"Authorization": "Bearer central-token"}
+
+
 def test_build_report_counts_passed_and_failed_checks():
     report = probe.build_report(
         base_url="http://localhost:8000",

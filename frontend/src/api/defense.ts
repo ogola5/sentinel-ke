@@ -2,6 +2,7 @@ import { ApiError, apiFetchJson, apiPostJson } from "./client";
 import { endpoints } from "./endpoints";
 import type {
   BackupAttestationRecord,
+  DefenseActionDefinition,
   IncidentActionExecutionResult,
   PlaybookRun,
   RestoreDrillRecord,
@@ -31,6 +32,109 @@ const asBool = (value: unknown): boolean => value === true;
 
 const asRecord = (value: unknown): Record<string, unknown> =>
   value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+
+export const DEFAULT_DEFENSE_ACTIONS: DefenseActionDefinition[] = [
+  {
+    key: "block_ip",
+    label: "Block source IP",
+    description: "Drop or deny traffic from a confirmed hostile public IP.",
+    delivery_mode: "webhook",
+    continuity_preserving: false,
+    target_hint: "Public source IP",
+    category: "network",
+  },
+  {
+    key: "rollback_block_ip",
+    label: "Rollback IP block",
+    description: "Reverse the latest active IP block within the rollback window.",
+    delivery_mode: "internal_dispatch",
+    continuity_preserving: true,
+    target_hint: "Previously blocked IP",
+    category: "network",
+  },
+  {
+    key: "isolate_host",
+    label: "Isolate host",
+    description: "Contain a compromised workstation or server through EDR/NDR isolation.",
+    delivery_mode: "webhook",
+    continuity_preserving: false,
+    target_hint: "Host, endpoint, or device identifier",
+    category: "host",
+  },
+  {
+    key: "rate_limit_service",
+    label: "Rate-limit service",
+    description: "Throttle abusive traffic while keeping the protected service reachable.",
+    delivery_mode: "webhook",
+    continuity_preserving: true,
+    target_hint: "Service or endpoint identifier",
+    category: "service",
+  },
+  {
+    key: "enable_waf_challenge",
+    label: "Enable WAF challenge",
+    description: "Require challenge or bot mitigation at the edge while keeping service available.",
+    delivery_mode: "webhook",
+    continuity_preserving: true,
+    target_hint: "Service, URL, or domain",
+    category: "service",
+  },
+  {
+    key: "reroute_to_scrubber",
+    label: "Reroute to scrubber",
+    description: "Move traffic into upstream DDoS scrubbing or protective transit.",
+    delivery_mode: "webhook",
+    continuity_preserving: true,
+    target_hint: "Service or edge zone identifier",
+    category: "service",
+  },
+  {
+    key: "quarantine_email",
+    label: "Quarantine email",
+    description: "Quarantine a malicious sender, message, or mailbox path.",
+    delivery_mode: "webhook",
+    continuity_preserving: true,
+    target_hint: "Mailbox, sender, or message target",
+    category: "email",
+  },
+  {
+    key: "disable_source_key",
+    label: "Disable source key",
+    description: "Disable a compromised source registry API key or ingest source.",
+    delivery_mode: "internal",
+    continuity_preserving: true,
+    target_hint: "Source registry ID",
+    category: "identity",
+  },
+  {
+    key: "revoke_user",
+    label: "Revoke user sessions",
+    description: "Invalidate all active sessions for a compromised user account.",
+    delivery_mode: "internal",
+    continuity_preserving: true,
+    target_hint: "Username",
+    category: "identity",
+  },
+  {
+    key: "force_password_reset",
+    label: "Force password reset",
+    description: "Reset a user password and revoke active sessions.",
+    delivery_mode: "internal",
+    continuity_preserving: true,
+    target_hint: "Username",
+    category: "identity",
+  },
+];
+
+const toActionDefinition = (row: Record<string, unknown>): DefenseActionDefinition => ({
+  key: asString(row.key),
+  label: asString(row.label),
+  description: asString(row.description),
+  delivery_mode: (asString(row.delivery_mode, "internal") as DefenseActionDefinition["delivery_mode"]),
+  continuity_preserving: asBool(row.continuity_preserving),
+  target_hint: asString(row.target_hint),
+  category: (asString(row.category, "host") as DefenseActionDefinition["category"]),
+});
 
 const toPlaybookRun = (row: Record<string, unknown>): PlaybookRun => ({
   id: asString(row.id),
@@ -124,6 +228,20 @@ export async function createIncidentRun(
     metadata,
   });
   return toPlaybookRun(asRecord(raw));
+}
+
+export async function fetchDefenseActionCatalog(options: QueryOptions = {}): Promise<DefenseActionDefinition[]> {
+  try {
+    const data = await apiFetchJson<ListResponse<Record<string, unknown>>>(endpoints.defenseActionCatalog());
+    const rows = Array.isArray(data) ? data : (data.items ?? []);
+    const parsed = rows.map((row) => toActionDefinition(asRecord(row))).filter((row) => row.key !== "");
+    return parsed.length > 0 ? parsed : DEFAULT_DEFENSE_ACTIONS;
+  } catch (err) {
+    if (options.strict || !(err instanceof ApiError) || err.status >= 500 || err.status === 401 || err.status === 403) {
+      throw err;
+    }
+    return DEFAULT_DEFENSE_ACTIONS;
+  }
 }
 
 export async function executeContainmentAction(

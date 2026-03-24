@@ -143,3 +143,25 @@ def test_rollback_block_ip_reports_webhook_failures(monkeypatch):
     assert status == "failed"
     assert details["webhook_status"] == "failed"
     assert details["dispatched_action"] == "unblock_ip"
+
+
+def test_rate_limit_service_dispatches_remote_control(monkeypatch):
+    svc = _service()
+    monkeypatch.setattr(
+        "app.defense.service.dispatch_containment_action",
+        lambda *, db, action_type, target, section_code: (
+            "delivered",
+            {"delivery_id": "d-rate", "action_type": action_type, "target": target, "section_code": section_code},
+        ),
+    )
+
+    status, details = svc._execute_single_action(
+        action_type="rate_limit_service",
+        target="service_id:kplc-auth",
+        details={},
+        section_code="telecom",
+    )
+
+    assert status == "executed"
+    assert details["webhook_status"] == "delivered"
+    assert details["delivery_id"] == "d-rate"

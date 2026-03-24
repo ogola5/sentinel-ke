@@ -2,8 +2,7 @@
 Sentinel-KE Defense — Last-Mile Containment Executor
 ======================================================
 
-Dispatches block_ip and isolate_host containment actions to the partner's
-own firewall / EDR system via a signed HTTPS webhook.
+Dispatches containment actions to partner controls via a signed HTTPS webhook.
 
 Flow
 ----
@@ -34,9 +33,13 @@ The partner verifies this header before applying the action.
 
 Supported action_types
 ----------------------
-block_ip       → POST to partner BGP/firewall webhook
-unblock_ip     → rollback for a prior block_ip action
-isolate_host   → POST to partner EDR/NDR webhook
+block_ip             → POST to partner BGP/firewall webhook
+unblock_ip           → rollback for a prior block_ip action
+isolate_host         → POST to partner EDR/NDR webhook
+rate_limit_service   → ask the partner edge/WAF to throttle abusive traffic while keeping service up
+enable_waf_challenge → ask the partner WAF/CDN to challenge suspicious traffic while keeping service up
+reroute_to_scrubber  → ask the partner or provider to move traffic into DDoS scrubbing
+quarantine_email     → ask the partner mail stack to quarantine a malicious sender or mailbox
 """
 from __future__ import annotations
 
@@ -53,12 +56,13 @@ import httpx
 from cryptography.fernet import Fernet, InvalidToken
 from sqlalchemy.orm import Session
 
+from app.defense.actions import webhook_action_keys
 from app.defense.models import ContainmentWebhook, WebhookDelivery
 
 logger = logging.getLogger("sentinel.defense.executor")
 
 WEBHOOK_TIMEOUT_S = 12
-SUPPORTED_REMOTE_ACTIONS = {"block_ip", "unblock_ip", "isolate_host"}
+SUPPORTED_REMOTE_ACTIONS = webhook_action_keys() | {"unblock_ip"}
 
 
 def _utcnow() -> datetime:
@@ -121,7 +125,7 @@ def dispatch_containment_action(
     action_id: Optional[uuid.UUID] = None,
 ) -> Tuple[str, Dict[str, Any]]:
     """
-    Dispatch a block_ip / unblock_ip / isolate_host action to the partner's webhook.
+    Dispatch a containment action to the partner's webhook.
 
     Returns (status, details) where status is one of:
       "delivered"        — webhook accepted (2xx)

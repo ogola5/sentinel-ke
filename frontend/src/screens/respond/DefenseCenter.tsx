@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 import { Shield, ShieldAlert, RefreshCw, Loader, Webhook, AlertTriangle, CheckCircle, XCircle, Clock } from "lucide-react";
 import {
+  DEFAULT_DEFENSE_ACTIONS,
   fetchPlaybookRuns,
+  fetchDefenseActionCatalog,
   executeContainmentAction,
   fetchWebhooks,
   fetchWebhookDeliveries,
@@ -45,6 +47,7 @@ export default function DefenseCenter({ principal }: { principal: Principal }) {
   const [deliveries, setDeliveries] = useState<WebhookDeliveryRecord[]>([]);
   const [selectedRun, setSelectedRun] = useState<string>("");
   const [loading, setLoading] = useState(true);
+  const [actionCatalog, setActionCatalog] = useState(DEFAULT_DEFENSE_ACTIONS);
   const [confirm, setConfirm] = useState<ConfirmState>({ open: false, runId: "", actionType: "", target: "" });
   const [targetInput, setTargetInput] = useState("");
   const [actionTypeInput, setActionTypeInput] = useState("block_ip");
@@ -56,8 +59,12 @@ export default function DefenseCenter({ principal }: { principal: Principal }) {
   const load = async () => {
     setLoading(true);
     setVisibilityNote(null);
-    const runRows = await fetchPlaybookRuns(20);
+    const [runRows, catalogRows] = await Promise.all([
+      fetchPlaybookRuns(20),
+      fetchDefenseActionCatalog(),
+    ]);
     setRuns(runRows);
+    setActionCatalog(catalogRows);
     if (canInspectWebhooks) {
       try {
         const [w, d] = await Promise.all([
@@ -131,6 +138,7 @@ export default function DefenseCenter({ principal }: { principal: Principal }) {
   };
 
   const activeRun = runs.find((r) => r.id === selectedRun);
+  const selectedAction = actionCatalog.find((item) => item.key === actionTypeInput) ?? actionCatalog[0] ?? DEFAULT_DEFENSE_ACTIONS[0];
 
   return (
     <div>
@@ -244,18 +252,17 @@ export default function DefenseCenter({ principal }: { principal: Principal }) {
                   onChange={(e) => setActionTypeInput(e.target.value)}
                   style={{ width: "100%" }}
                 >
-                  <option value="block_ip">block_ip</option>
-                  <option value="isolate_host">isolate_host</option>
-                  <option value="revoke_user">revoke_user</option>
-                  <option value="force_password_reset">force_password_reset</option>
+                  {actionCatalog.map((item) => (
+                    <option key={item.key} value={item.key}>{item.label}</option>
+                  ))}
                 </select>
               </div>
               <div>
-                <p className="label" style={{ marginBottom: 6 }}>Target (IP / hostname / user)</p>
+                <p className="label" style={{ marginBottom: 6 }}>Target ({selectedAction?.target_hint ?? "entity"})</p>
                 <input
                   value={targetInput}
                   onChange={(e) => setTargetInput(e.target.value)}
-                  placeholder="e.g. 192.168.1.50 or host-web-01"
+                  placeholder={selectedAction?.target_hint ?? "Containment target"}
                   style={{ width: "100%" }}
                 />
               </div>
@@ -269,6 +276,12 @@ export default function DefenseCenter({ principal }: { principal: Principal }) {
                 <ShieldAlert size={13} /> &nbsp;Execute
               </button>
             </div>
+            {selectedAction && (
+              <p className="muted" style={{ marginTop: 10 }}>
+                {selectedAction.description}
+                {selectedAction.continuity_preserving ? " Keeps the service path available where possible." : " Use when targeted containment is worth service disruption."}
+              </p>
+            )}
           </div>
 
           {/* Containment actions table */}

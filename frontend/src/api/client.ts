@@ -259,6 +259,7 @@ const refreshAccessToken = async (): Promise<boolean> => {
 export type ApiFetchOptions = {
   requireLegalGrantToken?: boolean;
   skipAuthRefresh?: boolean;
+  useApiKeyAuth?: boolean;
 };
 
 export async function apiFetchJson<T>(
@@ -275,14 +276,18 @@ export async function apiFetchJson<T>(
       headers.set("Content-Type", "application/json");
     }
 
-    const key = getConfiguredApiKey();
-    if (key && !headers.has("X-API-Key")) {
-      headers.set("X-API-Key", key);
-    }
-
     const accessToken = getConfiguredAccessToken();
     if (accessToken && !headers.has("Authorization")) {
       headers.set("Authorization", `Bearer ${accessToken}`);
+    }
+
+    const key = getConfiguredApiKey();
+    const shouldAttachApiKey =
+      Boolean(key) &&
+      !headers.has("X-API-Key") &&
+      (options.useApiKeyAuth || (!accessToken && !headers.has("Authorization")));
+    if (shouldAttachApiKey && key) {
+      headers.set("X-API-Key", key);
     }
 
     const legalToken = getConfiguredLegalGrantToken();
@@ -366,14 +371,18 @@ export async function apiFetchBlob(
       headers.set("Content-Type", "application/json");
     }
 
-    const key = getConfiguredApiKey();
-    if (key && !headers.has("X-API-Key")) {
-      headers.set("X-API-Key", key);
-    }
-
     const accessToken = getConfiguredAccessToken();
     if (accessToken && !headers.has("Authorization")) {
       headers.set("Authorization", `Bearer ${accessToken}`);
+    }
+
+    const key = getConfiguredApiKey();
+    const shouldAttachApiKey =
+      Boolean(key) &&
+      !headers.has("X-API-Key") &&
+      (options.useApiKeyAuth || (!accessToken && !headers.has("Authorization")));
+    if (shouldAttachApiKey && key) {
+      headers.set("X-API-Key", key);
     }
 
     const legalToken = getConfiguredLegalGrantToken();

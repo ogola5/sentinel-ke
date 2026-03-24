@@ -227,6 +227,580 @@ def _extract_domain_from_url(v: Optional[str]) -> Optional[str]:
     return host or None
 
 
+def _normalize_numeric_severity(raw: Any, *, default: str = "medium") -> str:
+    if raw is None:
+        return default
+    if isinstance(raw, (int, float)):
+        value = int(raw)
+    else:
+        s = str(raw).strip()
+        if not s:
+            return default
+        if s.isdigit():
+            value = int(s)
+        else:
+            return _normalize_severity(s, default=default)
+    if value <= 1:
+        return "critical"
+    if value == 2:
+        return "high"
+    if value == 3:
+        return "medium"
+    return "low"
+
+
+def _suricata_status_from_action(action: Optional[str]) -> str:
+    if not action:
+        return "detected"
+    x = action.strip().lower()
+    if x in {"allowed", "allow", "pass", "alert"}:
+        return "allowed"
+    if x in {"blocked", "drop", "reject", "denied"}:
+        return "blocked"
+    return "detected"
+
+
+def _suricata_signal_family(signature: Optional[str], category: Optional[str], app_proto: Optional[str]) -> str:
+    haystack = " ".join(
+        part.strip().lower()
+        for part in (signature or "", category or "", app_proto or "")
+        if str(part).strip()
+    )
+    ddos_terms = (
+        "denial of service",
+        "ddos",
+        "syn flood",
+        "udp flood",
+        "icmp flood",
+        "http flood",
+        "flood",
+    )
+    if any(term in haystack for term in ddos_terms):
+        return "ddos"
+    web_terms = (
+        "web",
+        "http",
+        "sql injection",
+        "xss",
+        "command injection",
+        "path traversal",
+        "directory traversal",
+        "lfi",
+        "rfi",
+    )
+    if (app_proto or "").strip().lower() in {"http", "http2", "h2"}:
+        return "web"
+    if any(term in haystack for term in web_terms):
+        return "web"
+    return "dfir"
+
+
+def _suricata_attack_type(signature: Optional[str], category: Optional[str]) -> str:
+    haystack = " ".join(part.strip().lower() for part in (signature or "", category or "") if str(part).strip())
+    for needle, label in (
+        ("sql injection", "sql_injection"),
+        ("xss", "xss"),
+        ("cross site scripting", "xss"),
+        ("command injection", "command_injection"),
+        ("path traversal", "path_traversal"),
+        ("directory traversal", "path_traversal"),
+        ("lfi", "local_file_inclusion"),
+        ("rfi", "remote_file_inclusion"),
+        ("csrf", "csrf"),
+    ):
+        if needle in haystack:
+            return label
+    return category or signature or "suricata_alert"
+
+
+def _map_suricata_eve(payload: Dict[str, Any], confidence: float, classification: Optional[str]) -> CanonicalEvent:
+    occurred_at = _as_datetime(payload, ("timestamp", "time", "occurred_at", "flow.end", "flow.start"))
+    src_ip = _as_str(payload, ("src_ip", "src"))
+    dest_ip = _as_str(payload, ("dest_ip", "dst"))
+    if not src_ip and not dest_ip:
+        raise ValueError("suricata_eve_v1 requires src_ip/src or dest_ip/dst")
+
+    alert = payload.get("alert") if isinstance(payload.get("alert"), dict) else {}
+    http = payload.get("http") if isinstance(payload.get("http"), dict) else {}
+    flow = payload.get("flow") if isinstance(payload.get("flow"), dict) else {}
+
+    signature = _as_str(alert, ("signature", "signature_id")) or _as_str(payload, ("signature", "signature_id"))
+    category = _as_str(alert, ("category",)) or _as_str(payload, ("category", "alert_category"))
+    severity = _normalize_numeric_severity(
+        _first_value(alert, ("severity",)) if alert else _first_value(payload, ("severity",)),
+        default="high",
+    )
+    action = _suricata_status_from_action(
+        _as_str(alert, ("action",)) or _as_str(payload, ("action", "verdict", "decision"))
+    )
+    app_proto = _as_str(payload, ("app_proto", "application_protocol", "service"))
+    proto = _as_str(payload, ("proto", "ip_proto"))
+    dest_port = _as_int(payload, ("dest_port", "dst_port", "port"))
+    service_id = (
+        _as_str(payload, ("service_id", "application"))
+        or _as_str(http, ("hostname", "host"))
+        or dest_ip
+    )
+    endpoint = _as_str(http, ("url", "uri")) or _as_str(payload, ("endpoint", "path", "uri"))
+    domain = _as_str(http, ("hostname", "host", "domain"))
+    user_agent = _as_str(http, ("http_user_agent", "user_agent"))
+    method = _as_str(http, ("http_method", "method"))
+    pkts_toserver = _as_int(flow, ("pkts_toserver", "packets_toserver"))
+    bytes_toserver = _as_int(flow, ("bytes_toserver",))
+    flow_id = _as_str(payload, ("flow_id",))
+    family = _suricata_signal_family(signature, category, app_proto)
+
+    reason_codes = ["suricata_alert", f"suricata_family:{family}"]
+    if category:
+        reason_codes.append(f"suricata_category:{category.strip().lower().replace(' ', '_')}")
+    if signature:
+        signature_code = str(signature).strip().lower().replace(" ", "_")
+        reason_codes.append(f"suricata_signature:{signature_code[:80]}")
+    if action == "allowed":
+        reason_codes.append("suricata_alert_allowed")
+
+    anchors: Dict[str, str] = {}
+    if src_ip:
+        anchors["ip"] = src_ip
+    if service_id:
+        anchors["service_id"] = service_id
+    if endpoint:
+        anchors["endpoint"] = endpoint
+    if domain:
+        anchors["domain"] = domain.lower()
+
+    if family == "ddos":
+        model_payload: Dict[str, Any] = {
+            "source": "suricata",
+            "service_id": service_id,
+            "endpoint": endpoint,
+            "method": method,
+            "req_rate": pkts_toserver,
+            "packet_burst": pkts_toserver,
+            "bytes_toserver": bytes_toserver,
+            "attack_type": signature or category or "suricata_ddos_alert",
+            "status": action,
+            "src_ip": src_ip,
+            "dest_ip": dest_ip,
+            "dest_port": dest_port,
+            "proto": proto,
+            "app_proto": app_proto,
+            "severity": severity,
+            "flow_id": flow_id,
+            "reason_codes": sorted(set(reason_codes)),
+        }
+        model_payload = {k: v for k, v in model_payload.items() if v is not None}
+        return CanonicalEvent(
+            event_type="DDOS_SIGNAL_EVENT",
+            occurred_at=occurred_at,
+            confidence=_coerce_confidence(confidence),
+            payload=model_payload,
+            anchors=anchors,
+            classification=classification,
+        )
+
+    if family == "web":
+        model_payload = {
+            "source": "suricata",
+            "service_id": service_id,
+            "endpoint": endpoint,
+            "method": method,
+            "attack_type": _suricata_attack_type(signature, category),
+            "status": action,
+            "req_count": pkts_toserver,
+            "src_ip": src_ip,
+            "dest_ip": dest_ip,
+            "dest_port": dest_port,
+            "proto": proto,
+            "app_proto": app_proto,
+            "user_agent": user_agent,
+            "signature": signature,
+            "severity": severity,
+            "reason_codes": sorted(set(reason_codes)),
+        }
+        model_payload = {k: v for k, v in model_payload.items() if v is not None}
+        return CanonicalEvent(
+            event_type="WEB_ATTACK_EVENT",
+            occurred_at=occurred_at,
+            confidence=_coerce_confidence(confidence),
+            payload=model_payload,
+            anchors=anchors,
+            classification=classification,
+        )
+
+    host = service_id or dest_ip or src_ip
+    model_payload = {
+        "source": "suricata",
+        "host": host,
+        "artifact_name": signature or "suricata_alert",
+        "finding_type": category or "suricata_alert",
+        "severity": severity,
+        "status": action,
+        "client_ip": src_ip,
+        "command_line": f"{proto or 'ip'}:{dest_port}" if dest_port is not None else proto,
+        "file_path": endpoint,
+        "hunt_id": flow_id,
+        "reason_codes": sorted(set(reason_codes)),
+    }
+    model_payload = {k: v for k, v in model_payload.items() if v is not None}
+    return CanonicalEvent(
+        event_type="DFIR_FINDING_EVENT",
+        occurred_at=occurred_at,
+        confidence=_coerce_confidence(confidence),
+        payload=model_payload,
+        anchors=anchors,
+        classification=classification,
+    )
+
+
+def _zeek_notice_severity(note: Optional[str], msg: Optional[str]) -> str:
+    haystack = " ".join(part.strip().lower() for part in (note or "", msg or "") if str(part).strip())
+    critical_terms = ("ransomware", "malware", "exploit", "credential", "bruteforce", "password guessing")
+    medium_terms = ("scan", "port_scan", "weird", "certificate", "invalid", "dns")
+    if any(term in haystack for term in critical_terms):
+        return "high"
+    if any(term in haystack for term in medium_terms):
+        return "medium"
+    return "medium"
+
+
+def _crowdsec_alert_severity(scenario: Optional[str], decisions: list[str]) -> str:
+    haystack = " ".join([scenario or "", *decisions]).strip().lower()
+    if any(term in haystack for term in ("http-ddos", "ddos", "ransomware", "credential", "bruteforce")):
+        return "high"
+    if any(term in haystack for term in ("scan", "probe", "crawler", "bot")):
+        return "medium"
+    return "medium"
+
+
+def _falco_priority_to_severity(priority: Optional[str]) -> str:
+    x = (priority or "").strip().lower()
+    if x in {"emergency", "alert", "critical"}:
+        return "critical"
+    if x in {"error", "err", "warning", "warn"}:
+        return "high"
+    if x in {"notice", "informational", "info"}:
+        return "medium"
+    if x in {"debug"}:
+        return "low"
+    return _normalize_severity(priority, default="medium")
+
+
+def _map_zeek_notice(payload: Dict[str, Any], confidence: float, classification: Optional[str]) -> CanonicalEvent:
+    occurred_at = _as_datetime(payload, ("timestamp", "ts", "time", "occurred_at"))
+    note = _as_str(payload, ("note", "notice_type", "notice"), required=True)
+    msg = _as_str(payload, ("msg", "message", "notice_msg"))
+    src_ip = _as_str(payload, ("src", "src_ip", "id.orig_h", "orig_h"))
+    dest_ip = _as_str(payload, ("dst", "dest_ip", "id.resp_h", "resp_h"))
+    service_id = _as_str(payload, ("service_id", "host", "hostname", "dest_host")) or dest_ip
+    dest_port = _as_int(payload, ("p", "dest_port", "id.resp_p", "resp_p"))
+    proto = _as_str(payload, ("proto", "transport"))
+    sub = _as_str(payload, ("sub", "sub_message"))
+    peer = _as_str(payload, ("peer_descr", "sensor", "zeek_node"))
+    uid = _as_str(payload, ("uid", "conn_uid"))
+
+    reason_codes = ["zeek_notice"]
+    note_code = note.strip().lower().replace("::", "_").replace(" ", "_")
+    reason_codes.append(f"zeek_note:{note_code}")
+    if "password_guess" in note_code:
+        reason_codes.append("credential_attack_signal")
+    if "port_scan" in note_code or "scan" in note_code:
+        reason_codes.append("network_scan_signal")
+
+    anchors: Dict[str, str] = {}
+    if src_ip:
+        anchors["ip"] = src_ip
+    if service_id:
+        anchors["service_id"] = service_id
+
+    model_payload = {
+        "source": "zeek",
+        "host": service_id or src_ip,
+        "artifact_name": note,
+        "finding_type": sub or note,
+        "severity": _normalize_severity(_as_str(payload, ("severity",)), default=_zeek_notice_severity(note, msg)),
+        "status": _as_str(payload, ("status", "action")) or "noticed",
+        "client_ip": src_ip,
+        "command_line": f"{proto or 'ip'}:{dest_port}" if dest_port is not None else proto,
+        "hunt_id": uid,
+        "case_id": peer,
+        "reason_codes": sorted(set(reason_codes)),
+        "message": msg,
+        "dest_ip": dest_ip,
+    }
+    model_payload = {k: v for k, v in model_payload.items() if v is not None}
+
+    return CanonicalEvent(
+        event_type="DFIR_FINDING_EVENT",
+        occurred_at=occurred_at,
+        confidence=_coerce_confidence(confidence),
+        payload=model_payload,
+        anchors=anchors,
+        classification=classification,
+    )
+
+
+def _map_crowdsec_alert(payload: Dict[str, Any], confidence: float, classification: Optional[str]) -> CanonicalEvent:
+    occurred_at = _as_datetime(payload, ("timestamp", "time", "occurred_at", "created_at", "start_at"))
+    scenario = _as_str(payload, ("scenario", "alert_name", "name"), required=True)
+    scope = (_as_str(payload, ("scope", "scope_type")) or "").strip().lower()
+    value = _as_str(payload, ("value", "scope_value", "src_ip", "ip", "domain"))
+    src_ip = _as_str(payload, ("src_ip", "ip", "source_ip"))
+    service_id = _as_str(payload, ("service_id", "service", "host", "hostname"))
+    remediation = _as_bool(payload, ("remediation", "has_remediation"))
+    decisions = _as_str_list(payload, ("decisions", "decision_type", "remediation_actions"))
+    country = _as_str(payload, ("country", "source_country"))
+    as_name = _as_str(payload, ("as_name", "asn_name"))
+    as_num = _as_int(payload, ("asn", "as_num"))
+    events_count = _as_int(payload, ("events_count", "count", "occurrences"))
+    simulation = _as_bool(payload, ("simulation", "simulated"))
+
+    anchors: Dict[str, str] = {}
+    if scope == "ip" and value:
+        anchors["ip"] = value
+    elif scope == "domain" and value:
+        anchors["domain"] = value.lower()
+    elif src_ip:
+        anchors["ip"] = src_ip
+    if service_id:
+        anchors["service_id"] = service_id
+    if not anchors and value:
+        anchors["endpoint"] = value
+    if not anchors:
+        raise ValueError("crowdsec_alert_v1 requires scope/value, src_ip, or service_id")
+
+    reason_codes = ["crowdsec_alert", f"crowdsec_scenario:{scenario.strip().lower().replace('/', '_')}"]
+    if scope:
+        reason_codes.append(f"crowdsec_scope:{scope}")
+    for decision in decisions[:5]:
+        reason_codes.append(f"crowdsec_decision:{decision.strip().lower()}")
+    if remediation is True:
+        reason_codes.append("remediation_available")
+
+    model_payload = {
+        "source": "crowdsec",
+        "host": service_id or src_ip or value,
+        "artifact_name": scenario,
+        "finding_type": scope or "crowdsec_alert",
+        "severity": _normalize_severity(
+            _as_str(payload, ("severity", "risk")), default=_crowdsec_alert_severity(scenario, decisions)
+        ),
+        "status": _as_str(payload, ("status", "state")) or ("active" if remediation else "noticed"),
+        "client_ip": src_ip or (value if scope == "ip" else None),
+        "file_path": value if scope in {"path", "uri"} else None,
+        "hunt_id": _as_str(payload, ("id", "alert_id")),
+        "case_id": _as_str(payload, ("origin", "origin_name", "source")),
+        "reason_codes": sorted(set(reason_codes)),
+        "message": _as_str(payload, ("message", "description")),
+        "country": country,
+        "as_name": as_name,
+        "asn": as_num,
+        "events_count": events_count,
+        "simulation": simulation,
+        "decisions": decisions or None,
+        "scope": scope or None,
+        "value": value,
+    }
+    model_payload = {k: v for k, v in model_payload.items() if v is not None}
+
+    return CanonicalEvent(
+        event_type="DFIR_FINDING_EVENT",
+        occurred_at=occurred_at,
+        confidence=_coerce_confidence(confidence),
+        payload=model_payload,
+        anchors=anchors,
+        classification=classification,
+    )
+
+
+def _map_falco_runtime(payload: Dict[str, Any], confidence: float, classification: Optional[str]) -> CanonicalEvent:
+    occurred_at = _as_datetime(payload, ("timestamp", "time", "occurred_at", "evt.time", "output_time"))
+    rule = _as_str(payload, ("rule", "alert", "alert_name"), required=True)
+    priority = _as_str(payload, ("priority", "severity", "level"))
+    output = _as_str(payload, ("output", "message", "description"))
+    host = _as_str(payload, ("hostname", "host", "node"))
+    output_fields = payload.get("output_fields") if isinstance(payload.get("output_fields"), dict) else {}
+
+    container_id = _as_str(payload, ("container_id",)) or _as_str(output_fields, ("container.id", "container_id"))
+    container_name = _as_str(payload, ("container_name",)) or _as_str(output_fields, ("container.name", "container_name"))
+    pod_name = _as_str(payload, ("pod_name",)) or _as_str(output_fields, ("k8s.pod.name", "pod_name"))
+    namespace = _as_str(payload, ("namespace",)) or _as_str(output_fields, ("k8s.ns.name", "k8s.namespace.name"))
+    process_name = _as_str(payload, ("process_name", "proc_name")) or _as_str(output_fields, ("proc.name", "proc_name"))
+    command_line = _as_str(payload, ("command_line", "cmdline")) or _as_str(output_fields, ("proc.cmdline", "proc.cmdline_truncated"))
+    user = _as_str(payload, ("user", "username")) or _as_str(output_fields, ("user.name", "user_name"))
+    file_path = _as_str(payload, ("file_path", "path")) or _as_str(output_fields, ("fd.name", "file.path"))
+    src_ip = _as_str(payload, ("src_ip", "client_ip")) or _as_str(output_fields, ("fd.sip", "net.sip"))
+    tags = _as_str_list(payload, ("tags",))
+    if not tags and isinstance(output_fields.get("tags"), (list, tuple, set)):
+        tags = [str(v).strip() for v in output_fields.get("tags", []) if str(v).strip()]
+
+    service_id = pod_name or container_name or container_id or (f"host:{host}" if host else None)
+    anchors: Dict[str, str] = {}
+    if service_id:
+        anchors["service_id"] = service_id
+    if host:
+        anchors["device_id"] = host
+    if src_ip:
+        anchors["ip"] = src_ip
+    if file_path:
+        anchors["endpoint"] = file_path
+    if not anchors:
+        raise ValueError("falco_runtime_v1 requires host, container, pod, src_ip, or file path")
+
+    reason_codes = ["falco_runtime", f"falco_rule:{rule.strip().lower().replace(' ', '_')}"]
+    for tag in tags[:5]:
+        reason_codes.append(f"tag:{tag.strip().lower()}")
+
+    model_payload = {
+        "source": "falco",
+        "host": host or service_id,
+        "artifact_name": rule,
+        "finding_type": _as_str(payload, ("source", "evt_source")) or "runtime_alert",
+        "severity": _falco_priority_to_severity(priority),
+        "status": _as_str(payload, ("status", "state")) or "active",
+        "client_ip": src_ip,
+        "command_line": command_line,
+        "file_path": file_path,
+        "hunt_id": _as_str(payload, ("event_id", "evt_id", "rule_id")),
+        "case_id": namespace,
+        "reason_codes": sorted(set(reason_codes)),
+        "message": output,
+        "process_name": process_name,
+        "user": user,
+        "container_id": container_id,
+        "container_name": container_name,
+        "pod_name": pod_name,
+        "host_name": host,
+        "priority": priority,
+        "tags": tags or None,
+    }
+    model_payload = {k: v for k, v in model_payload.items() if v is not None}
+
+    return CanonicalEvent(
+        event_type="DFIR_FINDING_EVENT",
+        occurred_at=occurred_at,
+        confidence=_coerce_confidence(confidence),
+        payload=model_payload,
+        anchors=anchors,
+        classification=classification,
+    )
+
+
+def _map_tetragon_runtime(payload: Dict[str, Any], confidence: float, classification: Optional[str]) -> CanonicalEvent:
+    occurred_at = _as_datetime(payload, ("timestamp", "time", "occurred_at", "process_start_time", "event_time"))
+    policy_name = _as_str(payload, ("policy_name", "policy", "sensor"))
+    event_type = _as_str(payload, ("event_type", "type", "action"), required=True)
+    verdict = _as_str(payload, ("verdict", "result", "status"))
+    host = _as_str(payload, ("hostname", "host", "node_name"))
+    pod_name = _as_str(payload, ("pod_name", "pod", "k8s.pod.name"))
+    namespace = _as_str(payload, ("namespace", "k8s.ns.name", "k8s.namespace.name"))
+    workload = _as_str(payload, ("workload", "deployment", "container_name"))
+    process_name = _as_str(payload, ("process_name", "binary", "exec"))
+    command_line = _as_str(payload, ("command_line", "args", "arguments"))
+    file_path = _as_str(payload, ("file_path", "path", "binary_path"))
+    src_ip = _as_str(payload, ("src_ip", "client_ip", "source_ip"))
+
+    service_id = pod_name or workload or (f"host:{host}" if host else None)
+    anchors: Dict[str, str] = {}
+    if service_id:
+        anchors["service_id"] = service_id
+    if host:
+        anchors["device_id"] = host
+    if src_ip:
+        anchors["ip"] = src_ip
+    if file_path:
+        anchors["endpoint"] = file_path
+    if not anchors:
+        raise ValueError("tetragon_runtime_v1 requires host, pod, workload, src_ip, or file path")
+
+    reason_codes = ["tetragon_runtime", f"tetragon_event:{event_type.strip().lower().replace(' ', '_')}"]
+    if policy_name:
+        reason_codes.append(f"tetragon_policy:{policy_name.strip().lower().replace(' ', '_')}")
+    if verdict and verdict.strip().lower() in {"denied", "blocked", "killed"}:
+        reason_codes.append("runtime_enforcement_triggered")
+
+    model_payload = {
+        "source": "tetragon",
+        "host": host or service_id,
+        "artifact_name": policy_name or event_type,
+        "finding_type": event_type,
+        "severity": _normalize_severity(_as_str(payload, ("severity", "priority")), default="high"),
+        "status": verdict or "observed",
+        "client_ip": src_ip,
+        "command_line": command_line,
+        "file_path": file_path,
+        "hunt_id": _as_str(payload, ("event_id", "id")),
+        "case_id": namespace,
+        "reason_codes": sorted(set(reason_codes)),
+        "message": _as_str(payload, ("message", "description")),
+        "process_name": process_name,
+        "pod_name": pod_name,
+        "namespace": namespace,
+        "workload": workload,
+    }
+    model_payload = {k: v for k, v in model_payload.items() if v is not None}
+
+    return CanonicalEvent(
+        event_type="DFIR_FINDING_EVENT",
+        occurred_at=occurred_at,
+        confidence=_coerce_confidence(confidence),
+        payload=model_payload,
+        anchors=anchors,
+        classification=classification,
+    )
+
+
+def _map_coraza_waf(payload: Dict[str, Any], confidence: float, classification: Optional[str]) -> CanonicalEvent:
+    occurred_at = _as_datetime(payload, ("timestamp", "time", "occurred_at", "transaction.time"))
+    service_id = _as_str(payload, ("service_id", "host", "hostname", "server_name"), required=True)
+    endpoint = _as_str(payload, ("endpoint", "uri", "path", "request_uri"))
+    rule_id = _as_str(payload, ("rule_id", "matched_rule_id", "rule.id"))
+    attack_type = _as_str(payload, ("attack_type", "rule_family", "tag", "matched_data")) or rule_id or "waf_rule_match"
+    status = _normalize_web_attack_status(_as_str(payload, ("status", "action", "decision", "interruption_action")))
+    ip = _as_str(payload, ("ip", "src_ip", "client_ip", "remote_addr"))
+    method = _as_str(payload, ("method", "http_method", "request_method"))
+    user_agent = _as_str(payload, ("user_agent", "request_headers.user-agent"))
+    tx_id = _as_str(payload, ("transaction_id", "tx_id", "unique_id"))
+    req_count = _as_int(payload, ("request_count", "count"))
+
+    reason_codes = ["coraza_waf", f"web_attack:{str(attack_type).strip().lower().replace(' ', '_')}"]
+    if rule_id:
+        reason_codes.append(f"coraza_rule:{rule_id}")
+    if status == "allowed":
+        reason_codes.append("waf_bypass_signal")
+
+    anchors: Dict[str, str] = {"service_id": service_id}
+    if endpoint:
+        anchors["endpoint"] = endpoint
+    if ip:
+        anchors["ip"] = ip
+
+    model_payload = {
+        "source": "coraza",
+        "service_id": service_id,
+        "endpoint": endpoint,
+        "method": method,
+        "attack_type": attack_type,
+        "status": status,
+        "req_count": req_count,
+        "src_ip": ip,
+        "user_agent": user_agent,
+        "rule_id": rule_id,
+        "transaction_id": tx_id,
+        "reason_codes": sorted(set(reason_codes)),
+    }
+    model_payload = {k: v for k, v in model_payload.items() if v is not None}
+
+    return CanonicalEvent(
+        event_type="WEB_ATTACK_EVENT",
+        occurred_at=occurred_at,
+        confidence=_coerce_confidence(confidence),
+        payload=model_payload,
+        anchors=anchors,
+        classification=classification,
+    )
+
+
 def _map_splunk_login(payload: Dict[str, Any], confidence: float, classification: Optional[str]) -> CanonicalEvent:
     occurred_at = _as_datetime(payload, ("timestamp", "_time", "time", "occurred_at", "ts"))
     username = _as_str(payload, ("username", "user", "principal", "actor"))
@@ -945,6 +1519,42 @@ _CONNECTORS: Dict[str, ConnectorDefinition] = {
         description="Wazuh file integrity monitoring records to FILE_INTEGRITY_EVENT",
         required_fields=("timestamp", "host|hostname|agent_name", "file_path|path", "action|event_type"),
         mapper=_map_wazuh_fim,
+    ),
+    "crowdsec_alert_v1": ConnectorDefinition(
+        key="crowdsec_alert_v1",
+        description="CrowdSec alert stream to DFIR_FINDING_EVENT",
+        required_fields=("timestamp|created_at", "scenario|alert_name", "scope|value OR src_ip OR service_id"),
+        mapper=_map_crowdsec_alert,
+    ),
+    "falco_runtime_v1": ConnectorDefinition(
+        key="falco_runtime_v1",
+        description="Falco runtime alerts to DFIR_FINDING_EVENT",
+        required_fields=("timestamp|output_time", "rule|alert", "hostname|host OR container_id OR pod_name"),
+        mapper=_map_falco_runtime,
+    ),
+    "tetragon_runtime_v1": ConnectorDefinition(
+        key="tetragon_runtime_v1",
+        description="Tetragon runtime telemetry to DFIR_FINDING_EVENT",
+        required_fields=("timestamp|event_time", "event_type|type", "hostname|host OR pod_name OR workload"),
+        mapper=_map_tetragon_runtime,
+    ),
+    "coraza_waf_v1": ConnectorDefinition(
+        key="coraza_waf_v1",
+        description="Coraza or OWASP CRS WAF alerts to WEB_ATTACK_EVENT",
+        required_fields=("timestamp", "service_id|host|hostname", "attack_type|rule_id|matched_rule_id"),
+        mapper=_map_coraza_waf,
+    ),
+    "suricata_eve_v1": ConnectorDefinition(
+        key="suricata_eve_v1",
+        description="Suricata EVE alerts to DDOS_SIGNAL_EVENT, WEB_ATTACK_EVENT, or DFIR_FINDING_EVENT",
+        required_fields=("timestamp", "src_ip|src OR dest_ip|dst", "alert.signature|category"),
+        mapper=_map_suricata_eve,
+    ),
+    "zeek_notice_v1": ConnectorDefinition(
+        key="zeek_notice_v1",
+        description="Zeek notice.log alerts to DFIR_FINDING_EVENT",
+        required_fields=("timestamp|ts", "note|notice_type", "src|src_ip OR dst|dest_ip"),
+        mapper=_map_zeek_notice,
     ),
     "feodo_c2_v1": ConnectorDefinition(
         key="feodo_c2_v1",

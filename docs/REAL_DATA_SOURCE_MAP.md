@@ -21,6 +21,12 @@ Current ingestion paths in codebase:
   - `local_network_probe_v1` -> `SERVICE_HEALTH_EVENT`
   - `pgaudit_event_v1` -> `DB_AUDIT_EVENT`
   - `wazuh_fim_v1` -> `FILE_INTEGRITY_EVENT`
+  - `crowdsec_alert_v1` -> `DFIR_FINDING_EVENT`
+  - `falco_runtime_v1` -> `DFIR_FINDING_EVENT`
+  - `tetragon_runtime_v1` -> `DFIR_FINDING_EVENT`
+  - `coraza_waf_v1` -> `WEB_ATTACK_EVENT`
+  - `suricata_eve_v1` -> `DDOS_SIGNAL_EVENT | WEB_ATTACK_EVENT | DFIR_FINDING_EVENT`
+  - `zeek_notice_v1` -> `DFIR_FINDING_EVENT`
   - `velociraptor_artifact_v1` -> `DFIR_FINDING_EVENT`
   - `m365_bec_mail_v1` -> `PHISHING_MESSAGE_EVENT`
   - `waf_api_attack_v1` -> `WEB_ATTACK_EVENT`
@@ -44,8 +50,8 @@ Implication: prioritize vulnerability + DDoS/web + phishing datasets first.
 | Sentinel Event Type | Real Data Sources (Primary) | Integration Status | Data Readiness |
 |---|---|---|---|
 | `VULNERABILITY_EVENT` | CISA KEV, NVD feeds, FIRST EPSS API | Connector exists (`kev_vuln_feed_v1`) | High |
-| `DDOS_SIGNAL_EVENT` | CSE-CIC-IDS2018, CIC-DDoS2019, CAIDA DDoS traces, partner edge telemetry | Connector exists (`cloudflare_ddos_v1`) | High |
-| `WEB_ATTACK_EVENT` | CSE-CIC-IDS2018 web attack traffic, WAF logs | Connector exists (`waf_api_attack_v1`) | High |
+| `DDOS_SIGNAL_EVENT` | CSE-CIC-IDS2018, CIC-DDoS2019, CAIDA DDoS traces, partner edge telemetry, Suricata EVE alerts | Connectors exist (`cloudflare_ddos_v1`, `suricata_eve_v1`) | High |
+| `WEB_ATTACK_EVENT` | CSE-CIC-IDS2018 web attack traffic, WAF logs, Suricata EVE HTTP alerts, Coraza/OWASP CRS alerts | Connectors exist (`waf_api_attack_v1`, `suricata_eve_v1`, `coraza_waf_v1`) | High |
 | `PHISHING_MESSAGE_EVENT` | URLhaus, PhishTank, OpenPhish, enterprise mail telemetry | Connector exists (`m365_bec_mail_v1`) | Medium-High |
 | `LOGIN_EVENT` | LANL auth dataset, enterprise IdP/SIEM auth logs | Connector exists (`splunk_login_v1`) | Medium-High |
 | `TRANSACTION_EVENT` | PaySim (public simulation), partner core banking/mobile money events | Connector exists (`core_banking_tx_v1`) | Medium |
@@ -57,7 +63,7 @@ Implication: prioritize vulnerability + DDoS/web + phishing datasets first.
 | `SERVICE_HEALTH_EVENT` | Local/edge probe telemetry | Connector exists (`local_network_probe_v1`) | High |
 | `DB_AUDIT_EVENT` | pgAudit logs | Connector exists (`pgaudit_event_v1`) | High |
 | `FILE_INTEGRITY_EVENT` | Wazuh/syscheck logs | Connector exists (`wazuh_fim_v1`) | High |
-| `DFIR_FINDING_EVENT` | Velociraptor hunt/artifact results | Connector exists (`velociraptor_artifact_v1`) | High |
+| `DFIR_FINDING_EVENT` | Velociraptor hunt/artifact results, Zeek notices, Suricata non-web alerts, CrowdSec alerts, Falco runtime alerts, Tetragon runtime telemetry | Connectors exist (`velociraptor_artifact_v1`, `zeek_notice_v1`, `suricata_eve_v1`, `crowdsec_alert_v1`, `falco_runtime_v1`, `tetragon_runtime_v1`) | High |
 | `BACKUP_ATTESTATION_EVENT` | Backup platform attestations (object lock, retention) | Connector exists (`backup_attestation_v1`) | High |
 | `INCIDENT_RESPONSE_EVENT` | SOAR/ticketing/IR orchestration logs | No dedicated connector yet | Medium private |
 

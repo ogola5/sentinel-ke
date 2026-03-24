@@ -249,7 +249,17 @@ export default function ActiveScreen({
       {activeScreen === "corruption" && (
         <CorruptionIntel data={operationsData} onRunLeakage={onRunLeakage} leakageActionLabel={leakageActionLabel} />
       )}
-      {activeScreen === "federation" && <FederationDashboard />}
+      {activeScreen === "federation" && central && <FederationDashboard />}
+      {activeScreen === "federation" && !central && (
+        <div className="panel">
+          <div className="state-box">
+            <p>Federation visibility is restricted to central command users.</p>
+            <button className="ghost" type="button" onClick={() => onNavigate("live")}>
+              Return to Live Feed
+            </button>
+          </div>
+        </div>
+      )}
       {activeScreen === "audit" && <AuditLog />}
       {activeScreen === "investigate" && (
         <EntityInvestigation

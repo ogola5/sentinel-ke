@@ -24,14 +24,16 @@ import {
 } from "../api/ai";
 import {
   createIncidentRun,
+  DEFAULT_DEFENSE_ACTIONS,
   executeContainmentAction,
+  fetchDefenseActionCatalog,
   fetchWebhookDeliveries,
   fetchWebhooks,
 } from "../api/defense";
 import { downloadReport, generateReport } from "../api/reports";
 import type { AIPrediction, EntityTrustSummary } from "../types/ai";
 import type { Principal } from "../types/auth";
-import type { WebhookDeliveryRecord, WebhookRecord } from "../types/defense";
+import type { DefenseActionDefinition, WebhookDeliveryRecord, WebhookRecord } from "../types/defense";
 import { clampRiskPercent, formatRiskScore, riskSeverityLabel } from "../utils/risk";
 
 type InvestigationProps = {
@@ -109,18 +111,21 @@ function entityFamily(entityKey: string): string {
 
 function suggestedActionType(entityKey: string): string {
   if (entityKey.startsWith("ip:")) return "block_ip";
+  if (entityKey.startsWith("service_id:") || entityKey.startsWith("url:") || entityKey.startsWith("domain:")) {
+    return "enable_waf_challenge";
+  }
   if (entityKey.startsWith("host:") || entityKey.startsWith("endpoint:") || entityKey.startsWith("device_id:")) {
     return "isolate_host";
   }
   if (entityKey.startsWith("account_h:") || entityKey.startsWith("user:") || entityKey.startsWith("email:")) {
-    return "revoke_user";
+    return entityKey.startsWith("email:") ? "quarantine_email" : "revoke_user";
   }
   return "block_ip";
 }
 
 function suggestedActionTarget(entityKey: string): string {
   const family = entityFamily(entityKey);
-  if (["ip", "host", "endpoint", "device_id", "account_h", "user", "email"].includes(family)) {
+  if (["ip", "host", "endpoint", "device_id", "account_h", "user", "email", "service_id", "url", "domain"].includes(family)) {
     return rawEntityTarget(entityKey);
   }
   return "";
@@ -163,6 +168,7 @@ export default function EntityInvestigation({ initialEntityKey, analystId, princ
   const [trustSummary, setTrustSummary] = useState<EntityTrustSummary | null>(null);
   const [webhooks, setWebhooks] = useState<WebhookRecord[]>([]);
   const [deliveryReceipts, setDeliveryReceipts] = useState<WebhookDeliveryRecord[]>([]);
+  const [actionCatalog, setActionCatalog] = useState<DefenseActionDefinition[]>(DEFAULT_DEFENSE_ACTIONS);
   const [feedbackNotes, setFeedbackNotes] = useState("");
   const [feedbackBusy, setFeedbackBusy] = useState(false);
   const [feedbackStatus, setFeedbackStatus] = useState<string | null>(null);
@@ -181,12 +187,21 @@ export default function EntityInvestigation({ initialEntityKey, analystId, princ
   }, []);
 
   useEffect(() => {
+    void fetchDefenseActionCatalog().then(setActionCatalog).catch(() => setActionCatalog(DEFAULT_DEFENSE_ACTIONS));
+  }, []);
+
+  useEffect(() => {
     if (!initialEntityKey) return;
     setQuery(initialEntityKey);
     if (initialEntityKey !== entityKey) {
       void investigate(initialEntityKey);
     }
   }, [initialEntityKey]);
+
+  useEffect(() => {
+    if (actionCatalog.some((item) => item.key === actionType)) return;
+    setActionType(actionCatalog[0]?.key ?? "block_ip");
+  }, [actionCatalog, actionType]);
 
   async function investigate(nextEntityKey: string) {
     const trimmed = nextEntityKey.trim();
@@ -415,6 +430,7 @@ export default function EntityInvestigation({ initialEntityKey, analystId, princ
   const activeWebhooks = webhooks.filter((item) => item.is_active);
   const containmentGuidance = containmentReadinessMessage(entityKey, actionType, activeWebhooks, principal.access_level);
   const actionHookCount = activeWebhooks.filter((item) => item.action_type === actionType).length;
+  const selectedAction = actionCatalog.find((item) => item.key === actionType) ?? actionCatalog[0] ?? DEFAULT_DEFENSE_ACTIONS[0];
   const primaryReasons = (explanation?.reason_codes ?? prediction?.reason_codes ?? []).slice(0, 4);
   const recommendedControls = explanation?.recommended_controls ?? [];
   const leadingNextActions = trustBrief?.next_actions.slice(0, 2) ?? [];
@@ -595,18 +611,18 @@ export default function EntityInvestigation({ initialEntityKey, analystId, princ
                   <div>
                     <p className="label">Action</p>
                     <select value={actionType} onChange={(event) => setActionType(event.target.value)} style={{ width: "100%" }}>
-                      <option value="block_ip">block_ip</option>
-                      <option value="isolate_host">isolate_host</option>
-                      <option value="revoke_user">revoke_user</option>
+                      {actionCatalog.map((item) => (
+                        <option key={item.key} value={item.key}>{item.label}</option>
+                      ))}
                     </select>
                   </div>
                   <div>
-                    <p className="label">Target</p>
+                    <p className="label">Target ({selectedAction?.target_hint ?? "entity"})</p>
                     <input
                       className="search"
                       value={actionTarget}
                       onChange={(event) => setActionTarget(event.target.value)}
-                      placeholder="Containment target"
+                      placeholder={selectedAction?.target_hint ?? "Containment target"}
                     />
                   </div>
                 </div>
@@ -618,6 +634,12 @@ export default function EntityInvestigation({ initialEntityKey, analystId, princ
                 </div>
                 {actionStatus && <p className="muted" style={{ marginTop: 10 }}>{actionStatus}</p>}
                 {containmentAccessNote && <p className="muted" style={{ marginTop: 10 }}>{containmentAccessNote}</p>}
+                {selectedAction && (
+                  <p className="muted" style={{ marginTop: 10 }}>
+                    {selectedAction.description}
+                    {selectedAction.continuity_preserving ? " Prefer this when service continuity matters." : " Use this when direct containment is worth temporary disruption."}
+                  </p>
+                )}
               </div>
             </div>
           </div>

@@ -12,6 +12,16 @@ export interface PlaybookRun {
   updated_at?: string;
 }
 
+export interface DefenseActionDefinition {
+  key: string;
+  label: string;
+  description: string;
+  delivery_mode: "webhook" | "internal" | "internal_dispatch";
+  continuity_preserving: boolean;
+  target_hint: string;
+  category: "network" | "service" | "identity" | "email" | "host";
+}
+
 export interface ContainmentActionRecord {
   id?: string;
   run_id?: string;
