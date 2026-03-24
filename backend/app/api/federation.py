@@ -34,6 +34,7 @@ POST /v1/federation/register
 """
 from __future__ import annotations
 
+from collections import Counter
 import hashlib
 import hmac
 import secrets
@@ -45,9 +46,14 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, text
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_db, require_central_access, require_scope, require_section_access
+from app.api.deps import AuthPrincipal, get_db, require_central_access, require_scope, require_section_access
 from app.core.config import settings as hub_settings
-from app.federation.models import FederationPartner, FederationPattern
+from app.federation.models import (
+    FederationPartner,
+    FederationPattern,
+    FederationWarning,
+    FederationWarningAck,
+)
 from app.db.base import utcnow
 
 router = APIRouter(prefix="/v1/federation", tags=["federation"])
@@ -112,9 +118,70 @@ class PartnerRegistration(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
+class WarningEnvelopeCreate(BaseModel):
+    entity_key_hash: str = Field(..., description="Hashed entity identifier as seen by the hub.")
+    entity_type: Optional[str] = Field(default=None)
+    threat_family: Optional[str] = Field(default=None)
+    severity: str = Field(default="medium")
+    urgency: str = Field(default="routine")
+    title: str = Field(..., min_length=5, max_length=255)
+    summary_text: str = Field(..., min_length=5)
+    tlp: str = Field(default="amber")
+    classification: str = Field(default="RESTRICTED")
+    source_partner_ids: List[str] = Field(default_factory=list)
+    target_partner_ids: List[str] = Field(default_factory=list)
+    first_seen: Optional[datetime] = None
+    last_seen: Optional[datetime] = None
+    correlation_count: int = 0
+    max_risk: float = Field(default=0.0, ge=0.0, le=1.0)
+    avg_risk: float = Field(default=0.0, ge=0.0, le=1.0)
+    max_chain_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    risk_flags: List[str] = Field(default_factory=list)
+    recommended_actions: List[str] = Field(default_factory=list)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class WarningFromCorrelationRequest(BaseModel):
+    entity_key_hash: str
+    hours: int = Field(default=6, ge=1, le=168)
+    min_risk: float = Field(default=0.7, ge=0.0, le=1.0)
+    min_partners: int = Field(default=2, ge=1, le=20)
+    target_partner_ids: List[str] = Field(default_factory=list)
+    severity: Optional[str] = None
+    urgency: Optional[str] = None
+    title: Optional[str] = None
+    summary_text: Optional[str] = None
+    tlp: str = Field(default="amber")
+    classification: str = Field(default="RESTRICTED")
+    recommended_actions: List[str] = Field(default_factory=list)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class WarningAckPayload(BaseModel):
+    status: str = Field(default="received", min_length=3, max_length=32)
+    detail: Dict[str, Any] = Field(default_factory=dict)
+
+
 # ---------------------------------------------------------------------------
 # Auth helper — verifies edge agent API key
 # ---------------------------------------------------------------------------
+
+def _lookup_partner_by_api_key(x_api_key: Optional[str], db: Session) -> FederationPartner:
+    if not x_api_key:
+        raise HTTPException(status_code=401, detail="Missing X-API-Key")
+    key_hash = hashlib.sha256(x_api_key.encode()).hexdigest()
+    partner = (
+        db.query(FederationPartner)
+        .filter(
+            FederationPartner.api_key_hash == key_hash,
+            FederationPartner.is_active.is_(True),
+        )
+        .first()
+    )
+    if not partner:
+        raise HTTPException(status_code=403, detail="Unknown or inactive partner API key")
+    return partner
+
 
 async def _require_partner_api_key(
     request: Request,
@@ -123,17 +190,7 @@ async def _require_partner_api_key(
     db: Session = Depends(get_db),
 ) -> FederationPartner:
     request_body = await request.body()
-    if not x_api_key:
-        raise HTTPException(status_code=401, detail="Missing X-API-Key")
-    key_hash = hashlib.sha256(x_api_key.encode()).hexdigest()
-    partner = (
-        db.query(FederationPartner)
-        .filter(FederationPartner.api_key_hash == key_hash,
-                FederationPartner.is_active.is_(True))
-        .first()
-    )
-    if not partner:
-        raise HTTPException(status_code=403, detail="Unknown or inactive partner API key")
+    partner = _lookup_partner_by_api_key(x_api_key, db)
 
     # Verify HMAC-SHA256 body signature to prevent payload tampering
     if hub_settings.federation_require_signed_requests and not x_signature:
@@ -147,6 +204,254 @@ async def _require_partner_api_key(
             raise HTTPException(status_code=403, detail="Invalid request signature")
 
     return partner
+
+
+def _require_partner_read_access(
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+    db: Session = Depends(get_db),
+) -> FederationPartner:
+    return _lookup_partner_by_api_key(x_api_key, db)
+
+
+def _severity_from_correlation(*, partner_count: int, max_risk: float) -> str:
+    if partner_count >= 4 or max_risk >= 0.95:
+        return "critical"
+    if partner_count >= 3 or max_risk >= 0.85:
+        return "high"
+    if partner_count >= 2 or max_risk >= 0.7:
+        return "medium"
+    return "low"
+
+
+def _urgency_from_family(threat_family: Optional[str]) -> str:
+    family = str(threat_family or "").strip().upper()
+    if family in {"DDOS", "DDOS_CAMPAIGN", "MALWARE", "RANSOMWARE"}:
+        return "immediate"
+    if family in {"SIM_SWAP", "BEC", "PHISHING", "ATO", "VPN_ABUSE", "VPN_FRAUD"}:
+        return "urgent"
+    return "routine"
+
+
+def _recommended_actions_for_family(threat_family: Optional[str]) -> List[str]:
+    family = str(threat_family or "").strip().upper()
+    if family in {"DDOS", "DDOS_CAMPAIGN"}:
+        return [
+            "Review edge rate-limit and WAF posture.",
+            "Activate upstream mitigation or provider escalation if traffic pressure persists.",
+            "Preserve attack telemetry for national correlation.",
+        ]
+    if family in {"PHISHING", "BEC"}:
+        return [
+            "Quarantine related messages and suspicious senders.",
+            "Force MFA / session review for linked accounts.",
+            "Review mailbox rule and token abuse indicators.",
+        ]
+    if family in {"MALWARE", "RANSOMWARE"}:
+        return [
+            "Review endpoint isolation candidates immediately.",
+            "Block confirmed file hashes / domains in local controls.",
+            "Preserve endpoint evidence before destructive cleanup.",
+        ]
+    if family in {"SIM_SWAP", "ATO", "VPN_ABUSE", "VPN_FRAUD"}:
+        return [
+            "Review recent authentication and session anomalies for the affected hash.",
+            "Trigger local step-up verification or session revocation if policy allows.",
+            "Preserve linked fraud telemetry for case escalation.",
+        ]
+    return [
+        "Validate the warning against local telemetry.",
+        "Escalate to the local incident or fraud queue if corroborated.",
+        "Acknowledge the warning status back to the national hub.",
+    ]
+
+
+def _warning_to_dict(
+    warning: FederationWarning,
+    *,
+    ack_rows: Optional[List[FederationWarningAck]] = None,
+    partner_id: Optional[str] = None,
+    partner_view: bool = False,
+) -> dict:
+    ack_rows = list(ack_rows or [])
+    partner_ack = None
+    if partner_id:
+        partner_ack = next((ack for ack in ack_rows if ack.partner_id == partner_id), None)
+    payload = {
+        "id": str(warning.id),
+        "created_at": warning.created_at.isoformat() if warning.created_at else None,
+        "updated_at": warning.updated_at.isoformat() if warning.updated_at else None,
+        "created_by_actor": warning.created_by_actor,
+        "source_kind": warning.source_kind,
+        "entity_key_hash": warning.entity_key_hash,
+        "entity_type": warning.entity_type,
+        "threat_family": warning.threat_family,
+        "severity": warning.severity,
+        "urgency": warning.urgency,
+        "title": warning.title,
+        "summary_text": warning.summary_text,
+        "tlp": warning.tlp,
+        "classification": warning.classification,
+        "status": warning.status,
+        "source_partner_ids": list(warning.source_partner_ids or []),
+        "target_partner_ids": list(warning.target_partner_ids or []),
+        "first_seen": warning.first_seen.isoformat() if warning.first_seen else None,
+        "last_seen": warning.last_seen.isoformat() if warning.last_seen else None,
+        "correlation_count": int(warning.correlation_count or 0),
+        "max_risk": round(float(warning.max_risk or 0.0), 4),
+        "avg_risk": round(float(warning.avg_risk or 0.0), 4),
+        "max_chain_score": round(float(warning.max_chain_score or 0.0), 4),
+        "risk_flags": list(warning.risk_flags or []),
+        "recommended_actions": list(warning.recommended_actions or []),
+        "metadata": dict(warning.metadata_json or {}),
+        "acknowledgements": [
+            {
+                "partner_id": ack.partner_id,
+                "status": ack.status,
+                "acknowledged_at": ack.acknowledged_at.isoformat() if ack.acknowledged_at else None,
+                "detail": dict(ack.detail_json or {}),
+            }
+            for ack in ack_rows
+        ],
+        "partner_ack_status": partner_ack.status if partner_ack else None,
+        "partner_acknowledged_at": partner_ack.acknowledged_at.isoformat() if partner_ack and partner_ack.acknowledged_at else None,
+        "partner_ack_detail": dict(partner_ack.detail_json or {}) if partner_ack else None,
+    }
+    if partner_view:
+        payload["created_by_actor"] = "central-command"
+        payload["source_partner_count"] = len(list(warning.source_partner_ids or []))
+        payload["target_partner_count"] = len(list(warning.target_partner_ids or []))
+        payload["source_partner_ids"] = []
+        payload["target_partner_ids"] = [partner_id] if partner_id else []
+        payload["acknowledgements"] = [
+            {
+                "partner_id": partner_ack.partner_id,
+                "status": partner_ack.status,
+                "acknowledged_at": partner_ack.acknowledged_at.isoformat() if partner_ack.acknowledged_at else None,
+                "detail": dict(partner_ack.detail_json or {}),
+            }
+        ] if partner_ack else []
+    return payload
+
+
+def _dedupe_strings(values: List[str]) -> List[str]:
+    out: List[str] = []
+    seen = set()
+    for value in values:
+        cleaned = str(value or "").strip()
+        if not cleaned or cleaned in seen:
+            continue
+        out.append(cleaned)
+        seen.add(cleaned)
+    return out
+
+
+def _ensure_known_partner_ids(db: Session, partner_ids: List[str]) -> List[str]:
+    cleaned = _dedupe_strings(partner_ids)
+    if not cleaned:
+        return []
+    known = {
+        str(pid)
+        for (pid,) in (
+            db.query(FederationPartner.partner_id)
+            .filter(FederationPartner.partner_id.in_(cleaned))
+            .all()
+        )
+    }
+    missing = [partner_id for partner_id in cleaned if partner_id not in known]
+    if missing:
+        raise HTTPException(status_code=404, detail=f"unknown_partner_ids:{','.join(missing)}")
+    return cleaned
+
+
+def _normalize_warning_targets(
+    *,
+    db: Session,
+    source_partner_ids: List[str],
+    target_partner_ids: List[str],
+) -> tuple[List[str], List[str]]:
+    sources = _ensure_known_partner_ids(db, source_partner_ids)
+    targets = _ensure_known_partner_ids(db, target_partner_ids)
+    if not targets:
+        targets = list(sources)
+    if not targets:
+        raise HTTPException(status_code=422, detail="warning_requires_target_partner")
+    return sources, targets
+
+
+def _load_warning_ack_map(db: Session, warning_ids: List[Any]) -> Dict[str, List[FederationWarningAck]]:
+    ack_map: Dict[str, List[FederationWarningAck]] = {}
+    if not warning_ids:
+        return ack_map
+    ack_rows = (
+        db.query(FederationWarningAck)
+        .filter(FederationWarningAck.warning_id.in_(warning_ids))
+        .all()
+    )
+    for ack in ack_rows:
+        ack_map.setdefault(str(ack.warning_id), []).append(ack)
+    return ack_map
+
+
+def _build_warning_from_patterns(
+    *,
+    rows: List[FederationPattern],
+    target_partner_ids: Optional[List[str]] = None,
+    title: Optional[str] = None,
+    summary_text: Optional[str] = None,
+    severity: Optional[str] = None,
+    urgency: Optional[str] = None,
+    tlp: str = "amber",
+    classification: str = "RESTRICTED",
+    recommended_actions: Optional[List[str]] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> WarningEnvelopeCreate:
+    if not rows:
+        raise HTTPException(status_code=404, detail="correlation_source_not_found")
+
+    partner_ids = sorted({str(r.partner_id) for r in rows if getattr(r, "partner_id", None)})
+    partner_count = len(partner_ids)
+    entity_hash = str(rows[0].entity_key_hash)
+    entity_type = next((str(r.entity_type) for r in rows if getattr(r, "entity_type", None)), None)
+    family_counter = Counter(str(r.fraud_family) for r in rows if getattr(r, "fraud_family", None))
+    threat_family = family_counter.most_common(1)[0][0] if family_counter else None
+    risk_flags = sorted({flag for row in rows for flag in list(row.risk_flags or []) if isinstance(flag, str)})
+    first_seen = min((row.window_start or row.received_at for row in rows if (row.window_start or row.received_at)), default=None)
+    last_seen = max((row.window_end or row.received_at for row in rows if (row.window_end or row.received_at)), default=None)
+    max_risk = max((float(row.risk_score or 0.0) for row in rows), default=0.0)
+    avg_risk = (sum(float(row.risk_score or 0.0) for row in rows) / float(len(rows))) if rows else 0.0
+    max_chain_score = max((float(row.chain_score or 0.0) for row in rows), default=0.0)
+
+    chosen_severity = severity or _severity_from_correlation(partner_count=partner_count, max_risk=max_risk)
+    chosen_urgency = urgency or _urgency_from_family(threat_family)
+    chosen_targets = sorted(set(target_partner_ids or partner_ids))
+    chosen_title = title or f"{chosen_severity.upper()} cross-agency {threat_family or 'threat'} warning"
+    chosen_summary = summary_text or (
+        f"The same hashed {entity_type or 'entity'} was flagged by {partner_count} partners within the active "
+        f"correlation window. Agencies should validate the local match and apply local controls according to policy."
+    )
+
+    return WarningEnvelopeCreate(
+        entity_key_hash=entity_hash,
+        entity_type=entity_type,
+        threat_family=threat_family,
+        severity=chosen_severity,
+        urgency=chosen_urgency,
+        title=chosen_title,
+        summary_text=chosen_summary,
+        tlp=tlp,
+        classification=classification,
+        source_partner_ids=partner_ids,
+        target_partner_ids=chosen_targets,
+        first_seen=first_seen,
+        last_seen=last_seen,
+        correlation_count=partner_count,
+        max_risk=round(max_risk, 4),
+        avg_risk=round(avg_risk, 4),
+        max_chain_score=round(max_chain_score, 4),
+        risk_flags=risk_flags,
+        recommended_actions=list(recommended_actions or _recommended_actions_for_family(threat_family)),
+        metadata=dict(metadata or {}),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -281,7 +586,7 @@ async def receive_heartbeat(
 @router.get(
     "/partners",
     summary="List registered edge-agent partners",
-    dependencies=[Depends(require_section_access)],
+    dependencies=[Depends(require_central_access)],
 )
 def list_partners(db: Session = Depends(get_db)) -> List[dict]:
     partners = db.query(FederationPartner).order_by(
@@ -332,7 +637,7 @@ def list_partners(db: Session = Depends(get_db)) -> List[dict]:
 @router.get(
     "/stream",
     summary="Query federation pattern stream",
-    dependencies=[Depends(require_section_access)],
+    dependencies=[Depends(require_central_access)],
 )
 def query_patterns(
     partner_id:    Optional[str]   = Query(None,  description="Filter by partner"),
@@ -389,7 +694,7 @@ def query_patterns(
         "Example: Equity Bank's GNN flags phone_h:abc123 at 14:30, "
         "Safaricom's GNN flags the same hash at 14:32 → coordinated SIM-swap + mule attack."
     ),
-    dependencies=[Depends(require_section_access)],
+    dependencies=[Depends(require_central_access)],
 )
 def cross_partner_correlations(
     hours:     int   = Query(1,   description="Look-back window in hours"),
@@ -462,6 +767,264 @@ def cross_partner_correlations(
         "correlations":   correlations,
         "total_found":    len(correlations),
         "queried_at":     utcnow().isoformat(),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Warning envelopes — central creates, partners consume and acknowledge
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/warnings",
+    summary="Create a warning envelope (central command)",
+    dependencies=[Depends(require_scope("integrations.write"))],
+    status_code=201,
+)
+def create_warning(
+    payload: WarningEnvelopeCreate,
+    principal: AuthPrincipal = Depends(require_central_access),
+    db: Session = Depends(get_db),
+) -> dict:
+    source_partner_ids, target_partner_ids = _normalize_warning_targets(
+        db=db,
+        source_partner_ids=list(payload.source_partner_ids or []),
+        target_partner_ids=list(payload.target_partner_ids or []),
+    )
+    warning = FederationWarning(
+        created_by_actor=principal.actor_id,
+        source_kind="manual",
+        entity_key_hash=payload.entity_key_hash,
+        entity_type=payload.entity_type,
+        threat_family=payload.threat_family,
+        severity=payload.severity,
+        urgency=payload.urgency,
+        title=payload.title,
+        summary_text=payload.summary_text,
+        tlp=payload.tlp,
+        classification=payload.classification,
+        status="open",
+        source_partner_ids=source_partner_ids,
+        target_partner_ids=target_partner_ids,
+        first_seen=payload.first_seen,
+        last_seen=payload.last_seen,
+        correlation_count=int(payload.correlation_count or 0),
+        max_risk=float(payload.max_risk or 0.0),
+        avg_risk=float(payload.avg_risk or 0.0),
+        max_chain_score=float(payload.max_chain_score or 0.0),
+        risk_flags=list(payload.risk_flags or []),
+        recommended_actions=list(payload.recommended_actions or []),
+        metadata_json=dict(payload.metadata or {}),
+    )
+    db.add(warning)
+    db.commit()
+    db.refresh(warning)
+    return _warning_to_dict(warning)
+
+
+@router.post(
+    "/warnings/from-correlation",
+    summary="Create a warning envelope from live correlation evidence",
+    dependencies=[Depends(require_scope("integrations.write"))],
+    status_code=201,
+)
+def create_warning_from_correlation(
+    payload: WarningFromCorrelationRequest,
+    principal: AuthPrincipal = Depends(require_central_access),
+    db: Session = Depends(get_db),
+) -> dict:
+    since = utcnow() - timedelta(hours=max(1, min(payload.hours, 168)))
+    rows = (
+        db.query(FederationPattern)
+        .filter(FederationPattern.received_at >= since)
+        .filter(FederationPattern.risk_score >= payload.min_risk)
+        .filter(FederationPattern.entity_key_hash == payload.entity_key_hash)
+        .order_by(FederationPattern.received_at.desc())
+        .all()
+    )
+    partner_count = len({str(r.partner_id) for r in rows})
+    if partner_count < max(1, int(payload.min_partners)):
+        raise HTTPException(status_code=404, detail="correlation_threshold_not_met")
+
+    warning_payload = _build_warning_from_patterns(
+        rows=rows,
+        target_partner_ids=payload.target_partner_ids,
+        title=payload.title,
+        summary_text=payload.summary_text,
+        severity=payload.severity,
+        urgency=payload.urgency,
+        tlp=payload.tlp,
+        classification=payload.classification,
+        recommended_actions=payload.recommended_actions,
+        metadata=payload.metadata,
+    )
+    source_partner_ids, target_partner_ids = _normalize_warning_targets(
+        db=db,
+        source_partner_ids=list(warning_payload.source_partner_ids or []),
+        target_partner_ids=list(warning_payload.target_partner_ids or []),
+    )
+    warning = FederationWarning(
+        created_by_actor=principal.actor_id,
+        source_kind="correlation",
+        entity_key_hash=warning_payload.entity_key_hash,
+        entity_type=warning_payload.entity_type,
+        threat_family=warning_payload.threat_family,
+        severity=warning_payload.severity,
+        urgency=warning_payload.urgency,
+        title=warning_payload.title,
+        summary_text=warning_payload.summary_text,
+        tlp=warning_payload.tlp,
+        classification=warning_payload.classification,
+        status="open",
+        source_partner_ids=source_partner_ids,
+        target_partner_ids=target_partner_ids,
+        first_seen=warning_payload.first_seen,
+        last_seen=warning_payload.last_seen,
+        correlation_count=int(warning_payload.correlation_count or 0),
+        max_risk=float(warning_payload.max_risk or 0.0),
+        avg_risk=float(warning_payload.avg_risk or 0.0),
+        max_chain_score=float(warning_payload.max_chain_score or 0.0),
+        risk_flags=list(warning_payload.risk_flags or []),
+        recommended_actions=list(warning_payload.recommended_actions or []),
+        metadata_json=dict(warning_payload.metadata or {}),
+    )
+    db.add(warning)
+    db.commit()
+    db.refresh(warning)
+    return _warning_to_dict(warning)
+
+
+@router.get(
+    "/warnings",
+    summary="List warning envelopes (central command)",
+    dependencies=[Depends(require_central_access)],
+)
+def list_warnings(
+    status: Optional[str] = Query(default=None),
+    partner_id: Optional[str] = Query(default=None),
+    limit: int = Query(default=100, le=500),
+    db: Session = Depends(get_db),
+) -> dict:
+    rows = (
+        db.query(FederationWarning)
+        .order_by(FederationWarning.created_at.desc())
+        .all()
+    )
+    filtered: List[FederationWarning] = []
+    for row in rows:
+        if status and str(row.status or "") != status:
+            continue
+        if partner_id and partner_id not in list(row.target_partner_ids or []):
+            continue
+        filtered.append(row)
+        if len(filtered) >= limit:
+            break
+    warning_ids = [row.id for row in filtered]
+    ack_map = _load_warning_ack_map(db, warning_ids)
+    return {
+        "warnings": [
+            _warning_to_dict(row, ack_rows=ack_map.get(str(row.id), []))
+            for row in filtered
+        ],
+        "total_found": len(filtered),
+        "queried_at": utcnow().isoformat(),
+    }
+
+
+@router.get(
+    "/warnings/inbox",
+    summary="Partner warning inbox",
+)
+def partner_warning_inbox(
+    status: Optional[str] = Query(default="open"),
+    limit: int = Query(default=100, le=500),
+    partner: FederationPartner = Depends(_require_partner_read_access),
+    db: Session = Depends(get_db),
+) -> dict:
+    rows = (
+        db.query(FederationWarning)
+        .order_by(FederationWarning.created_at.desc())
+        .all()
+    )
+    filtered: List[FederationWarning] = []
+    for row in rows:
+        if partner.partner_id not in list(row.target_partner_ids or []):
+            continue
+        if status and str(row.status or "") != status:
+            continue
+        filtered.append(row)
+        if len(filtered) >= limit:
+            break
+    warning_ids = [row.id for row in filtered]
+    ack_map = _load_warning_ack_map(db, warning_ids)
+    return {
+        "partner_id": partner.partner_id,
+        "warnings": [
+            _warning_to_dict(
+                row,
+                ack_rows=ack_map.get(str(row.id), []),
+                partner_id=partner.partner_id,
+                partner_view=True,
+            )
+            for row in filtered
+        ],
+        "total_found": len(filtered),
+        "queried_at": utcnow().isoformat(),
+    }
+
+
+@router.post(
+    "/warnings/{warning_id}/ack",
+    summary="Partner acknowledges a warning envelope",
+    status_code=202,
+)
+async def acknowledge_warning(
+    warning_id: str,
+    payload: WarningAckPayload,
+    partner: FederationPartner = Depends(_require_partner_api_key),
+    db: Session = Depends(get_db),
+) -> dict:
+    warning = (
+        db.query(FederationWarning)
+        .filter(FederationWarning.id == warning_id)
+        .first()
+    )
+    if not warning:
+        raise HTTPException(status_code=404, detail="warning_not_found")
+    if partner.partner_id not in list(warning.target_partner_ids or []):
+        raise HTTPException(status_code=403, detail="warning_not_targeted_to_partner")
+
+    ack = (
+        db.query(FederationWarningAck)
+        .filter(
+            FederationWarningAck.warning_id == warning.id,
+            FederationWarningAck.partner_id == partner.partner_id,
+        )
+        .first()
+    )
+    now = utcnow()
+    if ack is None:
+        ack = FederationWarningAck(
+            warning_id=warning.id,
+            partner_id=partner.partner_id,
+            acknowledged_at=now,
+            status=payload.status,
+            detail_json=dict(payload.detail or {}),
+        )
+        db.add(ack)
+    else:
+        ack.acknowledged_at = now
+        ack.status = payload.status
+        ack.detail_json = dict(payload.detail or {})
+    warning.updated_at = now
+    db.commit()
+
+    return {
+        "accepted": True,
+        "warning_id": str(warning.id),
+        "partner_id": partner.partner_id,
+        "status": payload.status,
+        "acknowledged_at": now.isoformat(),
     }
 
 

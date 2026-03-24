@@ -73,9 +73,12 @@ CORRUPTION_ENTITY_TYPES: List[str] = [
 # financial counters used in the feature vector.
 CORRUPTION_POSITIVE_FLAGS = {
     "AUDIT_FINDING",
+    "CASE_CONFIRMED_CORRUPTION",
     "DEBARRED_SUPPLIER",
     "DIRECTOR_CONFLICT",
+    "OFFICIAL_SANCTIONED",
     "PRICE_INFLATION",
+    "RECOVERY_ORDER",
     "SHELL_COMPANY",
     "GHOST_WORKER",
     "RELATED_PARTY_TRANSACTION",
@@ -131,6 +134,28 @@ def corruption_weak_label(
     return 0
 
 
+def corruption_training_label(
+    *,
+    risk_flags: Sequence[str],
+    event_count: int,
+    single_source: bool,
+    director_conflict: bool,
+    outcome_label: Optional[int] = None,
+) -> int:
+    """
+    Prefer real audit / tribunal outcomes when present, otherwise fall back
+    to the weak heuristic label.
+    """
+    if outcome_label in {0, 1}:
+        return int(outcome_label)
+    return corruption_weak_label(
+        risk_flags=risk_flags,
+        event_count=event_count,
+        single_source=single_source,
+        director_conflict=director_conflict,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Feature engineering  (42-dim)
 # ---------------------------------------------------------------------------
@@ -172,6 +197,8 @@ def corruption_build_feature_vector(
     # Block 0: entity type one-hot (10 dims)
     # ------------------------------------------------------------------
     etype   = (entity_type or "").lower().split(":")[0]
+    if etype == "supplier_family":
+        etype = "company"
     type_vec = [1.0 if etype == t else 0.0 for t in CORRUPTION_ENTITY_TYPES]
 
     # ------------------------------------------------------------------

@@ -39,10 +39,10 @@ from __future__ import annotations
 import json
 import logging
 import math
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Sequence, Tuple
 
-from sqlalchemy import func, text
+from sqlalchemy import and_, func, text
 from sqlalchemy.orm import Session
 
 from app.analytics.ai_models import (
@@ -71,9 +71,10 @@ from app.analytics.explainability import (
 from app.analytics.corruption.feature_builder import (
     CORRUPTION_PREDICTION_TYPE,
     CORRUPTION_WINDOW_KEY,
-    corruption_weak_label,
+    corruption_training_label,
     snapshot_to_corruption_vector,
 )
+from app.analytics.corruption.relations import typed_edges_from_postgres
 from app.analytics.layer3.gnn_backbone import (
     GNNDataset,
     _edges_from_postgres,
@@ -94,6 +95,7 @@ LEGAL_RISK_NOTICE = (
     "AI output is a corruption risk indicator for investigative prioritisation only; "
     "it is not final proof and requires forensic / legal corroboration."
 )
+CORRUPTION_SNAPSHOT_LOOKBACK_DAYS = 90
 
 
 # ---------------------------------------------------------------------------
@@ -181,24 +183,43 @@ def _load_corruption_dataset(
         log.warning("corruption_dataset_empty: no snapshots for window_key=%s", window_key)
         return None
 
+    snapshot_selection_start = window_end - timedelta(days=CORRUPTION_SNAPSHOT_LOOKBACK_DAYS)
+    latest_snapshot_by_entity = (
+        db.query(
+            GraphFeatureSnapshot.entity_key.label("entity_key"),
+            func.max(GraphFeatureSnapshot.window_end).label("latest_window_end"),
+        )
+        .filter(GraphFeatureSnapshot.window_key == window_key)
+        .filter(GraphFeatureSnapshot.window_end >= snapshot_selection_start)
+        .filter(GraphFeatureSnapshot.window_end <= window_end)
+        .group_by(GraphFeatureSnapshot.entity_key)
+        .subquery()
+    )
+
     snapshots: List[GraphFeatureSnapshot] = (
         db.query(GraphFeatureSnapshot)
+        .join(
+            latest_snapshot_by_entity,
+            and_(
+                GraphFeatureSnapshot.entity_key == latest_snapshot_by_entity.c.entity_key,
+                GraphFeatureSnapshot.window_end == latest_snapshot_by_entity.c.latest_window_end,
+            ),
+        )
         .filter(GraphFeatureSnapshot.window_key == window_key)
-        .filter(GraphFeatureSnapshot.window_end == window_end)
+        .order_by(GraphFeatureSnapshot.event_count.desc(), GraphFeatureSnapshot.window_end.desc())
         .limit(max_entities)
         .all()
     )
     if not snapshots:
-        log.warning("corruption_dataset_empty: zero snapshots window_key=%s window_end=%s",
-                    window_key, window_end)
+        log.warning(
+            "corruption_dataset_empty: zero snapshots window_key=%s window_end=%s selection_start=%s",
+            window_key,
+            window_end,
+            snapshot_selection_start,
+        )
         return None
 
-    window_start = (
-        db.query(func.min(GraphFeatureSnapshot.window_start))
-        .filter(GraphFeatureSnapshot.window_key == window_key)
-        .filter(GraphFeatureSnapshot.window_end == window_end)
-        .scalar()
-    ) or window_end
+    window_start = min((snap.window_start for snap in snapshots if snap.window_start), default=window_end)
     provenance_by_entity = _corruption_provenance_by_entity(
         db,
         entity_keys=[str(s.entity_key) for s in snapshots],
@@ -221,11 +242,19 @@ def _load_corruption_dataset(
         flags = list(snap.risk_flags or [])
         f     = snap.features or {}
 
-        label = corruption_weak_label(
-            risk_flags       = flags,
-            event_count      = int(snap.event_count or 0),
-            single_source    = bool(f.get("single_source")),
-            director_conflict = "DIRECTOR_CONFLICT" in flags,
+        outcome_label = f.get("outcome_label")
+        if outcome_label is not None:
+            try:
+                outcome_label = int(outcome_label)
+            except Exception:
+                outcome_label = None
+
+        label = corruption_training_label(
+            risk_flags=flags,
+            event_count=int(snap.event_count or 0),
+            single_source=bool(f.get("single_source")),
+            director_conflict="DIRECTOR_CONFLICT" in flags,
+            outcome_label=outcome_label,
         )
 
         entity_keys.append(str(snap.entity_key))
@@ -239,6 +268,7 @@ def _load_corruption_dataset(
             "event_count":  int(snap.event_count or 0),
             "features":     f,
             "corruption_events": f.get("corruption_events") or f.get("event_types") or {},
+            "outcome_label": outcome_label,
             "provenance_tag": provenance.get("provenance_tag", "unknown"),
             "real_signal_ratio": float(provenance.get("real_signal_ratio") or 0.0),
             "source_type_counts": dict(provenance.get("source_type_counts") or {}),
@@ -253,7 +283,7 @@ def _load_corruption_dataset(
         log.warning("corruption_no_positives: all labels are 0 — check risk_flags seeding")
 
     # ── Edge extraction ───────────────────────────────────────────────
-    raw_edges = _edges_from_postgres(
+    cooccurrence_edges = _edges_from_postgres(
         db,
         entity_keys=entity_keys,
         window_start=window_start,
@@ -261,7 +291,14 @@ def _load_corruption_dataset(
         min_edge_weight=min_edge_weight,
         max_edges=max_edges,
     )
-    raw_edges = collapse_edges(raw_edges)
+    typed_edges = typed_edges_from_postgres(
+        db,
+        entity_keys=entity_keys,
+        window_start=window_start,
+        window_end=window_end,
+        max_events=max(500, int(max_edges) * 6),
+    )
+    raw_edges = collapse_edges([*cooccurrence_edges, *typed_edges])
 
     key_to_idx = {k: i for i, k in enumerate(entity_keys)}
     edges: List[Tuple[int, int, float]] = []
@@ -273,8 +310,8 @@ def _load_corruption_dataset(
         edges.append((i, j, math.log1p(max(0.0, float(w)))))
 
     log.info(
-        "corruption_dataset_loaded nodes=%d positive=%d edges=%d window_key=%s",
-        len(entity_keys), positive_count, len(edges), window_key,
+        "corruption_dataset_loaded nodes=%d positive=%d edges=%d cooccurrence_edges=%d typed_edges=%d window_key=%s",
+        len(entity_keys), positive_count, len(edges), len(cooccurrence_edges), len(typed_edges), window_key,
     )
 
     return GNNDataset(
@@ -288,7 +325,11 @@ def _load_corruption_dataset(
         edges               = edges,
         node_meta           = node_meta,
         source_backend_used = "postgres",
-        edge_source_counts  = {"postgres": len(edges)},
+        edge_source_counts  = {
+            "postgres_cooccurrence": len(cooccurrence_edges),
+            "postgres_typed": len(typed_edges),
+            "postgres_total": len(edges),
+        },
         positive_count      = positive_count,
         negative_count      = negative_count,
         benign_negative_count = negative_count,

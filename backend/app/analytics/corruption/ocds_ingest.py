@@ -125,6 +125,10 @@ class EntityAccumulator:
     delivery_progress_points: int = 0
     certified_progress_total: float = 0.0
     certified_progress_points: int = 0
+    adverse_outcome_count: int = 0
+    sanction_event_count: int = 0
+    recovery_amount_ksh: float = 0.0
+    outcome_label: Optional[int] = None
 
 
 def _utcnow() -> datetime:
@@ -666,6 +670,10 @@ def _touch_entity(
     certified_progress_pct: Optional[float] = None,
     payment_to_delivery_ratio: float = 0.0,
     progress_mismatch: float = 0.0,
+    adverse_outcome: int = 0,
+    sanction_event: int = 0,
+    recovery_amount_ksh: float = 0.0,
+    outcome_label: Optional[int] = None,
 ) -> None:
     row = entity_map.setdefault(entity_key, EntityAccumulator(entity_key=entity_key, entity_type=entity_type))
     row.event_count += 1
@@ -692,6 +700,11 @@ def _touch_entity(
     row.supplier_family_size = max(row.supplier_family_size, max(0, int(family_size or 0)))
     row.payment_to_delivery_ratio_max = max(row.payment_to_delivery_ratio_max, max(0.0, float(payment_to_delivery_ratio or 0.0)))
     row.progress_mismatch_max = max(row.progress_mismatch_max, max(0.0, float(progress_mismatch or 0.0)))
+    row.adverse_outcome_count += max(0, int(adverse_outcome or 0))
+    row.sanction_event_count += max(0, int(sanction_event or 0))
+    row.recovery_amount_ksh += max(0.0, float(recovery_amount_ksh or 0.0))
+    if outcome_label in {0, 1}:
+        row.outcome_label = int(outcome_label) if row.outcome_label is None else max(int(row.outcome_label), int(outcome_label))
     if delivery_progress_pct is not None:
         row.delivery_progress_total += max(0.0, min(1.0, float(delivery_progress_pct)))
         row.delivery_progress_points += 1
@@ -775,6 +788,10 @@ def _snapshot_row(row: EntityAccumulator, *, window_start: datetime, window_end:
             "payment_to_delivery_ratio_max": round(min(4.0, row.payment_to_delivery_ratio_max), 6),
             "delivery_progress_avg": round(min(1.0, execution_rate), 6),
             "certified_progress_avg": round(min(1.0, avg_certified_progress), 6) if avg_certified_progress is not None else None,
+            "adverse_outcome_count": row.adverse_outcome_count,
+            "sanction_event_count": row.sanction_event_count,
+            "recovery_amount_ksh": round(max(0.0, row.recovery_amount_ksh), 2),
+            "outcome_label": row.outcome_label,
         },
         "created_at": _utcnow(),
     }
@@ -902,7 +919,7 @@ def ingest_procurement_records(
                 base_entity_types[project_key] = "project"
             entity_types = dict(base_entity_types)
             if supplier_family_key:
-                entity_types[supplier_family_key] = "supplier"
+                entity_types[supplier_family_key] = "company"
             if director_key:
                 entity_types[director_key] = "director"
             if account_key:

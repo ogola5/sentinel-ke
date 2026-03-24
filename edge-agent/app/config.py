@@ -48,6 +48,9 @@ class Settings(BaseSettings):
     artifact_filename: str = "edge_gnn_weights.pt"
     artifact_metadata_filename: str = "edge_gnn_metadata.json"
     state_filename: str = "edge_agent_state.json"
+    hash_index_filename: str = "edge_hash_index.json"
+    warning_cache_filename: str = "edge_warning_cache.json"
+    hash_index_retention_days: int = 14
     # Startup and heartbeat behaviour
     startup_health_timeout_s: int = 8
     heartbeat_enabled: bool = True
@@ -134,6 +137,14 @@ class Settings(BaseSettings):
     @property
     def state_path(self) -> str:
         return str(Path(self.artifact_dir).expanduser() / self.state_filename)
+
+    @property
+    def hash_index_path(self) -> str:
+        return str(Path(self.artifact_dir).expanduser() / self.hash_index_filename)
+
+    @property
+    def warning_cache_path(self) -> str:
+        return str(Path(self.artifact_dir).expanduser() / self.warning_cache_filename)
 
 
 settings = Settings()

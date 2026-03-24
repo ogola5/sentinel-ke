@@ -325,7 +325,7 @@ def ingest_registry_records(
 
             entity_types = {supplier_key: "supplier"}
             if supplier_family_key:
-                entity_types[supplier_family_key] = "supplier"
+                entity_types[supplier_family_key] = "company"
             if director_key:
                 entity_types[director_key] = "director"
             if account_key:

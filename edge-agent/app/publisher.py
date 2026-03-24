@@ -2,13 +2,14 @@
 Sentinel-KE Edge Agent — Hub Publisher
 ========================================
 
-Hashes entity keys with a partner-specific HMAC salt, filters to entities
-above the risk threshold, and POSTs a PatternBatch to the national hub.
+Hashes entity keys with the shared national correlation salt, filters to
+entities above the risk threshold, and POSTs a PatternBatch to the national
+hub.
 
 Privacy guarantee
 -----------------
 Raw entity keys (phone numbers, account IDs, IP addresses) NEVER leave
-the partner's perimeter.  Only HMAC-SHA256(entity_key, hmac_salt) is
+the partner's perimeter.  Only HMAC-SHA256(entity_key, national_salt) is
 transmitted, so the hub can detect "same hashed entity flagged by two
 different banks" without learning what the actual entity is.
 """
@@ -108,6 +109,10 @@ def _signed_post(path: str, payload: Dict[str, Any], *, timeout_s: int) -> Dict[
     return response.json()
 
 
+def _api_key_headers() -> Dict[str, str]:
+    return {"X-API-Key": settings.hub_api_key}
+
+
 def publish(
     results:      List[GNNResult],
     window_start: datetime,
@@ -155,3 +160,38 @@ def check_hub_connectivity(*, timeout_s: int = 10) -> Dict[str, Any]:
         payload = {"status": "unknown"}
     payload["hub_url"] = settings.hub_url
     return payload
+
+
+def fetch_warning_inbox(
+    *,
+    status: str = "open",
+    limit: int = 100,
+    timeout_s: int = 15,
+) -> Dict[str, Any]:
+    url = f"{settings.hub_url.rstrip('/')}/v1/federation/warnings/inbox"
+    response = httpx.get(
+        url,
+        params={"status": status, "limit": limit},
+        headers=_api_key_headers(),
+        timeout=timeout_s,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    return payload if isinstance(payload, dict) else {"warnings": []}
+
+
+def acknowledge_warning(
+    warning_id: str,
+    *,
+    status: str = "received",
+    detail: Optional[Dict[str, Any]] = None,
+    timeout_s: int = 15,
+) -> Dict[str, Any]:
+    return _signed_post(
+        f"/v1/federation/warnings/{warning_id}/ack",
+        {
+            "status": status,
+            "detail": dict(detail or {}),
+        },
+        timeout_s=timeout_s,
+    )

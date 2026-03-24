@@ -23,11 +23,24 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel, Field
 
 from app.config import settings
 from app.connector import get_connector
 from app.gnn_runner import GNNResult, current_artifact_info, run_gnn
-from app.publisher import check_hub_connectivity, publish, send_heartbeat
+from app.publisher import (
+    acknowledge_warning as send_warning_acknowledgement,
+    check_hub_connectivity,
+    fetch_warning_inbox,
+    publish,
+    send_heartbeat,
+)
+from app.warning_resolver import (
+    load_warning_cache,
+    record_warning_ack,
+    sync_warning_cache,
+    update_hash_index,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s — %(message)s")
 logger = logging.getLogger(__name__)
@@ -52,8 +65,18 @@ _state: Dict[str, Any] = {
     "last_publish_status": "never",
     "last_heartbeat_at": None,
     "last_heartbeat_status": "never",
+    "last_warning_sync_at": None,
+    "last_warning_sync_status": "never",
+    "last_warning_sync_error": None,
+    "last_warning_count": 0,
+    "last_hash_index_entries": 0,
     "startup_warning":  None,
 }
+
+
+class WarningAckRequest(BaseModel):
+    status: str = "received"
+    detail: Dict[str, Any] = Field(default_factory=dict)
 
 
 def _utcnow() -> datetime:
@@ -79,6 +102,11 @@ def _serializable_state() -> Dict[str, Any]:
         "last_publish_status": _state["last_publish_status"],
         "last_heartbeat_at": _state["last_heartbeat_at"],
         "last_heartbeat_status": _state["last_heartbeat_status"],
+        "last_warning_sync_at": _state["last_warning_sync_at"],
+        "last_warning_sync_status": _state["last_warning_sync_status"],
+        "last_warning_sync_error": _state["last_warning_sync_error"],
+        "last_warning_count": _state["last_warning_count"],
+        "last_hash_index_entries": _state["last_hash_index_entries"],
         "startup_warning": _state["startup_warning"],
     }
 
@@ -132,6 +160,8 @@ def _heartbeat_payload() -> Dict[str, Any]:
             "local_gnn",
             "pattern_publish",
             "signed_heartbeat",
+            "warning_inbox",
+            "local_hash_resolution",
             f"data_source:{settings.data_source}",
         ],
     }
@@ -172,6 +202,32 @@ def _emit_heartbeat() -> None:
         logger.warning("Edge heartbeat failed: %s", exc)
 
 
+def _sync_warning_inbox(*, status: str = "open") -> Dict[str, Any]:
+    try:
+        payload = fetch_warning_inbox(status=status, timeout_s=settings.startup_health_timeout_s)
+        warning_cache = sync_warning_cache(list(payload.get("warnings") or []))
+        _state["last_warning_sync_at"] = warning_cache.get("last_synced_at")
+        _state["last_warning_sync_status"] = "ok"
+        _state["last_warning_sync_error"] = None
+        _state["last_warning_count"] = int(warning_cache.get("warning_count") or 0)
+        _mark_hub_status(reachable=True)
+        return {
+            "warning_count": _state["last_warning_count"],
+            "last_synced_at": _state["last_warning_sync_at"],
+        }
+    except Exception as exc:  # noqa: BLE001
+        detail = f"warning_sync_failed: {exc}"
+        _state["last_warning_sync_status"] = "error"
+        _state["last_warning_sync_error"] = detail
+        if any(token in str(exc).lower() for token in ("connect", "timed out", "refused", "network", "host")):
+            _mark_hub_status(reachable=False, error=detail)
+        logger.warning("Edge warning sync failed: %s", exc)
+        return {
+            "warning_count": int(_state.get("last_warning_count") or 0),
+            "error": detail,
+        }
+
+
 # ---------------------------------------------------------------------------
 # Core pipeline
 # ---------------------------------------------------------------------------
@@ -195,6 +251,8 @@ def _run_pipeline(*, force_retrain: bool = False) -> Dict[str, Any]:
             run_index=int(_state.get("run_count") or 0) + 1,
         )
         logger.info("GNN scored %d entities", len(results))
+        hash_index_summary = update_hash_index(results, observed_at=window_end)
+        _state["last_hash_index_entries"] = int(hash_index_summary.get("entry_count") or 0)
 
         hub_resp = publish(results, window_start, window_end)
         if hub_resp.get("skipped"):
@@ -213,6 +271,7 @@ def _run_pipeline(*, force_retrain: bool = False) -> Dict[str, Any]:
         _state["run_count"]      += 1
         _state["last_results"]    = results
         _emit_heartbeat()
+        _sync_warning_inbox()
 
         return {
             "entities_scored":  len(results),
@@ -220,6 +279,8 @@ def _run_pipeline(*, force_retrain: bool = False) -> Dict[str, Any]:
             "hub_accepted":     hub_resp.get("accepted", 0),
             "window_start":     window_start.isoformat(),
             "window_end":       window_end.isoformat(),
+            "hash_index_entries": _state["last_hash_index_entries"],
+            "warning_count": int(_state["last_warning_count"] or 0),
         }
     except Exception as exc:
         _state["last_run_status"] = "error"
@@ -260,6 +321,7 @@ async def _lifespan(app: FastAPI):
     _load_state_from_disk()
     _probe_hub_on_startup()
     _emit_heartbeat()
+    _sync_warning_inbox()
     _save_state_to_disk()
     task = asyncio.create_task(_scheduler_loop())
     yield
@@ -307,6 +369,11 @@ def status() -> Dict[str, Any]:
         "last_publish_status": _state["last_publish_status"],
         "last_heartbeat_at": _state["last_heartbeat_at"],
         "last_heartbeat_status": _state["last_heartbeat_status"],
+        "last_warning_sync_at": _state["last_warning_sync_at"],
+        "last_warning_sync_status": _state["last_warning_sync_status"],
+        "last_warning_sync_error": _state["last_warning_sync_error"],
+        "last_warning_count": _state["last_warning_count"],
+        "last_hash_index_entries": _state["last_hash_index_entries"],
         "startup_warning":   _state["startup_warning"],
         "artifact":          current_artifact_info(),
     }
@@ -344,3 +411,70 @@ def last_patterns(min_risk: float = 0.0, limit: int = 200) -> List[Dict[str, Any
         }
         for r in filtered[:limit]
     ]
+
+
+@app.get("/warnings", summary="Resolved warning inbox for the local agency SOC")
+def warning_inbox(
+    status: Optional[str] = "open",
+    locally_resolved: Optional[bool] = None,
+    limit: int = 200,
+) -> Dict[str, Any]:
+    payload = load_warning_cache()
+    warnings = list(payload.get("warnings") or [])
+    filtered: List[Dict[str, Any]] = []
+    for warning in warnings:
+        if status and str(warning.get("status") or "") != status:
+            continue
+        if locally_resolved is not None and bool(warning.get("locally_resolved")) is not locally_resolved:
+            continue
+        filtered.append(warning)
+        if len(filtered) >= limit:
+            break
+    return {
+        "partner_id": settings.partner_id,
+        "last_synced_at": payload.get("last_synced_at"),
+        "warning_count": len(filtered),
+        "warnings": filtered,
+    }
+
+
+@app.post("/warnings/sync", summary="Fetch the latest warning inbox from the hub")
+async def trigger_warning_sync(status: str = "open") -> Dict[str, Any]:
+    try:
+        summary = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: _sync_warning_inbox(status=status),
+        )
+        return {"status": "ok", **summary}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/warnings/{warning_id}/ack", summary="Acknowledge a warning back to the hub")
+async def acknowledge_local_warning(
+    warning_id: str,
+    payload: WarningAckRequest,
+) -> Dict[str, Any]:
+    try:
+        result = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: send_warning_acknowledgement(
+                warning_id,
+                status=payload.status,
+                detail=dict(payload.detail or {}),
+                timeout_s=settings.startup_health_timeout_s,
+            ),
+        )
+        record_warning_ack(
+            warning_id,
+            status=result.get("status") or payload.status,
+            detail=dict(payload.detail or {}),
+            acknowledged_at=result.get("acknowledged_at"),
+        )
+        _state["last_warning_sync_status"] = "ok"
+        _state["last_warning_sync_error"] = None
+        return {"status": "ok", **result}
+    except Exception as exc:
+        _state["last_warning_sync_status"] = "error"
+        _state["last_warning_sync_error"] = str(exc)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc

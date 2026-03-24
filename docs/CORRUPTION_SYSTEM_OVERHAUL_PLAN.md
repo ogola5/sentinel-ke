@@ -156,6 +156,95 @@ What this gives us:
 - better detection of “paid but not delivered” patterns
 - a stronger basis for linking IFMIS, procurement, registry, and project evidence
 
+## 1.4 Phase 4 Implemented In This Repo
+
+Phase 4 adds outcome and enforcement ingest in
+`backend/app/analytics/corruption/outcome_ingest.py`.
+
+This path models the strongest downstream evidence the system can realistically
+obtain from audit, tribunal, disciplinary, or enforcement workflows:
+
+- audit findings
+- confirmed adverse case outcomes
+- supplier debarment / sanction actions
+- official sanctions
+- recovery orders and recovered amounts
+
+The importer emits graph events such as:
+
+- `CASE_OUTCOME_RECORDED`
+- `AUDIT_FINDING_EVENT`
+- `SANCTION_APPLIED`
+- `RECOVERY_ORDER`
+
+It also strengthens the training path in two important ways:
+
+- corruption snapshots now persist:
+  - `outcome_label`
+  - `adverse_outcome_count`
+  - `sanction_event_count`
+  - `recovery_amount_ksh`
+- `backend/app/analytics/corruption/train_worker.py` now prefers
+  `outcome_label` over the older heuristic weak label whenever a confirmed
+  positive or cleared outcome is available
+
+Why this matters:
+
+- the corruption GNN is no longer purely weakly supervised
+- confirmed case outcomes can override weaker audit or heuristic signals
+- the graph now carries an explicit trail from procurement activity to
+  enforcement consequence
+- recovery and sanction evidence becomes machine-usable instead of just
+  narrative context
+
+This is not full ground-truth corruption labeling yet, but it is the first
+meaningful step away from a purely heuristic corruption model.
+
+## 1.5 Phase 5 Implemented In This Repo
+
+Phase 5 adds a real typed-relation layer in
+`backend/app/analytics/corruption/relations.py` and wires it into
+`backend/app/analytics/corruption/train_worker.py`.
+
+This phase does two things:
+
+1. It turns key corruption events into explicit structural graph edges.
+2. It stops the corruption trainer from seeing only one global snapshot time.
+
+Typed relation edges are now derived from real corruption events such as:
+
+- `SUPPLIER_NETWORK_LINK`
+- `COMPANY_REGISTRATION`
+- `APPROVER_LINK`
+- `PROJECT_MILESTONE_CERTIFIED`
+- `DEBARMENT_LISTING`
+- `WATCHLIST_HIT`
+- `AUDIT_FINDING_EVENT`
+- `CASE_OUTCOME_RECORDED`
+- `SANCTION_APPLIED`
+- `RECOVERY_ORDER`
+
+Those event families now create stronger graph links like:
+
+- supplier <-> supplier family
+- supplier <-> director
+- supplier <-> bank account
+- official <-> approved contract / project / payment
+- contract <-> project
+- supplier <-> sanctioned contract / project
+
+This makes the corruption graph much more believable than pure
+co-occurrence-only learning.
+
+The trainer now also loads the latest corruption snapshot per entity across a
+recent lookback window instead of requiring one global `window_end` for every
+entity. That matters because procurement, registry, payment, and outcome
+ingests do not naturally land on one identical timestamp. Without this change,
+the model could silently miss entire evidence families.
+
+The supplier-family nodes are also now treated as company-like graph nodes in
+the feature builder, which keeps old and new family snapshots compatible.
+
 ## 2. How Corruption Actually Works In Kenyan Procurement
 
 If this is meant to be real, the system must model corruption as a chain, not
@@ -446,69 +535,32 @@ It is not yet suitable for:
 
 ## 10. What To Change In This Codebase First
 
-### Phase 1 — Strengthen Real Procurement Truth
+### Phase 6 — Separate Label Sources More Strictly
 
-Extend `backend/app/analytics/corruption/ocds_ingest.py` so it emits more
-procurement lifecycle events, not just award-centric events.
-
-Add support for:
-
-- bid submission counts
-- prequalification / restricted tender evidence
-- complaint / review events
-- contract variation events
-- invoice and payment request events
-- milestone certification events
-- delivery / acceptance events
-- inspection events
-
-### Phase 2 — Make Supplier Clusters First-Class
-
-Instead of only `supplier_cluster_key`, create stable cluster entities and
-relations:
-
-- `supplier_family:<hash>`
-- relations from supplier to family
-- family-level features like shared director count, shared address count,
-  cross-agency award volume
-
-This will directly address the "same people using many companies" problem.
-
-### Phase 3 — Separate Labels From Input Features
-
-In `backend/app/analytics/corruption/feature_builder.py` and
+Phase 4 introduced outcome-label precedence, but the next serious step is stronger
+discipline in `backend/app/analytics/corruption/feature_builder.py` and
 `backend/app/analytics/corruption/train_worker.py`:
 
-- stop letting the same strongest flags both define the label and serve as
-  direct input features in the same training regime
-- move to label tiers:
-  - confirmed outcome labels
-  - audit / enforcement labels
-  - weak heuristic labels
+- track confirmed outcomes, audit/enforcement signals, and heuristic labels as
+  separate evaluation strata
+- reduce dependence on the same strongest flags both as input and as surrogate
+  labels
+- report metrics by label source, not only overall
 
-Then track evaluation by label source.
+### Phase 7 — Deepen Typed Graph Semantics
 
-### Phase 4 — Add Project Delivery Features
+Phase 5 already added typed event-derived links. The next step is to deepen
+them further with more explicit graph semantics:
 
-Extend features for:
+- `supplier BELONGS_TO supplier_family`
+- `supplier SHARES_ACCOUNT supplier`
+- `supplier SHARES_DIRECTOR supplier`
+- `official APPROVED payment`
+- `audit_finding REFERS_TO contract`
+- `project LOCATED_IN county`
 
-- payment vs milestone mismatch
-- inspection frequency
-- repeated certifier overlap
-- retention release timing
-- defect history
-- spatial and temporal anomalies in site supervision
-
-### Phase 5 — Move From Co-Occurrence To Typed Graph Relations
-
-The current graph edges from shared events are useful, but the next serious step
-is typed edges and possibly relation-aware graph training.
-
-That means:
-
-- explicit relationship extraction
-- explicit relation tables or richer graph projection
-- better explanations: "same director", "same account", "same project", "same site certifier"
+That is how the graph becomes explainable not only as “these entities appeared
+together,” but also as “these entities are connected in this specific way.”
 
 ## 11. What "Normal" ML Governance Should Be Here
 
@@ -547,25 +599,28 @@ capture, and delivery fraud earlier."
 
 ## 13. Recommended Build Order
 
-1. Improve `ocds_ingest.py`
-2. Add supplier-family / beneficial-owner clustering
-3. Add project-delivery event ingestion
-4. Separate strong labels from weak heuristic labels
-5. Retrain corruption GNN on mixed real + synthetic windows
+1. Track evaluation by label source, not only overall
+2. Bring in more real outcome / enforcement data
+3. Deepen typed approval, audit, ownership, and geography relationships
+4. Retrain corruption GNN on mixed procurement + registry + payment + outcome windows
+5. Evaluate by time, agency, and label source
 6. Keep rule-based economy detectors as explicit guardrails and explanations
 
 ## 14. Honest Final Position
 
-Right now the corruption pipeline is promising and strategically correct, but
-it is still mostly a procurement-risk graph with weak supervision.
+Right now the corruption pipeline is much stronger than it was at the start of
+this overhaul. It now covers procurement, supplier networks, payment flow, and
+outcome evidence in one graph, with typed relation edges and multi-window
+snapshot selection. But it is still not a finished national
+anti-corruption intelligence system.
 
 To make it truly government-grade, it needs:
 
-- richer real public-sector data
+- richer real public-sector outcome and enforcement data
 - stronger entity identity resolution
 - typed relationships
-- project-delivery evidence
-- stronger label discipline
+- more explicit supplier-family graph structure
+- stronger evaluation by label source and time
 
 That is the path that turns it from a hackathon corruption demo into a real
 national procurement intelligence platform.
