@@ -3,7 +3,7 @@ import {
   Shield, Eye, EyeOff, Loader, AlertTriangle,
   Lock, ChevronDown, ChevronUp, Terminal, Info,
   ArrowRight, FileLock2, KeyRound, Mail, Network, Radar, ShieldCheck,
-  Sparkles, Workflow, X, Globe2, PlayCircle, Users2,
+  Sparkles, Workflow, X, Globe2, Users2,
 } from "lucide-react";
 import { apiLogin, saveSession } from "../../api/auth";
 import { LOGIN_NOTICE_KEY } from "../../api/auth";
@@ -49,6 +49,7 @@ export default function LoginScreen({ onLogin }: Props) {
   const [requestAccessLevel, setRequestAccessLevel] = useState<"section" | "central">("section");
   const [requestPurpose, setRequestPurpose] = useState("");
   const [requestStatus, setRequestStatus] = useState("");
+  const [activeOverview, setActiveOverview] = useState<"cyber" | "fraud" | "federation" | "trust">("cyber");
   const [loginNotice, setLoginNotice] = useState<string>(() => {
     if (typeof window === "undefined") return "";
     return window.localStorage.getItem(LOGIN_NOTICE_KEY) ?? "";
@@ -67,24 +68,32 @@ export default function LoginScreen({ onLogin }: Props) {
 
   const agency = guessAgency();
   const agencyLabel = agency ? KENYA_AGENCIES[agency]?.name : null;
-  const heroVideoUrl = "https://www.youtube-nocookie.com/embed/videoseries?list=PLTDgOUcX23hb0bvDTa1tqW5xM3L7eMNwi&autoplay=1&mute=1&controls=0&loop=1&playlist=PLTDgOUcX23hb0bvDTa1tqW5xM3L7eMNwi&modestbranding=1&playsinline=1&rel=0";
-  const mediaCards = [
-    {
-      src: "https://images.pexels.com/photos/5380597/pexels-photo-5380597.jpeg?auto=compress&cs=tinysrgb&w=1200",
-      title: "Analyst collaboration",
-      body: "Joint triage across multi-screen operations and cyber investigation teams.",
+  const overviewModes = {
+    cyber: {
+      title: "Cyber operations",
+      summary: "Graph-native detection for DDoS, hostile infrastructure reuse, login abuse, and campaign escalation.",
+      bullets: ["Entity scoring with confidence and uncertainty", "GNN + path risk + anomaly fusion", "Cases, reports, and governed containment"],
+      icon: <Radar size={18} />,
     },
-    {
-      src: "https://images.pexels.com/photos/6266259/pexels-photo-6266259.jpeg?auto=compress&cs=tinysrgb&w=1200",
+    fraud: {
       title: "Fraud and financial risk",
-      body: "Mobile money, transaction abuse, and economic-intelligence workflows in one platform.",
+      summary: "Track SIM swap chains, mule movement, mobile-money abuse, and high-risk transaction narratives in one loop.",
+      bullets: ["Scenario simulation and short-horizon forecasting", "Analyst feedback improves future training", "Shared workflow across cyber and fraud teams"],
+      icon: <Workflow size={18} />,
     },
-    {
-      src: "https://images.pexels.com/photos/5380643/pexels-photo-5380643.jpeg?auto=compress&cs=tinysrgb&w=1200",
-      title: "Threat operations",
-      body: "Campaign-level visibility, actor infrastructure, and coordinated response planning.",
+    federation: {
+      title: "Federated intelligence",
+      summary: "Agencies correlate high-risk patterns without moving raw identifiers into a central public pool.",
+      bullets: ["Partner freshness and status visibility", "Privacy-preserving matching path", "Cross-agency campaign awareness"],
+      icon: <Network size={18} />,
     },
-  ];
+    trust: {
+      title: "Operational trust",
+      summary: "The platform exposes controls up front: MFA, RBAC, auditability, provenance, and explainability.",
+      bullets: ["Controlled provisioning only", "Scoped visibility by role and agency", "Evidence export and review-ready reporting"],
+      icon: <ShieldCheck size={18} />,
+    },
+  } as const;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -197,7 +206,7 @@ export default function LoginScreen({ onLogin }: Props) {
             <a href="#capabilities">Capabilities</a>
             <a href="#security">Security</a>
             <a href="#access-request">Access</a>
-            <button type="button" className="landing-btn nav" onClick={() => setAuthPanelOpen(true)}>
+            <button type="button" className="landing-btn landing-nav-btn" onClick={() => setAuthPanelOpen(true)}>
               Secure login
             </button>
           </div>
@@ -206,18 +215,17 @@ export default function LoginScreen({ onLogin }: Props) {
         <section className="landing-hero">
           <div className="landing-topline">
             <Sparkles size={14} />
-            <span>Designed for operational trust, not just dashboards</span>
+            <span>Sovereign AI for Kenyan operations</span>
           </div>
 
-          <div className="landing-hero-grid">
+          <div className="landing-hero-layout">
             <div className="landing-hero-copy">
               <h1 className="landing-title">
-                Kenya’s explainable graph intelligence layer for cyber, fraud, and economic integrity operations.
+                AI-guided cyber and fraud operations, built for Kenya.
               </h1>
               <p className="landing-lede">
-                Sentinel-KE unifies multi-source events, graph-native GNN scoring, federated intelligence, governed
-                response, and exportable evidence into one operational loop. It is built to help officers move from
-                signal to explanation to action without depending on foreign black-box platforms.
+                Sentinel-KE turns fragmented events into one operational loop: detect, explain, coordinate, and act.
+                It is designed for sovereign security teams that need trust, speed, and clear evidence.
               </p>
 
               <div className="landing-cta-row">
@@ -229,113 +237,99 @@ export default function LoginScreen({ onLogin }: Props) {
                 </a>
               </div>
 
-              <div className="landing-stat-grid">
-                <article className="landing-stat-card accent">
-                  <div className="landing-stat-label">Explainable GNN</div>
-                  <div className="landing-stat-value">Graph-based risk</div>
-                  <p>Entity scoring with confidence, uncertainty, path risk, and human-readable trust cues.</p>
-                </article>
-                <article className="landing-stat-card info">
-                  <div className="landing-stat-label">Federated by design</div>
-                  <div className="landing-stat-value">Cross-agency coordination</div>
-                  <p>Partners can correlate high-risk entities without dumping raw identifiers into a central pool.</p>
-                </article>
-                <article className="landing-stat-card success">
-                  <div className="landing-stat-label">Governed response</div>
-                  <div className="landing-stat-value">Action with controls</div>
-                  <p>Containment, evidence bundles, STIX export, audit trails, and access controls in one loop.</p>
-                </article>
+              <div className="landing-highlight-row">
+                <div className="landing-highlight-chip">GNN intelligence</div>
+                <div className="landing-highlight-chip">Fraud and cyber</div>
+                <div className="landing-highlight-chip">MFA and RBAC</div>
               </div>
             </div>
 
-            <div className="landing-media-stage">
-              <div className="landing-video-frame">
-                <iframe
-                  src={heroVideoUrl}
-                  title="Sentinel-KE ambient mission reel"
-                  allow="autoplay; encrypted-media; picture-in-picture"
-                  allowFullScreen
-                />
-                <div className="landing-video-overlay">
-                  <div className="landing-video-badge">
-                    <PlayCircle size={14} />
-                    <span>Ambient mission reel</span>
-                  </div>
-                  <div className="landing-video-copy">
-                    <strong>Operational picture</strong>
-                    <span>Use the CTA to open secure sign-in. Keep the landing page public, keep the workspace controlled.</span>
-                  </div>
+            <div className="landing-visual-panel" aria-hidden="true">
+              <div className="landing-radar-stage">
+                <div className="landing-radar-ring ring-one" />
+                <div className="landing-radar-ring ring-two" />
+                <div className="landing-radar-ring ring-three" />
+                <div className="landing-radar-sweep" />
+                <div className="landing-radar-node node-one" />
+                <div className="landing-radar-node node-two" />
+                <div className="landing-radar-node node-three" />
+                <div className="landing-radar-node node-four" />
+                <div className="landing-radar-core">
+                  <Shield size={24} />
                 </div>
               </div>
 
-              <div className="landing-media-grid">
-                {mediaCards.map((card) => (
-                  <figure key={card.title} className="landing-media-card">
-                    <img src={card.src} alt={card.title} loading="lazy" />
-                    <figcaption>
-                      <strong>{card.title}</strong>
-                      <span>{card.body}</span>
-                    </figcaption>
-                  </figure>
-                ))}
+              <div className="landing-visual-stack">
+                <article className="landing-visual-card accent">
+                  <span className="landing-visual-label">Live posture</span>
+                  <strong>Explainable graph scoring</strong>
+                  <p>Risk, confidence, uncertainty, and path context in one analyst view.</p>
+                </article>
+                <article className="landing-visual-card danger">
+                  <span className="landing-visual-label">Threat flow</span>
+                  <strong>Detect → explain → act</strong>
+                  <p>Campaigns, reports, and governed response without breaking chain-of-trust.</p>
+                </article>
               </div>
             </div>
           </div>
         </section>
 
         <section className="landing-section-block" id="capabilities">
-          <div className="landing-section-heading">
-            <span className="landing-section-kicker">Capabilities</span>
-            <h2>One operational workflow, from signal to action</h2>
-            <p>
-              Sentinel-KE is not just an alert viewer. It is an evidence-first intelligence workflow that supports
-              cyber operations, mobile-money fraud analysis, public-sector integrity review, and governed escalation.
-            </p>
+          <div className="landing-section-heading compact">
+            <span className="landing-section-kicker">Overview</span>
+            <h2>Explore the platform by mission lens</h2>
+            <p>Start with the brief. Open only the part you need.</p>
           </div>
 
-          <div className="landing-section-grid">
-            <article className="landing-story-card">
-              <div className="landing-story-icon"><Radar size={18} /></div>
-              <div>
-                <h3>1. Ingest and normalize</h3>
-                <p>Security telemetry, public threat intelligence, and sector signals are normalized into one canonical event model.</p>
+          <div className="landing-mode-tabs" role="tablist" aria-label="Platform overview">
+            {(Object.entries(overviewModes) as Array<[keyof typeof overviewModes, (typeof overviewModes)[keyof typeof overviewModes]]>).map(([key, item]) => (
+              <button
+                key={key}
+                type="button"
+                className={`landing-mode-tab ${activeOverview === key ? "active" : ""}`}
+                onClick={() => setActiveOverview(key)}
+              >
+                {item.icon}
+                <span>{item.title}</span>
+              </button>
+            ))}
+          </div>
+
+          <div className="landing-mode-panel">
+            <div className="landing-mode-panel-icon">
+              {overviewModes[activeOverview].icon}
+            </div>
+            <div className="landing-mode-panel-copy">
+              <h3>{overviewModes[activeOverview].title}</h3>
+              <p>{overviewModes[activeOverview].summary}</p>
+              <div className="landing-mode-bullets">
+                {overviewModes[activeOverview].bullets.map((bullet) => (
+                  <span key={bullet} className="landing-mode-bullet">{bullet}</span>
+                ))}
               </div>
-            </article>
-            <article className="landing-story-card">
-              <div className="landing-story-icon"><Network size={18} /></div>
-              <div>
-                <h3>2. Build relationship context</h3>
-                <p>The platform turns those signals into graph features so risk is understood in context, not as isolated alerts.</p>
-              </div>
-            </article>
-            <article className="landing-story-card">
-              <div className="landing-story-icon"><Workflow size={18} /></div>
-              <div>
-                <h3>3. Guide action and reporting</h3>
-                <p>Analysts move from entity explanation to campaign, case, report, and governed containment without leaving the workflow.</p>
-              </div>
-            </article>
+            </div>
           </div>
         </section>
 
         <section className="landing-section-block" id="security">
           <div className="landing-section-heading compact">
-            <span className="landing-section-kicker">Security Architecture</span>
-            <h2>Controlled access, accountable sessions, and scoped authority</h2>
+            <span className="landing-section-kicker">Trust Layer</span>
+            <h2>Controls that matter before the first click</h2>
           </div>
 
-          <div className="landing-security-grid">
+          <div className="landing-security-grid compact">
             <article className="landing-security-card">
               <div className="landing-security-head"><KeyRound size={16} /><span>MFA and identity assurance</span></div>
-              <p>Secure sign-in supports username/password plus authenticator codes, with sensitive operations gated behind stronger trust checks.</p>
+              <p>Controlled login, MFA, and stronger trust checks for sensitive actions.</p>
             </article>
             <article className="landing-security-card">
               <div className="landing-security-head"><FileLock2 size={16} /><span>RBAC and scoped visibility</span></div>
-              <p>Central and section users see different screens, actions, and reports, reducing overexposure of sensitive workflows.</p>
+              <p>Central and section users see only the screens and actions they should.</p>
             </article>
             <article className="landing-security-card">
               <div className="landing-security-head"><ShieldCheck size={16} /><span>Session and audit control</span></div>
-              <p>Access/refresh sessions, revocation on password or MFA changes, and audit-backed actions support accountable operations.</p>
+              <p>Session continuity, revocation, and auditable decisions built into the workflow.</p>
             </article>
           </div>
 
@@ -438,9 +432,9 @@ export default function LoginScreen({ onLogin }: Props) {
             </div>
             <ul className="landing-access-list">
               <li>Accounts are created by a central administrator. There is no public self-registration.</li>
-              <li>TOTP MFA is supported and can be demonstrated after enrollment from the authenticated workspace.</li>
-              <li>Role-based access separates central, section, admin, analyst, operator, and auditor capabilities.</li>
-              <li>Session continuity uses access and refresh tokens, with revocation on resets and MFA state changes.</li>
+              <li>TOTP MFA can be demonstrated after enrollment from the secure workspace.</li>
+              <li>RBAC separates central, section, admin, analyst, operator, and auditor capabilities.</li>
+              <li>Sessions use access and refresh tokens with revocation on resets and MFA state changes.</li>
             </ul>
 
             <div className="agency-register landing-agencies">
