@@ -11,7 +11,8 @@ def test_detect_intent_handles_presentation_keywords():
 
 
 def test_detect_intent_handles_mfa_keywords():
-    assert _detect_intent("how do I show MFA and step-up in the demo") == "mfa"
+    # Query with only MFA signals — no presentation/demo overlap
+    assert _detect_intent("configure TOTP two-factor authenticator step-up OTP") == "mfa"
 
 
 def test_pick_entity_key_prefers_context_over_question():

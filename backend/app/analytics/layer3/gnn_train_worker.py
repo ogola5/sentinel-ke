@@ -48,6 +48,7 @@ from app.analytics.layer3.gnn_model import (
     train_graphsage,
 )
 from app.analytics.layer3.post_prediction_pipeline import run_post_prediction_pipeline
+from app.analytics.layer3.worker_heartbeat import mark_worker_finished, mark_worker_started
 from app.campaign.models import Campaign, CampaignEntity
 from app.core.config import settings
 from app.core.security import compute_event_hash, sha256_hex, stable_json_dumps
@@ -65,6 +66,14 @@ LEGAL_RISK_NOTICE = (
 COMPONENT_CAMPAIGN_TYPE = "GNN_COMPONENT"
 COMPONENT_RULE_VERSION = "gnn.component.v1"
 log = logging.getLogger("sentinel.gnn_train_worker")
+
+
+def _label_source_counts(node_meta: Sequence[Mapping[str, object]]) -> Dict[str, int]:
+    out: Dict[str, int] = {}
+    for meta in node_meta or []:
+        source = str((meta or {}).get("label_source") or "weak_label")
+        out[source] = out.get(source, 0) + 1
+    return out
 
 
 def _ensure_ai_tables() -> None:
@@ -1305,6 +1314,8 @@ def run_once(
     allow_demo_fairness_override: bool = False,
 ) -> Dict[str, object]:
     _ensure_ai_tables()
+    heartbeat_meta = {"prediction_type": prediction_type, "window_key": window_key}
+    mark_worker_started(db, worker_name="gnn_train_worker", metadata=heartbeat_meta)
 
     try:
         dataset = load_dataset(
@@ -1319,10 +1330,13 @@ def run_once(
         )
     except Exception as exc:
         db.rollback()
+        mark_worker_finished(db, worker_name="gnn_train_worker", status="failed", detail=f"load_dataset:{exc}", metadata=heartbeat_meta)
         return {"status": "error", "stage": "load_dataset", "detail": str(exc)}
     if dataset is None:
+        mark_worker_finished(db, worker_name="gnn_train_worker", status="no_data", detail="no_dataset", metadata=heartbeat_meta)
         return {"status": "no_data", "created": 0, "updated": 0}
     if not dataset.feature_matrix or not dataset.feature_matrix[0]:
+        mark_worker_finished(db, worker_name="gnn_train_worker", status="no_data", detail="no_features", metadata=heartbeat_meta)
         return {"status": "no_features", "created": 0, "updated": 0}
 
     feedback_overrides = _latest_feedback_overrides(
@@ -1363,6 +1377,7 @@ def run_once(
         )
     except Exception as exc:
         db.rollback()
+        mark_worker_finished(db, worker_name="gnn_train_worker", status="failed", detail=f"train_graphsage:{exc}", metadata=heartbeat_meta)
         return {"status": "error", "stage": "train_graphsage", "detail": str(exc)}
 
     attribution_method, attribution_map = _compute_feature_attribution_map(
@@ -1374,6 +1389,7 @@ def run_once(
         temporal_decay=temporal_decay,
         max_nodes=int(settings.ai_explainability_max_nodes),
     )
+    label_source_counts = _label_source_counts(dataset.node_meta)
 
     try:
         thresholds = _calibrate_thresholds(
@@ -1409,6 +1425,7 @@ def run_once(
                     threshold,
                 )
                 db.rollback()
+                mark_worker_finished(db, worker_name="gnn_train_worker", status="blocked", detail="fairness_gate", metadata=heartbeat_meta)
                 return {
                     "status": "blocked",
                     "gate": "fairness",
@@ -1448,6 +1465,7 @@ def run_once(
                     min_real_ratio,
                 )
                 db.rollback()
+                mark_worker_finished(db, worker_name="gnn_train_worker", status="blocked", detail="real_data_gate", metadata=heartbeat_meta)
                 return {
                     "status": "blocked",
                     "gate": "real_data",
@@ -1537,34 +1555,37 @@ def run_once(
                 },
                 "label_strategy": {
                     "label_source": (
-                        "weak_plus_analyst_feedback"
-                        if feedback_metrics["override_count"] > 0
+                        "confirmed_operational_plus_feedback"
+                        if any(
+                            key in label_source_counts
+                            for key in ("confirmed_event_label", "operational_threat_alert", "analyst_feedback")
+                        )
                         else "heuristic_risk_flags"
                     ),
                     "label_quality": (
-                        "weak_with_feedback_overrides"
-                        if feedback_metrics["override_count"] > 0
+                        "mixed_supervision"
+                        if any(
+                            key in label_source_counts
+                            for key in ("confirmed_event_label", "operational_threat_alert", "analyst_feedback")
+                        )
                         else "weak"
                     ),
                     "feedback_override_count": feedback_metrics["override_count"],
                     "new_feedback_count": feedback_metrics["new_feedback_count"],
+                    "label_source_counts": label_source_counts,
                     "positive_definition": (
-                        "Entity has at least one risk flag (ddos_alert, campaign_entity, "
-                        "vpn_cluster_member, ddos_cluster_member) or exceeds event-count threshold. "
-                        "Analyst-confirmed feedback overrides the weak label when available. "
-                        "These are NOT confirmed incident labels from full ground-truth investigations."
+                        "Labels prefer confirmed event outcomes first, then high-confidence operational "
+                        "corroboration such as threat alerts, then analyst feedback overrides, and only "
+                        "then weak heuristics from risk flags and event-volume thresholds."
                     ),
                     "eval_caveat": (
-                        "AUC/F1/Precision/Recall metrics are computed on a holdout split of the "
-                        "same weak-label dataset used for training. They measure consistency with "
-                        "the heuristic label logic, NOT real-world detection accuracy against "
-                        "confirmed incidents. Do not use these numbers to claim world-class "
-                        "detection performance without external ground-truth validation."
+                        "AUC/F1/Precision/Recall metrics are still computed on a holdout split of the "
+                        "current supervision mix. They are stronger than pure weak-label consistency, "
+                        "but they are not yet equivalent to external validation on fully adjudicated incidents."
                     ),
                     "recommended_upgrade": (
-                        "Attach confirmed_incident boolean labels from DFIR investigation outcomes "
-                        "to event_log rows. Re-train with those as ground truth to obtain "
-                        "externally validated detection metrics."
+                        "Increase confirmed event outcomes and analyst dispositions in event_log or feedback "
+                        "records to keep reducing reliance on heuristic supervision."
                     ),
                 },
                 "explainability": {
@@ -1835,15 +1856,27 @@ def run_once(
         db.commit()
     except Exception as exc:
         db.rollback()
+        mark_worker_finished(db, worker_name="gnn_train_worker", status="failed", detail=f"persist:{exc}", metadata=heartbeat_meta)
         return {"status": "error", "stage": "persist", "detail": str(exc)}
 
-    post_pipeline = run_post_prediction_pipeline(
-        db=db,
-        prediction_type=prediction_type,
-        window_key=dataset.window_key,
-        window_end=dataset.window_end,
-        model_version=model_version,
-        seed_legal_bundles=True,
+    try:
+        post_pipeline = run_post_prediction_pipeline(
+            db=db,
+            prediction_type=prediction_type,
+            window_key=dataset.window_key,
+            window_end=dataset.window_end,
+            model_version=model_version,
+            seed_legal_bundles=True,
+        )
+    except Exception as exc:  # noqa: BLE001
+        mark_worker_finished(db, worker_name="gnn_train_worker", status="failed", detail=f"post_pipeline:{exc}", metadata=heartbeat_meta)
+        raise
+    mark_worker_finished(
+        db,
+        worker_name="gnn_train_worker",
+        status="ok",
+        detail="trained",
+        metadata={**heartbeat_meta, "window_end": dataset.window_end.isoformat(), "predictions_created": int(created), "predictions_updated": int(updated)},
     )
 
     return {

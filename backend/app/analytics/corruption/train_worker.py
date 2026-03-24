@@ -62,6 +62,8 @@ from app.analytics.layer3.gnn_train_worker import (
     _latest_feedback_overrides,
     _mark_feedback_consumed,
 )
+from app.analytics.layer3.post_prediction_pipeline import run_post_prediction_pipeline
+from app.analytics.layer3.worker_heartbeat import mark_worker_finished, mark_worker_started
 from app.analytics.explainability import (
     heuristic_signal_attributions,
     summarize_feature_attributions,
@@ -528,6 +530,8 @@ def run_once(
     Load corruption snapshot data, train SentinelGNN, write predictions.
     Returns a summary dict.
     """
+    heartbeat_meta = {"prediction_type": CORRUPTION_PREDICTION_TYPE, "window_key": window_key}
+    mark_worker_started(db, worker_name="corruption_train_worker", metadata=heartbeat_meta)
     # ── Load dataset ─────────────────────────────────────────────────
     dataset = _load_corruption_dataset(
         db,
@@ -538,8 +542,10 @@ def run_once(
         min_edge_weight = min_edge_weight,
     )
     if dataset is None:
+        mark_worker_finished(db, worker_name="corruption_train_worker", status="no_data", detail="no_dataset", metadata=heartbeat_meta)
         return {"status": "no_data", "message": "Run synthetic_corruption_data first"}
     if not dataset.feature_matrix:
+        mark_worker_finished(db, worker_name="corruption_train_worker", status="no_data", detail="no_features", metadata=heartbeat_meta)
         return {"status": "no_features"}
 
     feedback_overrides = _latest_feedback_overrides(
@@ -576,6 +582,7 @@ def run_once(
         )
     except Exception as exc:
         db.rollback()
+        mark_worker_finished(db, worker_name="corruption_train_worker", status="failed", detail=str(exc), metadata=heartbeat_meta)
         return {"status": "error", "stage": "train", "detail": str(exc)}
 
     # ── Save artifact ─────────────────────────────────────────────────
@@ -635,6 +642,7 @@ def run_once(
                     threshold,
                 )
                 db.rollback()
+                mark_worker_finished(db, worker_name="corruption_train_worker", status="blocked", detail="fairness_gate", metadata=heartbeat_meta)
                 return {
                     "status": "blocked",
                     "gate": "fairness",
@@ -670,6 +678,7 @@ def run_once(
                     min_real_ratio,
                 )
                 db.rollback()
+                mark_worker_finished(db, worker_name="corruption_train_worker", status="blocked", detail="real_data_gate", metadata=heartbeat_meta)
                 return {
                     "status": "blocked",
                     "gate": "real_data",
@@ -854,7 +863,28 @@ def run_once(
 
     except Exception as exc:  # noqa: BLE001
         db.rollback()
+        mark_worker_finished(db, worker_name="corruption_train_worker", status="failed", detail=str(exc), metadata=heartbeat_meta)
         return {"status": "error", "stage": "persist", "detail": str(exc)}
+
+    try:
+        post_pipeline = run_post_prediction_pipeline(
+            db=db,
+            prediction_type=CORRUPTION_PREDICTION_TYPE,
+            window_key=dataset.window_key,
+            window_end=dataset.window_end,
+            model_version=model_version,
+            seed_legal_bundles=False,
+        )
+    except Exception as exc:  # noqa: BLE001
+        mark_worker_finished(db, worker_name="corruption_train_worker", status="failed", detail=f"post_pipeline:{exc}", metadata=heartbeat_meta)
+        raise
+    mark_worker_finished(
+        db,
+        worker_name="corruption_train_worker",
+        status="ok",
+        detail="trained",
+        metadata={**heartbeat_meta, "window_end": dataset.window_end.isoformat(), "predictions": int(created)},
+    )
 
     return {
         "status":          "ok",
@@ -873,6 +903,7 @@ def run_once(
         "real_data_gate_override_applied": bool(real_data_gate_override_applied),
         "model_based_explanations": len(feature_contrib_by_idx) if 'feature_contrib_by_idx' in locals() else 0,
         "artifact_path":   artifact_path,
+        "post_pipeline":   post_pipeline,
         "metrics":         train_result.metrics,
         "legal_notice":    LEGAL_RISK_NOTICE,
     }

@@ -12,6 +12,7 @@ from app.analytics.ai_models import GraphFeatureSnapshot
 from app.analytics.infra_windows import last_minutes
 from app.analytics.ddos_alerts import DDoSAlert
 from app.analytics.layer3.ai_intel import event_types_to_attack_techniques, event_types_to_kill_chain_stage
+from app.analytics.layer3.worker_heartbeat import mark_worker_finished, mark_worker_started
 from app.campaign.models import CampaignEntity
 from app.ledger.infra_clusters import InfraCluster, InfraClusterMember
 from app.ledger.db import SessionLocal
@@ -172,9 +173,12 @@ def run_once(
     long_minutes: int = 30 * 24 * 60,
     max_entities: int = 5000,
 ) -> int:
+    heartbeat_meta = {"window_key": window_key or "all"}
+    mark_worker_started(db, worker_name="graph_feature_worker", metadata=heartbeat_meta)
     windows = _window_defs(short_minutes, mid_minutes, long_minutes)
     if window_key:
         if window_key not in windows:
+            mark_worker_finished(db, worker_name="graph_feature_worker", status="failed", detail=f"unknown_window_key:{window_key}", metadata=heartbeat_meta)
             raise ValueError(f"unknown window_key: {window_key}")
         windows = {window_key: windows[window_key]}
 
@@ -279,6 +283,13 @@ def run_once(
         total_upserts += res.rowcount or 0
 
     db.commit()
+    mark_worker_finished(
+        db,
+        worker_name="graph_feature_worker",
+        status="ok",
+        detail="snapshots_refreshed",
+        metadata={**heartbeat_meta, "upserts": int(total_upserts)},
+    )
     return total_upserts
 
 

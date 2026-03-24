@@ -96,6 +96,10 @@ class Settings:
     ai_explainability_top_k = int(os.environ.get("AI_EXPLAINABILITY_TOP_K", "6"))
     ai_explainability_max_nodes = int(os.environ.get("AI_EXPLAINABILITY_MAX_NODES", "64"))
     ai_explainability_ig_steps = int(os.environ.get("AI_EXPLAINABILITY_IG_STEPS", "24"))
+    ai_inference_allow_heuristic_fallback = env_bool(
+        "AI_INFERENCE_ALLOW_HEURISTIC_FALLBACK",
+        app_env == "development",
+    )
     ai_auto_containment_enabled = env_bool("AI_AUTO_CONTAINMENT_ENABLED", False)
     ai_auto_containment_min_score = float(os.environ.get("AI_AUTO_CONTAINMENT_MIN_SCORE", "90.0"))
     ai_auto_containment_max_actions_per_run = int(
@@ -114,6 +118,8 @@ class Settings:
     ai_auto_containment_cooldown_minutes = int(
         os.environ.get("AI_AUTO_CONTAINMENT_COOLDOWN_MINUTES", "30")
     )
+    ai_worker_warn_after_minutes = int(os.environ.get("AI_WORKER_WARN_AFTER_MINUTES", "15"))
+    ai_worker_fail_after_minutes = int(os.environ.get("AI_WORKER_FAIL_AFTER_MINUTES", "60"))
 
     # ---------------------------------------------------------
     # Edge / station deployment

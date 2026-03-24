@@ -1,4 +1,5 @@
 from app.analytics.layer3.gnn_backbone import (
+    _extract_truth_label,
     build_feature_vector,
     collapse_edges,
     entity_key_to_neo4j_ref,
@@ -75,3 +76,15 @@ def test_entity_key_to_neo4j_ref_mapping():
     assert entity_key_to_neo4j_ref("service_id:core-payments") == ("Service", "core-payments")
     assert entity_key_to_neo4j_ref("account_h:abc123") == ("Account", "account_h:abc123")
     assert entity_key_to_neo4j_ref("unknown:x1") is None
+
+
+def test_extract_truth_label_accepts_confirmed_positive_variants():
+    assert _extract_truth_label({"confirmed_incident": True}) == 1
+    assert _extract_truth_label({"ground_truth_label": "malicious"}) == 1
+    assert _extract_truth_label({"incident_disposition": "true_positive"}) == 1
+
+
+def test_extract_truth_label_accepts_confirmed_negative_variants():
+    assert _extract_truth_label({"confirmed_benign": True}) == 0
+    assert _extract_truth_label({"ground_truth_label": "benign"}) == 0
+    assert _extract_truth_label({"case_outcome": "false_positive"}) == 0

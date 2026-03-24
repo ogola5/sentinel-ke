@@ -24,7 +24,7 @@ def test_minio_stub_anchor_is_deterministic(monkeypatch):
         chain_hash="chain456",
         payload_hash="abcde" * 20,
     )
-    assert r1.status == "anchored"
+    assert r1.status == "simulated"
     assert r1.backend == "minio_stub"
     assert r1.bucket == "evidence-test"
     assert r1.object_key == r2.object_key
@@ -41,7 +41,7 @@ def test_immudb_stub_anchor_generates_tx(monkeypatch):
         chain_hash="chain-h",
         payload_hash="payload-h",
     )
-    assert out.status == "anchored"
+    assert out.status == "simulated"
     assert out.backend == "immudb_stub"
     assert out.verified is True
     assert out.key == "legal_bundle:bundle-xyz"

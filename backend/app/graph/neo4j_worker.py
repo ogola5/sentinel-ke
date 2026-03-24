@@ -7,6 +7,7 @@ from typing import Dict, List, Tuple
 from neo4j import Driver
 from sqlalchemy.orm import Session
 
+from app.analytics.layer3.worker_heartbeat import mark_worker_finished, mark_worker_started
 from app.graph.neo4j_driver import get_driver
 from app.graph.neo4j_schema import ensure_schema
 from app.graph.delta_store import DeltaStore
@@ -185,6 +186,7 @@ def run_once(batch_size: int = 500) -> int:
 
     db: Session = SessionLocal()
     store = DeltaStore(db)
+    mark_worker_started(db, worker_name="neo4j_worker", metadata={"batch_size": int(batch_size)})
 
     driver = get_driver()
     ensure_schema(driver, database)
@@ -192,6 +194,7 @@ def run_once(batch_size: int = 500) -> int:
     after = store.get_cursor("neo4j")
     batch = store.fetch_batch(after=after, limit=batch_size)
     if not batch:
+        mark_worker_finished(db, worker_name="neo4j_worker", status="idle", detail="no_deltas", metadata={"batch_size": int(batch_size)})
         driver.close()
         db.close()
         return 0
@@ -211,6 +214,7 @@ def run_once(batch_size: int = 500) -> int:
         store.set_cursor(row.created_at, "neo4j")
 
     driver.close()
+    mark_worker_finished(db, worker_name="neo4j_worker", status="ok", detail="projection_applied", metadata={"processed": int(processed)})
     db.close()
     return processed
 

@@ -91,9 +91,13 @@ def _register_operational_routes(app: FastAPI) -> None:
         gnn_loaded = False
         gnn_model_version = None
         gnn_metrics: dict = {}
+        latest_prediction_source = None
+        latest_prediction_type = None
+        worker_freshness: list[dict] = []
         federation_partners = 0
         try:
-            from app.analytics.ai_models import GNNTrainingRun  # noqa: PLC0415
+            from app.analytics.ai_models import AIPrediction, GNNTrainingRun  # noqa: PLC0415
+            from app.analytics.layer3.worker_heartbeat import summarize_worker_freshness  # noqa: PLC0415
             from app.federation.models import FederationPartner   # noqa: PLC0415
             db = SessionLocal()
             try:
@@ -120,6 +124,22 @@ def _register_operational_routes(app: FastAPI) -> None:
                         "real_data_gate_passed": bool(real_data_gate.get("passed", False)),
                         "real_ratio": float(provenance.get("real_ratio") or 0.0),
                     }
+                latest_prediction = db.query(AIPrediction).order_by(AIPrediction.created_at.desc()).first()
+                if latest_prediction:
+                    latest_prediction_source = str(latest_prediction.decision_source or "unknown")
+                    latest_prediction_type = str(latest_prediction.prediction_type or "unknown")
+                worker_freshness = summarize_worker_freshness(
+                    db,
+                    worker_names=[
+                        "neo4j_worker",
+                        "graph_feature_worker",
+                        "gnn_train_worker",
+                        "corruption_train_worker",
+                        "ai_inference_worker",
+                    ],
+                    warn_after_minutes=int(settings.ai_worker_warn_after_minutes),
+                    fail_after_minutes=int(settings.ai_worker_fail_after_minutes),
+                )
                 federation_partners = (
                     db.query(FederationPartner)
                     .filter(FederationPartner.is_active == True)  # noqa: E712
@@ -149,6 +169,10 @@ def _register_operational_routes(app: FastAPI) -> None:
             "gnn_loaded":           gnn_loaded,
             "gnn_model_version":    gnn_model_version,
             "gnn_metrics":          gnn_metrics,
+            "latest_prediction_source": latest_prediction_source,
+            "latest_prediction_type": latest_prediction_type,
+            "heuristic_fallback_allowed": bool(settings.ai_inference_allow_heuristic_fallback),
+            "worker_freshness": worker_freshness,
             "federation_partners":  federation_partners,
             "schema_contract_ok":   bool(schema_status.get("ok")),
             "schema_missing_count": int(schema_status.get("missing_count") or 0),

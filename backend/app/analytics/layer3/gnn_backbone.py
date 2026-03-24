@@ -36,6 +36,7 @@ from sqlalchemy import func, text
 from sqlalchemy.orm import Session
 
 from app.analytics.ai_models import GraphFeatureSnapshot
+from app.analytics.layer3.cyber_relations import typed_edges_from_postgres as typed_cyber_edges_from_postgres
 from app.graph.neo4j_driver import get_driver
 
 
@@ -152,6 +153,114 @@ def weak_label(
     if event_count >= 25 and source_count >= 3:
         return 1
     return 0
+
+
+def _boolish(value: Any) -> Optional[bool]:
+    if isinstance(value, bool):
+        return value
+    raw = str(value or "").strip().lower()
+    if raw in {"1", "true", "yes", "y", "positive", "malicious", "confirmed_positive"}:
+        return True
+    if raw in {"0", "false", "no", "n", "negative", "benign", "false_positive", "confirmed_negative"}:
+        return False
+    return None
+
+
+def _extract_truth_label(payload: Dict[str, Any]) -> Optional[int]:
+    if not isinstance(payload, dict):
+        return None
+    for key in ("confirmed_incident", "confirmed_malicious", "ground_truth", "ground_truth_label", "label"):
+        value = _boolish(payload.get(key))
+        if value is not None:
+            return 1 if value else 0
+    for key in ("confirmed_benign", "confirmed_negative"):
+        value = _boolish(payload.get(key))
+        if value is not None:
+            return 0 if value else 1
+    status = str(
+        payload.get("incident_disposition")
+        or payload.get("case_outcome")
+        or payload.get("verdict")
+        or payload.get("status")
+        or ""
+    ).strip().lower()
+    if status in {"confirmed_incident", "malicious", "compromised", "fraud", "true_positive"}:
+        return 1
+    if status in {"benign", "false_positive", "resolved_benign", "cleared"}:
+        return 0
+    return None
+
+
+def _confirmed_label_overrides(
+    db: Session,
+    *,
+    entity_keys: Sequence[str],
+    window_start: datetime,
+    window_end: datetime,
+) -> Dict[str, Dict[str, Any]]:
+    keys = [str(k) for k in dict.fromkeys(entity_keys or []) if k]
+    if not keys:
+        return {}
+
+    out: Dict[str, Dict[str, Any]] = {}
+    rows = db.execute(
+        text(
+            """
+            SELECT ee.entity_key, el.event_type, el.payload_json
+            FROM event_entity_index ee
+            JOIN event_log el ON el.event_hash = ee.event_hash
+            WHERE ee.entity_key = ANY(:entity_keys)
+              AND el.occurred_at >= :window_start
+              AND el.occurred_at <= :window_end
+            """
+        ),
+        {
+            "entity_keys": keys,
+            "window_start": window_start,
+            "window_end": window_end,
+        },
+    ).fetchall()
+    for entity_key, event_type, payload_json in rows:
+        label = _extract_truth_label(dict(payload_json or {}))
+        if label is None:
+            continue
+        out[str(entity_key)] = {
+            "label": int(label),
+            "label_source": "confirmed_event_label",
+            "label_evidence": f"event:{event_type}",
+        }
+
+    try:
+        alert_rows = db.execute(
+            text(
+                """
+                SELECT entity_key, MAX(score) AS max_score
+                FROM threat_alert
+                WHERE entity_key = ANY(:entity_keys)
+                  AND window_end >= :window_start
+                  AND window_end <= :window_end
+                  AND severity IN ('high', 'critical')
+                GROUP BY entity_key
+                """
+            ),
+            {
+                "entity_keys": keys,
+                "window_start": window_start,
+                "window_end": window_end,
+            },
+        ).fetchall()
+        for entity_key, max_score in alert_rows:
+            key = str(entity_key)
+            if key in out:
+                continue
+            out[key] = {
+                "label": 1,
+                "label_source": "operational_threat_alert",
+                "label_evidence": f"threat_alert:{round(float(max_score or 0.0), 2)}",
+            }
+    except Exception:  # noqa: BLE001
+        pass
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -368,6 +477,61 @@ def _edges_from_postgres(
     return [(str(r[0]), str(r[1]), float(r[2] or 0.0)) for r in rows]
 
 
+def build_graph_edges(
+    db: Session,
+    *,
+    entity_keys: List[str],
+    window_start: datetime,
+    window_end: datetime,
+    edge_backend: str,
+    min_edge_weight: int,
+    max_edges: int,
+) -> Tuple[List[Tuple[str, str, float]], Dict[str, int], str]:
+    raw_edges: List[Tuple[str, str, float]] = []
+    edge_source_counts: Dict[str, int] = {}
+    backend_used: List[str] = []
+    backend = (edge_backend or "hybrid").lower().strip()
+
+    if backend in {"neo4j", "hybrid"}:
+        try:
+            neo_edges = _edges_from_neo4j(entity_keys=entity_keys, max_edges=max_edges)
+            raw_edges.extend(neo_edges)
+            edge_source_counts["neo4j"] = len(neo_edges)
+            if neo_edges:
+                backend_used.append("neo4j")
+        except Exception:  # noqa: BLE001
+            edge_source_counts["neo4j"] = 0
+            if backend == "neo4j":
+                raise
+
+    if backend in {"postgres", "hybrid"}:
+        pg_edges = _edges_from_postgres(
+            db,
+            entity_keys=entity_keys,
+            window_start=window_start,
+            window_end=window_end,
+            min_edge_weight=min_edge_weight,
+            max_edges=max_edges,
+        )
+        typed_edges = typed_cyber_edges_from_postgres(
+            db,
+            entity_keys=entity_keys,
+            window_start=window_start,
+            window_end=window_end,
+            max_events=max_edges,
+        )
+        raw_edges.extend(pg_edges)
+        raw_edges.extend(typed_edges)
+        edge_source_counts["postgres"] = len(pg_edges)
+        edge_source_counts["cyber_relations"] = len(typed_edges)
+        if pg_edges or typed_edges:
+            backend_used.append("postgres")
+
+    collapsed = collapse_edges(raw_edges)
+    used = "+".join(sorted(set(backend_used))) if backend_used else "none"
+    return collapsed[:max_edges], edge_source_counts, used
+
+
 def _parse_entity_key(entity_key: str) -> Tuple[str, str]:
     if ":" not in entity_key:
         return entity_key, ""
@@ -525,6 +689,14 @@ def load_dataset(
     if not snapshots:
         return None
 
+    window_start = snapshots[0].window_start
+    label_overrides = _confirmed_label_overrides(
+        db,
+        entity_keys=[str(s.entity_key) for s in snapshots],
+        window_start=window_start,
+        window_end=window_end,
+    )
+
     entries: List[Dict[str, Any]] = []
     for s in snapshots:
         risk_flags   = list(s.risk_flags or [])
@@ -542,10 +714,15 @@ def load_dataset(
             real_signal_ratio = 0.0
         source_count = int(features_raw.get("source_count") or 0)
         event_count  = int(s.event_count or 0)
-        label        = weak_label(
-            risk_flags=risk_flags,
-            event_count=event_count,
-            source_count=source_count,
+        label_override = dict(label_overrides.get(str(s.entity_key)) or {})
+        label = int(
+            label_override.get("label")
+            if "label" in label_override
+            else weak_label(
+                risk_flags=risk_flags,
+                event_count=event_count,
+                source_count=source_count,
+            )
         )
         entries.append({
             "snap":          s,
@@ -566,6 +743,8 @@ def load_dataset(
             "first_seen":    s.first_seen,
             "last_seen":     s.last_seen,
             "label":         label,
+            "label_source":  str(label_override.get("label_source") or "weak_label"),
+            "label_evidence": str(label_override.get("label_evidence") or ""),
             "is_benign": _is_benign_candidate(
                 risk_flags=risk_flags,
                 event_count=event_count,
@@ -640,43 +819,22 @@ def load_dataset(
             "source_type_counts": e["source_type_counts"],
             "provenance_tag":    e["provenance_tag"],
             "real_signal_ratio": e["real_signal_ratio"],
+            "label_source":      e["label_source"],
+            "label_evidence":    e["label_evidence"],
             "is_benign_negative": bool(e["label"] == 0 and e["is_benign"]),
         })
 
     key_to_idx = {k: i for i, k in enumerate(entity_keys)}
 
-    raw_edges: List[Tuple[str, str, float]] = []
-    backend = (edge_backend or "hybrid").lower().strip()
-    edge_source_counts: Dict[str, int] = {}
-    backend_used: List[str] = []
-
-    if backend in {"neo4j", "hybrid"}:
-        try:
-            neo_edges = _edges_from_neo4j(entity_keys=entity_keys, max_edges=max_edges)
-            raw_edges.extend(neo_edges)
-            edge_source_counts["neo4j"] = len(neo_edges)
-            if neo_edges:
-                backend_used.append("neo4j")
-        except Exception:  # noqa: BLE001
-            edge_source_counts["neo4j"] = 0
-            if backend == "neo4j":
-                raise
-
-    if backend in {"postgres", "hybrid"}:
-        pg_edges = _edges_from_postgres(
-            db,
-            entity_keys=entity_keys,
-            window_start=selected[0]["snap"].window_start,
-            window_end=window_end,
-            min_edge_weight=min_edge_weight,
-            max_edges=max_edges,
-        )
-        raw_edges.extend(pg_edges)
-        edge_source_counts["postgres"] = len(pg_edges)
-        if pg_edges:
-            backend_used.append("postgres")
-
-    collapsed = collapse_edges(raw_edges)
+    collapsed, edge_source_counts, used = build_graph_edges(
+        db,
+        entity_keys=entity_keys,
+        window_start=selected[0]["snap"].window_start,
+        window_end=window_end,
+        edge_backend=edge_backend,
+        min_edge_weight=min_edge_weight,
+        max_edges=max_edges,
+    )
     edges: List[Tuple[int, int, float]] = []
     for src, dst, w in collapsed[:max_edges]:
         i = key_to_idx.get(src)
@@ -690,7 +848,6 @@ def load_dataset(
         for i in range(len(entity_keys) - 1):
             edges.append((i, i + 1, 1.0))
 
-    used = "+".join(sorted(set(backend_used))) if backend_used else "none"
     benign_count = sum(1 for m, lbl in zip(node_meta, labels)
                        if lbl == 0 and m.get("is_benign_negative"))
 

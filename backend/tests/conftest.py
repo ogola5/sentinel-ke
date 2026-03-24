@@ -10,7 +10,14 @@ Slow tests (> 5s):
 
 CI runs with -m 'not integration and not slow' so only fast unit tests execute.
 """
+import os
+
 import pytest
+
+# Stub DATABASE_URL so modules that call app.ledger.db at import time don't
+# raise RuntimeError("DATABASE_URL not set").  All DB interactions in unit tests
+# are mocked; this value is never used to open a real connection.
+os.environ.setdefault("DATABASE_URL", "postgresql://test:test@localhost/sentinel_test")
 
 
 def pytest_configure(config):

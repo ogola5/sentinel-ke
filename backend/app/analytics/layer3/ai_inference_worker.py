@@ -50,10 +50,11 @@ from app.analytics.explainability import (
 )
 from app.analytics.layer3.gnn_backbone import (
     FEATURE_DIM,
-    _edges_from_postgres,
+    build_graph_edges,
     build_feature_vector,
 )
 from app.analytics.layer3.post_prediction_pipeline import run_post_prediction_pipeline
+from app.analytics.layer3.worker_heartbeat import mark_worker_finished, mark_worker_started
 from app.core.config import settings
 from app.ledger.db import SessionLocal
 
@@ -406,13 +407,21 @@ def _load_gnn_artifact(
         .first()
     )
     if not run or not run.artifact_path:
-        log.info("gnn_artifact_not_found prediction_type=%s window_key=%s — using heuristic",
-                 prediction_type, window_key)
+        log.info(
+            "gnn_artifact_not_found prediction_type=%s window_key=%s fallback_allowed=%s",
+            prediction_type,
+            window_key,
+            bool(settings.ai_inference_allow_heuristic_fallback),
+        )
         return None
 
     artifact_path = str(run.artifact_path)
     if not Path(artifact_path).exists():
-        log.warning("gnn_artifact_missing path=%s", artifact_path)
+        log.warning(
+            "gnn_artifact_missing path=%s fallback_allowed=%s",
+            artifact_path,
+            bool(settings.ai_inference_allow_heuristic_fallback),
+        )
         return None
 
     try:
@@ -420,7 +429,12 @@ def _load_gnn_artifact(
         payload = torch.load(artifact_path, map_location="cpu", weights_only=False)
         return payload, artifact_path, str(run.model_version)
     except Exception as exc:  # noqa: BLE001
-        log.warning("gnn_artifact_load_failed path=%s error=%s", artifact_path, exc)
+        log.warning(
+            "gnn_artifact_load_failed path=%s error=%s fallback_allowed=%s",
+            artifact_path,
+            exc,
+            bool(settings.ai_inference_allow_heuristic_fallback),
+        )
         return None
 
 
@@ -540,11 +554,12 @@ def _run_gnn_path(
     window_start  = min(s.window_start for s in snapshots)
     window_end_ts = max(s.window_end   for s in snapshots)
 
-    raw_edges = _edges_from_postgres(
+    raw_edges, _, _ = build_graph_edges(
         db,
         entity_keys=entity_keys,
         window_start=window_start,
         window_end=window_end_ts,
+        edge_backend=str(settings.gnn_edge_backend or "hybrid"),
         min_edge_weight=1,
         max_edges=30_000,
     )
@@ -739,7 +754,7 @@ def run_once(
     db: Session,
     window_key:      str = "Wshort",
     window_end:      Optional[datetime] = None,
-    prediction_type: str = "risk",
+    prediction_type: str = "risk_gnn",
     max_entities:    int = 5000,
     evidence_limit:  int = 20,
 ) -> int:
@@ -751,71 +766,123 @@ def run_once(
     - PyTorch not installed
     - Artifact file missing or corrupt
     """
-    if window_end is None:
-        window_end = _latest_window_end(db, window_key)
-    if window_end is None:
-        return 0
-
-    rollout = _active_rollout(db, prediction_type)
-
-    snapshots = (
-        db.query(GraphFeatureSnapshot)
-        .filter(GraphFeatureSnapshot.window_key == window_key)
-        .filter(GraphFeatureSnapshot.window_end == window_end)
-        .limit(max_entities)
-        .all()
-    )
-    if not snapshots:
-        return 0
-
-    # Attempt GNN path
-    written = 0
-    artifact_info = _load_gnn_artifact(db, prediction_type, window_key)
-    if artifact_info is not None:
-        payload, _, model_version = artifact_info
-        written = _run_gnn_path(
-            db,
-            snapshots       = snapshots,
-            artifact_payload = payload,
-            model_version   = model_version,
-            prediction_type = prediction_type,
-            rollout         = rollout,
-            evidence_limit  = evidence_limit,
-        )
-        if written < 0:
-            written = 0
-        else:
-            post = run_post_prediction_pipeline(
-                db=db,
-                prediction_type=prediction_type,
-                window_key=window_key,
-                window_end=window_end,
-                model_version=model_version,
-                seed_legal_bundles=False,
+    heartbeat_meta = {"prediction_type": prediction_type, "window_key": window_key}
+    mark_worker_started(db, worker_name="ai_inference_worker", metadata=heartbeat_meta)
+    try:
+        if window_end is None:
+            window_end = _latest_window_end(db, window_key)
+        if window_end is None:
+            mark_worker_finished(
+                db,
+                worker_name="ai_inference_worker",
+                status="no_data",
+                detail="no_window_end",
+                metadata=heartbeat_meta,
             )
-            log.info("post_prediction_pipeline_done prediction_type=%s window_key=%s post=%s", prediction_type, window_key, post)
-            return written
+            return 0
 
-    # Heuristic fallback
-    log.info("inference_using_heuristic window_key=%s entities=%d",
-             window_key, len(snapshots))
-    written = _run_heuristic_path(
-        db,
-        snapshots       = snapshots,
-        prediction_type = prediction_type,
-        rollout         = rollout,
-        evidence_limit  = evidence_limit,
-    )
-    post = run_post_prediction_pipeline(
-        db=db,
-        prediction_type=prediction_type,
-        window_key=window_key,
-        window_end=window_end,
-        model_version=str(rollout.get("active_model_version") or "heuristic-v1"),
-        seed_legal_bundles=False,
-    )
-    log.info("post_prediction_pipeline_done prediction_type=%s window_key=%s post=%s", prediction_type, window_key, post)
-    return written
+        rollout = _active_rollout(db, prediction_type)
+
+        snapshots = (
+            db.query(GraphFeatureSnapshot)
+            .filter(GraphFeatureSnapshot.window_key == window_key)
+            .filter(GraphFeatureSnapshot.window_end == window_end)
+            .limit(max_entities)
+            .all()
+        )
+        if not snapshots:
+            mark_worker_finished(
+                db,
+                worker_name="ai_inference_worker",
+                status="no_data",
+                detail="no_snapshots",
+                metadata={**heartbeat_meta, "window_end": window_end.isoformat()},
+            )
+            return 0
+
+        artifact_info = _load_gnn_artifact(db, prediction_type, window_key)
+        if artifact_info is not None:
+            payload, _, model_version = artifact_info
+            written = _run_gnn_path(
+                db,
+                snapshots=snapshots,
+                artifact_payload=payload,
+                model_version=model_version,
+                prediction_type=prediction_type,
+                rollout=rollout,
+                evidence_limit=evidence_limit,
+            )
+            if written >= 0:
+                post = run_post_prediction_pipeline(
+                    db=db,
+                    prediction_type=prediction_type,
+                    window_key=window_key,
+                    window_end=window_end,
+                    model_version=model_version,
+                    seed_legal_bundles=False,
+                )
+                log.info("post_prediction_pipeline_done prediction_type=%s window_key=%s post=%s", prediction_type, window_key, post)
+                mark_worker_finished(
+                    db,
+                    worker_name="ai_inference_worker",
+                    status="ok",
+                    detail="gnn",
+                    metadata={**heartbeat_meta, "window_end": window_end.isoformat(), "decision_source": "gnn", "predictions_written": int(written)},
+                )
+                return written
+
+        if not bool(settings.ai_inference_allow_heuristic_fallback):
+            log.error(
+                "inference_blocked_no_gnn_artifact prediction_type=%s window_key=%s fallback_allowed=false",
+                prediction_type,
+                window_key,
+            )
+            mark_worker_finished(
+                db,
+                worker_name="ai_inference_worker",
+                status="blocked",
+                detail="missing_or_invalid_gnn_artifact",
+                metadata={**heartbeat_meta, "window_end": window_end.isoformat(), "decision_source": "blocked"},
+            )
+            return 0
+
+        log.info("inference_using_heuristic window_key=%s entities=%d", window_key, len(snapshots))
+        written = _run_heuristic_path(
+            db,
+            snapshots=snapshots,
+            prediction_type=prediction_type,
+            rollout=rollout,
+            evidence_limit=evidence_limit,
+        )
+        post = run_post_prediction_pipeline(
+            db=db,
+            prediction_type=prediction_type,
+            window_key=window_key,
+            window_end=window_end,
+            model_version=str(rollout.get("active_model_version") or "heuristic-v1"),
+            seed_legal_bundles=False,
+        )
+        log.info("post_prediction_pipeline_done prediction_type=%s window_key=%s post=%s", prediction_type, window_key, post)
+        mark_worker_finished(
+            db,
+            worker_name="ai_inference_worker",
+            status="ok",
+            detail="heuristic",
+            metadata={**heartbeat_meta, "window_end": window_end.isoformat(), "decision_source": "heuristic", "predictions_written": int(written)},
+        )
+        return written
+    except Exception as exc:
+        try:
+            mark_worker_finished(
+                db,
+                worker_name="ai_inference_worker",
+                status="failed",
+                detail=str(exc),
+                metadata=heartbeat_meta,
+            )
+        except Exception:  # noqa: BLE001
+            pass
+        raise
 
 
 def main() -> None:
@@ -825,7 +892,7 @@ def main() -> None:
     p = argparse.ArgumentParser(description="Sentinel-KE AI inference worker")
     p.add_argument("--window-key",      default="Wshort")
     p.add_argument("--window-end",      default=None, help="ISO timestamp override")
-    p.add_argument("--prediction-type", default="risk")
+    p.add_argument("--prediction-type", default=settings.gnn_prediction_type or "risk_gnn")
     p.add_argument("--max-entities",    type=int, default=5000)
     p.add_argument("--evidence-limit",  type=int, default=20)
     args = p.parse_args()

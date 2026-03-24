@@ -20,6 +20,7 @@ from app.analytics.ai_models import (
     ThreatIntelIndicator,
 )
 from app.analytics.layer3.ai_intel import techniques_to_tools
+from app.analytics.layer3.worker_heartbeat import summarize_worker_freshness
 from app.campaign.models import Campaign, CampaignEntity, CampaignEvent
 from app.defense.models import BackupAttestation, ContainmentAction, ContainmentWebhook, IncidentPlaybookRun, RestoreDrill
 from app.legal.models import LegalEvidenceBundle
@@ -605,6 +606,16 @@ def build_platform_trust_summary(db: Session) -> dict[str, Any]:
     restore_status = "pass" if latest_restore and latest_restore.success else ("warn" if latest_restore else "fail")
 
     source_count = len({row[0] for row in db.query(ThreatIntelIndicator.source).distinct().all() if row[0]})
+    worker_freshness = summarize_worker_freshness(
+        db,
+        worker_names=[
+            "neo4j_worker",
+            "graph_feature_worker",
+            "gnn_train_worker",
+            "corruption_train_worker",
+            "ai_inference_worker",
+        ],
+    )
 
     model_summaries: list[dict[str, Any]] = []
     checks: list[dict[str, Any]] = []
@@ -642,6 +653,11 @@ def build_platform_trust_summary(db: Session) -> dict[str, Any]:
                 "drift_status": drift_state,
                 "rollout_mode": rollout.rollout_mode if rollout else None,
                 "rollout_status": rollout.status if rollout else None,
+                "latest_prediction_source": (
+                    str(latest_prediction.decision_source or "unknown")
+                    if latest_prediction and latest_prediction.prediction_type == prediction_type
+                    else None
+                ),
                 "label_caveat": str(((run.metrics_json or {}).get("label_strategy") or {}).get("eval_caveat") or "") if run else "",
                 "status": status,
             }
@@ -681,6 +697,31 @@ def build_platform_trust_summary(db: Session) -> dict[str, Any]:
                 action="Record a fresh backup attestation and one successful restore drill." if backup_attestations_30d == 0 or restore_status != "pass" else None,
             ),
         ]
+    )
+    worker_problem = next((w for w in worker_freshness if str(w.get("freshness")) != "pass"), None)
+    checks.append(
+        _trust_check(
+            "Worker freshness",
+            (
+                "warn"
+                if not worker_freshness
+                else ("pass" if not worker_problem else ("warn" if str(worker_problem.get("freshness")) == "warn" else "fail"))
+            ),
+            (
+                "No worker heartbeat records have been captured yet."
+                if not worker_freshness
+                else (
+                    "All core analytics workers are fresh."
+                    if not worker_problem
+                    else f"{worker_problem.get('worker_name')} is {worker_problem.get('freshness')} with last status {worker_problem.get('last_status')}."
+                )
+            ),
+            action=(
+                "Run the core analytics workers once so freshness can be measured."
+                if not worker_freshness
+                else ("Refresh the stale worker before relying on live analytics." if worker_problem else None)
+            ),
+        )
     )
 
     for summary in model_summaries:
@@ -722,6 +763,7 @@ def build_platform_trust_summary(db: Session) -> dict[str, Any]:
             "graph_age_hours": graph_age_hours,
             "intel_age_hours": intel_age_hours,
             "latest_prediction_at": latest_prediction.created_at.isoformat() if latest_prediction else None,
+            "latest_prediction_source": str(latest_prediction.decision_source or "unknown") if latest_prediction else None,
             "latest_explanation_at": latest_explanation.created_at.isoformat() if latest_explanation else None,
             "latest_graph_snapshot_at": latest_snapshot.created_at.isoformat() if latest_snapshot else None,
             "latest_threat_intel_at": latest_threat_intel.updated_at.isoformat() if latest_threat_intel else None,
@@ -739,6 +781,7 @@ def build_platform_trust_summary(db: Session) -> dict[str, Any]:
             "latest_restore_at": latest_restore.created_at.isoformat() if latest_restore else None,
         },
         "model_governance": model_summaries,
+        "worker_freshness": worker_freshness,
         "checks": checks,
         "recommended_actions": list(dict.fromkeys(recommended_actions))[:6],
         "generated_at": now.isoformat(),

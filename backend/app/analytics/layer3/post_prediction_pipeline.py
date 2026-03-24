@@ -21,6 +21,14 @@ def run_post_prediction_pipeline(
     seed_legal_bundles: bool = False,
 ) -> Dict[str, object]:
     out: Dict[str, object] = {
+        "component_campaigns": {
+            "campaigns_created": 0,
+            "campaigns_updated": 0,
+            "entities_upserted": 0,
+            "components_considered": 0,
+            "indicators_created": 0,
+            "indicators_updated": 0,
+        },
         "path_scores_upserted": 0,
         "decision_fusions_upserted": 0,
         "drift_status": "not_run",
@@ -29,8 +37,20 @@ def run_post_prediction_pipeline(
         "legal_bundle_seed": {"status": "not_run", "created_count": 0},
     }
 
-    if prediction_type != "risk_gnn":
+    if prediction_type not in {"risk_gnn", "corruption_risk"}:
         return out
+
+    try:
+        from app.analytics.layer3.component_campaign_worker import run_once as run_component_campaigns  # noqa: PLC0415
+
+        out["component_campaigns"] = run_component_campaigns(
+            db=db,
+            prediction_type=prediction_type,
+            window_key=window_key,
+            window_end=window_end,
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("post_pipeline_component_campaigns_failed err=%s", exc)
 
     try:
         from app.analytics.layer3.path_risk_worker import run_once as run_path_risk  # noqa: PLC0415
@@ -76,7 +96,7 @@ def run_post_prediction_pipeline(
     except Exception as exc:  # noqa: BLE001
         log.warning("post_pipeline_drift_failed err=%s", exc)
 
-    if bool(settings.ai_auto_containment_enabled):
+    if prediction_type == "risk_gnn" and bool(settings.ai_auto_containment_enabled):
         try:
             from app.analytics.layer3.auto_containment_worker import run_once as run_auto_containment  # noqa: PLC0415
 
@@ -89,7 +109,7 @@ def run_post_prediction_pipeline(
         except Exception as exc:  # noqa: BLE001
             log.warning("post_pipeline_auto_containment_failed err=%s", exc)
 
-    if seed_legal_bundles and bool(settings.legal_auto_bundle_enabled):
+    if prediction_type == "risk_gnn" and seed_legal_bundles and bool(settings.legal_auto_bundle_enabled):
         try:
             from app.legal.bundle_seed import seed_evidence_bundles_once  # noqa: PLC0415
 

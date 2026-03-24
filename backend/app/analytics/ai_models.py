@@ -525,3 +525,20 @@ class ThreatIntelSyncLog(Base):
         Index("ix_threat_sync_status", "status"),
         Index("ix_threat_sync_started", "started_at"),
     )
+
+
+class WorkerHeartbeat(Base):
+    __tablename__ = "worker_heartbeat"
+
+    worker_name = Column(String, primary_key=True)
+    last_started_at = Column(DateTime(timezone=True), nullable=True)
+    last_finished_at = Column(DateTime(timezone=True), nullable=True)
+    last_status = Column(String, nullable=False, default="unknown")
+    last_detail = Column(String, nullable=True)
+    metadata_json = Column(JSONB, nullable=False, default=dict)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+    __table_args__ = (
+        Index("ix_worker_heartbeat_status", "last_status"),
+        Index("ix_worker_heartbeat_updated_at", "updated_at"),
+    )
