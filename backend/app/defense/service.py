@@ -33,12 +33,87 @@ from app.defense.schemas import (
     ThreatAlertRefreshRequest,
     VulnerabilityUpsertRequest,
 )
-from app.ledger.models import SourceRegistry
+from app.ledger.models import EventEntityIndex, EventLog, SourceRegistry
 from app.ledger.repository import LedgerRepository
+from app.core.security import sha256_hex
 
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _write_containment_event(
+    db: Session,
+    *,
+    action_type: str,
+    target: str,
+    section_code: str | None,
+    run_id: str,
+    executed_by: str,
+) -> None:
+    """
+    Write a CONTAINMENT_APPLIED event into the ledger so the GNN feature
+    worker sees the entity was contained and can rescore it lower on the
+    next cycle.  Uses a synthetic 'sentinel-defense' source registered
+    at bootstrap.
+    """
+    try:
+        source_id = "sentinel-defense"
+        # Ensure the synthetic source exists (idempotent)
+        if not db.query(SourceRegistry).filter(SourceRegistry.source_id == source_id).first():
+            db.add(SourceRegistry(
+                source_id=source_id,
+                source_type="internal",
+                section_code=section_code,
+                classification_level="RESTRICTED",
+                api_key_hash="internal-no-key",
+                api_key_lookup="internal-no-key-lookup",
+                is_active=True,
+            ))
+            db.flush()
+
+        now = _now()
+        payload = {
+            "action_type": action_type,
+            "target": target,
+            "run_id": run_id,
+            "executed_by": executed_by,
+        }
+        # Deterministic hash so duplicate events for the same action are idempotent
+        raw = f"CONTAINMENT:{run_id}:{action_type}:{target}"
+        event_hash = sha256_hex(raw.encode())
+
+        if db.get(EventLog, event_hash):
+            return  # already written
+
+        db.add(EventLog(
+            event_hash=event_hash,
+            event_type="CONTAINMENT_APPLIED",
+            source_id=source_id,
+            section_code=section_code,
+            classification="RESTRICTED",
+            occurred_at=now,
+            received_at=now,
+            schema_version="v1",
+            signature_valid=True,
+            anchors_json={"ip": target if "." in target else None},
+            payload_json=payload,
+        ))
+        db.flush()
+
+        # Index target entity so GNN backbone picks it up
+        entity_key = f"ip:{target}" if "." in target else f"entity:{target}"
+        db.add(EventEntityIndex(
+            event_hash=event_hash,
+            entity_key=entity_key,
+            entity_type="ip" if "." in target else "entity",
+        ))
+        db.flush()
+    except Exception:  # noqa: BLE001
+        # Non-fatal — containment event is best-effort.
+        # Do NOT rollback here: the outer execute_run_actions has not committed yet
+        # and a rollback would discard the ContainmentAction rows we just flushed.
+        pass
 
 
 def _severity_weight(sev: str) -> float:
@@ -512,6 +587,18 @@ class DefenseService:
                 target=item.target,
                 section_code=run.section_code,
             )
+
+            # Write CONTAINMENT_APPLIED event so the next GNN cycle rescores
+            # this entity lower — closing the Sense→Respond→Rescore loop.
+            if status == "executed" and item.action_type in {"block_ip", "rollback_block_ip", "isolate_host"}:
+                _write_containment_event(
+                    self.db,
+                    action_type=item.action_type,
+                    target=item.target,
+                    section_code=run.section_code,
+                    run_id=str(run.id),
+                    executed_by=str(getattr(principal, "actor_id", "api")),
+                )
 
         run.updated_at = _now()
         run.completed_at = _now()

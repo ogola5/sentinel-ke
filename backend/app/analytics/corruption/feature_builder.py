@@ -73,6 +73,7 @@ CORRUPTION_ENTITY_TYPES: List[str] = [
 # financial counters used in the feature vector.
 CORRUPTION_POSITIVE_FLAGS = {
     "AUDIT_FINDING",
+    "DEBARRED_SUPPLIER",
     "DIRECTOR_CONFLICT",
     "PRICE_INFLATION",
     "SHELL_COMPANY",
@@ -80,19 +81,23 @@ CORRUPTION_POSITIVE_FLAGS = {
     "RELATED_PARTY_TRANSACTION",
 }
 
-# Procurement event types tracked in Block 4 (11 types + other = 12 dims)
+# Procurement / delivery / network event types tracked in Block 4
+# (11 types + other = 12 dims). The list is intentionally centred on the
+# real procurement lifecycle and supplier-network signals emitted by the
+# OCDS importer; rarer synthetic-only events still fall into the "other"
+# bucket so the feature dimension stays fixed at 42.
 CORRUPTION_EVENT_TYPES: List[str] = [
     "TENDER_AWARD",
     "TENDER_AMENDMENT",
     "SINGLE_SOURCE_AWARD",
     "PAYMENT_DISBURSEMENT",
-    "ADVANCE_PAYMENT",
     "EMERGENCY_PROCUREMENT",
-    "DIRECTOR_CHANGE",
-    "ADDRESS_CHANGE",
     "COMPANY_REGISTRATION",
-    "WEALTH_DECLARATION",
     "AUDIT_FINDING_EVENT",
+    "SUPPLIER_NETWORK_LINK",
+    "SITE_INSPECTION",
+    "COMPLAINT_FILED",
+    "PROJECT_DELIVERY_ALERT",
 ]
 
 # Kenya financial year ends 30 June.  Months 5 & 6 (May, June) are

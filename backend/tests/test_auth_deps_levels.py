@@ -10,6 +10,7 @@ from app.api.deps import (
     AuthPrincipal,
     require_central_access,
     require_request_principal,
+    require_section_access,
     require_step_up,
 )
 from app.core.config import settings
@@ -29,6 +30,7 @@ def test_require_request_principal_accepts_valid_api_key(monkeypatch):
         request=_request(),
         authorization=None,
         x_api_key="frontend-secret",
+        x_breakglass_password=None,
         db=object(),
     )
     assert principal.principal_type == "service"
@@ -64,6 +66,7 @@ def test_require_request_principal_accepts_bearer(monkeypatch):
         request=_request(),
         authorization="Bearer token-1",
         x_api_key=None,
+        x_breakglass_password=None,
         db=object(),
     )
     assert principal.principal_type == "user"
@@ -98,6 +101,7 @@ def test_require_request_principal_prefers_bearer_over_api_key(monkeypatch):
         request=_request(),
         authorization="Bearer token-1",
         x_api_key="frontend-secret",
+        x_breakglass_password=None,
         db=object(),
     )
     assert principal.principal_type == "user"
@@ -144,6 +148,38 @@ def test_require_central_access_rejects_section_user():
         require_central_access(principal=principal)
     assert e.value.status_code == 403
     assert e.value.detail == "central_access_required"
+
+
+def test_require_section_access_rejects_section_user_without_section_code():
+    principal = AuthPrincipal(
+        principal_type="user",
+        actor_id="u-1",
+        user_id="u-1",
+        username="alice",
+        role="analyst",
+        access_level="section",
+        section_code=None,
+        scopes=["events.read"],
+    )
+    with pytest.raises(HTTPException) as e:
+        require_section_access(principal=principal)
+    assert e.value.status_code == 403
+    assert e.value.detail == "principal_section_code_missing"
+
+
+def test_require_section_access_accepts_central_principal():
+    principal = AuthPrincipal(
+        principal_type="user",
+        actor_id="u-2",
+        user_id="u-2",
+        username="central",
+        role="central_operator",
+        access_level="central",
+        section_code=None,
+        scopes=["*"],
+    )
+    out = require_section_access(principal=principal)
+    assert out is principal
 
 
 def test_require_central_access_rejects_service_when_disabled(monkeypatch):

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+from dataclasses import asdict
 import hashlib
 import json
 import logging
@@ -16,7 +17,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 import app.db.registry  # noqa: F401
 from app.analytics.ai_models import GraphFeatureSnapshot
-from app.analytics.corruption.feature_builder import CORRUPTION_WINDOW_KEY
+from app.analytics.corruption.feature_builder import CORRUPTION_EVENT_TYPES, CORRUPTION_WINDOW_KEY
 from app.core.security import hash_api_key
 from app.db.base import Base
 from app.ledger.db import SessionLocal, engine
@@ -58,6 +59,40 @@ class ProcurementRecord:
     amended_amount_ksh: Optional[float]
     project_id: Optional[str]
     project_title: Optional[str]
+    supplier_director_id: Optional[str]
+    supplier_bank_account: Optional[str]
+    inspector_id: Optional[str]
+    milestone_id: Optional[str]
+    delivery_progress_pct: Optional[float]
+    certified_progress_pct: Optional[float]
+    complaint_count: int
+    quality_failure_count: int
+    delay_days: int
+    supplier_debarred: bool
+    delivery_status: Optional[str]
+
+
+@dataclass(frozen=True)
+class ProcurementSignals:
+    cluster_shared: bool
+    family_size: int
+    price_inflated: bool
+    amendment_inflated: bool
+    shell_company: bool
+    single_source: bool
+    emergency: bool
+    threshold_split: bool
+    supplier_debarred: bool
+    project_delay: bool
+    complaints_active: bool
+    quality_failure: bool
+    delivery_mismatch: bool
+    accepted_delivery: bool
+    risk_flags: tuple[str, ...]
+    extra_event_types: tuple[str, ...]
+    progress_mismatch: float
+    execution_rate: float
+    payment_to_delivery_ratio: float
 
 
 @dataclass
@@ -79,6 +114,17 @@ class EntityAccumulator:
     threshold_split_hits: int = 0
     single_source_count: int = 0
     amendment_count: int = 0
+    complaint_count: int = 0
+    quality_failure_count: int = 0
+    delay_days_max: int = 0
+    inspection_count: int = 0
+    supplier_family_size: int = 0
+    payment_to_delivery_ratio_max: float = 0.0
+    progress_mismatch_max: float = 0.0
+    delivery_progress_total: float = 0.0
+    delivery_progress_points: int = 0
+    certified_progress_total: float = 0.0
+    certified_progress_points: int = 0
 
 
 def _utcnow() -> datetime:
@@ -125,6 +171,15 @@ def _as_int(value: Any) -> Optional[int]:
     return int(f)
 
 
+def _as_pct(value: Any) -> Optional[float]:
+    raw = _as_float(value)
+    if raw is None:
+        return None
+    if raw > 1.0:
+        raw = raw / 100.0
+    return max(0.0, min(1.0, float(raw)))
+
+
 def _as_bool(value: Any) -> bool:
     if isinstance(value, bool):
         return value
@@ -169,6 +224,76 @@ def _entity_key(kind: str, raw: str) -> str:
     return f"{kind}:{_slug(raw, fallback=kind)}"
 
 
+def _build_supplier_cluster_key(row: Mapping[str, Any]) -> Optional[str]:
+    tax_id = str(_pick(row, "supplier_tax_id", "awards_0_suppliers_0_identifier_id", "kra_pin") or "").strip().lower()
+    bank_account = str(_pick(row, "supplier_bank_account", "bank_account", "supplier_account") or "").strip().lower()
+    email = str(_pick(row, "supplier_email", "awards_0_suppliers_0_contact_email") or "").strip().lower()
+    phone = str(_pick(row, "supplier_phone", "awards_0_suppliers_0_contact_phone") or "").strip().lower()
+    address = str(_pick(row, "supplier_address", "awards_0_suppliers_0_address_streetaddress") or "").strip().lower()
+
+    strong_parts = [part for part in [tax_id, bank_account] if part]
+    weak_parts = [part for part in [email, phone, address] if part]
+    if strong_parts:
+        if len(strong_parts) >= 2:
+            cluster_parts = strong_parts
+        else:
+            cluster_parts = strong_parts + weak_parts[:2]
+    else:
+        cluster_parts = weak_parts[:3]
+    if not cluster_parts:
+        return None
+    return "|".join(cluster_parts[:3])
+
+
+def _supplier_family_key(cluster_key: Optional[str]) -> Optional[str]:
+    if not cluster_key:
+        return None
+    digest = hashlib.sha256(cluster_key.encode("utf-8")).hexdigest()[:24]
+    return f"supplier_family:{digest}"
+
+
+def _event_entities_for_type(
+    *,
+    event_type: str,
+    base_entities: Sequence[str],
+    supplier_key: str,
+    supplier_family_key: Optional[str],
+    director_key: Optional[str],
+    account_key: Optional[str],
+    inspector_key: Optional[str],
+) -> List[str]:
+    event_entities = list(base_entities)
+    if supplier_family_key and event_type in {"SINGLE_SOURCE_AWARD", "COMPLAINT_FILED", "PROJECT_DELAY"}:
+        event_entities.append(supplier_family_key)
+    if director_key and event_type in {"COMPANY_REGISTRATION", "SINGLE_SOURCE_AWARD", "COMPLAINT_FILED"}:
+        event_entities.append(director_key)
+    if account_key and event_type in {"PAYMENT_DISBURSEMENT", "ADVANCE_PAYMENT"}:
+        event_entities.append(account_key)
+    if inspector_key and event_type in {"SITE_INSPECTION", "PROJECT_MILESTONE_CERTIFIED", "DELIVERY_ACCEPTANCE", "DEFECT_NOTICE"}:
+        event_entities.append(inspector_key)
+    if event_type == "COMPANY_REGISTRATION":
+        event_entities = [supplier_key]
+        if supplier_family_key:
+            event_entities.append(supplier_family_key)
+        if director_key:
+            event_entities.append(director_key)
+    return event_entities
+
+
+def _event_amount_ksh(record: ProcurementRecord, *, event_type: str) -> float:
+    if event_type == "TENDER_AWARD":
+        return max(0.0, float(record.amount_ksh or 0.0))
+    if event_type == "PAYMENT_DISBURSEMENT":
+        return max(0.0, float(record.payment_amount_ksh or 0.0))
+    if event_type == "ADVANCE_PAYMENT":
+        return max(0.0, float(record.advance_payment_ksh or 0.0))
+    if event_type == "TENDER_AMENDMENT":
+        if record.amended_amount_ksh is None:
+            return 0.0
+        return max(0.0, float(record.amended_amount_ksh) - float(record.amount_ksh or 0.0))
+    return 0.0
+
+
 def _is_single_source(method: str, method_details: str, tenderer_count: Optional[int]) -> bool:
     method_norm = str(method or "").strip().lower()
     detail_norm = str(method_details or "").strip().lower()
@@ -192,6 +317,131 @@ def _is_near_threshold(amount_ksh: float) -> bool:
         if threshold * 0.90 <= amount < threshold:
             return True
     return False
+
+
+def _delivery_status_flags(status: Optional[str]) -> tuple[bool, bool]:
+    s = str(status or "").strip().lower()
+    if not s:
+        return False, False
+    accepted = any(term in s for term in ("accepted", "complete", "completed", "certified"))
+    delayed = any(term in s for term in ("delay", "delayed", "stalled", "abandoned"))
+    return accepted, delayed
+
+
+def _derive_procurement_signals(
+    record: ProcurementRecord,
+    *,
+    family_size: int,
+) -> ProcurementSignals:
+    cluster_shared = family_size > 1
+    price_inflated = bool(
+        record.estimated_amount_ksh
+        and record.estimated_amount_ksh > 0
+        and record.amount_ksh >= record.estimated_amount_ksh * 1.25
+    )
+    amendment_inflated = bool(
+        record.amended_amount_ksh
+        and record.amended_amount_ksh > record.amount_ksh * 1.20
+    )
+    shell_company = bool(
+        record.supplier_registered_at
+        and (record.occurred_at - record.supplier_registered_at).days <= 180
+        and record.amount_ksh >= 1_000_000.0
+    )
+    single_source = _is_single_source(
+        record.procurement_method,
+        record.procurement_method_details,
+        record.tenderer_count,
+    )
+    emergency = _is_emergency(record.procurement_method, record.procurement_method_details)
+    threshold_split = _is_near_threshold(record.amount_ksh)
+
+    accepted_delivery, delayed_from_status = _delivery_status_flags(record.delivery_status)
+    project_delay = bool(record.delay_days >= 30 or delayed_from_status)
+    complaints_active = bool(record.complaint_count > 0)
+    quality_failure = bool(record.quality_failure_count > 0)
+
+    delivery_progress = float(record.delivery_progress_pct or 0.0)
+    certified_progress = float(record.certified_progress_pct or 0.0)
+    progress_mismatch = max(0.0, certified_progress - delivery_progress)
+    payment_ratio = 0.0
+    if record.amount_ksh > 0 and record.payment_amount_ksh:
+        payment_ratio = max(0.0, float(record.payment_amount_ksh) / float(record.amount_ksh))
+    payment_to_delivery_ratio = payment_ratio - delivery_progress if delivery_progress > 0 else payment_ratio
+    delivery_mismatch = bool(
+        progress_mismatch >= 0.25
+        or payment_to_delivery_ratio >= 0.35
+    )
+
+    risk_flags: set[str] = set()
+    if cluster_shared:
+        risk_flags.update({"DIRECTOR_CONFLICT", "RELATED_PARTY_TRANSACTION"})
+    if price_inflated or amendment_inflated:
+        risk_flags.add("PRICE_INFLATION")
+    if shell_company:
+        risk_flags.add("SHELL_COMPANY")
+    if record.audit_flag:
+        risk_flags.add("AUDIT_FINDING")
+    if record.supplier_debarred:
+        risk_flags.add("DEBARRED_SUPPLIER")
+    if quality_failure:
+        risk_flags.add("QUALITY_FAILURE")
+    if delivery_mismatch:
+        risk_flags.add("PROJECT_DELIVERY_MISMATCH")
+    if project_delay:
+        risk_flags.add("PROJECT_DELAY_RISK")
+    if complaints_active:
+        risk_flags.add("COMPLAINT_PRESSURE")
+
+    extra_event_types: list[str] = []
+    if single_source:
+        extra_event_types.append("SINGLE_SOURCE_AWARD")
+    if emergency:
+        extra_event_types.append("EMERGENCY_PROCUREMENT")
+    if record.amendment_count > 0 or amendment_inflated:
+        extra_event_types.append("TENDER_AMENDMENT")
+    if record.payment_amount_ksh and record.payment_amount_ksh > 0:
+        extra_event_types.append("PAYMENT_DISBURSEMENT")
+    if record.advance_payment_ksh and record.advance_payment_ksh > 0:
+        extra_event_types.append("ADVANCE_PAYMENT")
+    if record.supplier_registered_at:
+        extra_event_types.append("COMPANY_REGISTRATION")
+    if record.audit_flag:
+        extra_event_types.append("AUDIT_FINDING_EVENT")
+    if record.inspector_id or quality_failure or record.delivery_progress_pct is not None:
+        extra_event_types.append("SITE_INSPECTION")
+    if record.milestone_id or record.certified_progress_pct is not None:
+        extra_event_types.append("PROJECT_MILESTONE_CERTIFIED")
+    if accepted_delivery:
+        extra_event_types.append("DELIVERY_ACCEPTANCE")
+    if quality_failure:
+        extra_event_types.append("DEFECT_NOTICE")
+    if complaints_active:
+        extra_event_types.append("COMPLAINT_FILED")
+    if project_delay:
+        extra_event_types.append("PROJECT_DELAY")
+
+    return ProcurementSignals(
+        cluster_shared=cluster_shared,
+        family_size=family_size,
+        price_inflated=price_inflated,
+        amendment_inflated=amendment_inflated,
+        shell_company=shell_company,
+        single_source=single_source,
+        emergency=emergency,
+        threshold_split=threshold_split,
+        supplier_debarred=bool(record.supplier_debarred),
+        project_delay=project_delay,
+        complaints_active=complaints_active,
+        quality_failure=quality_failure,
+        delivery_mismatch=delivery_mismatch,
+        accepted_delivery=accepted_delivery,
+        risk_flags=tuple(sorted(risk_flags)),
+        extra_event_types=tuple(dict.fromkeys(extra_event_types)),
+        progress_mismatch=round(progress_mismatch, 6),
+        execution_rate=max(0.0, min(1.0, delivery_progress if record.delivery_progress_pct is not None else 1.0)),
+        payment_to_delivery_ratio=round(max(0.0, payment_to_delivery_ratio), 6),
+    )
 
 
 def _iter_flat_rows(path: str) -> Iterator[Dict[str, Any]]:
@@ -295,14 +545,7 @@ def normalize_procurement_row(row: Mapping[str, Any]) -> Optional[ProcurementRec
         _pick(row, "procurement_method_details", "tender_procurement_method_details", "tender_procurementmethoddetails")
         or ""
     ).strip()
-    cluster_parts = [
-        str(_pick(row, "supplier_email", "awards_0_suppliers_0_contact_email") or "").strip().lower(),
-        str(_pick(row, "supplier_phone", "awards_0_suppliers_0_contact_phone") or "").strip().lower(),
-        str(_pick(row, "supplier_address", "awards_0_suppliers_0_address_streetaddress") or "").strip().lower(),
-        str(_pick(row, "supplier_tax_id", "awards_0_suppliers_0_identifier_id") or "").strip().lower(),
-    ]
-    cluster_parts = [part for part in cluster_parts if part]
-    cluster_key = "|".join(cluster_parts[:2]) if cluster_parts else None
+    cluster_key = _build_supplier_cluster_key(row)
 
     return ProcurementRecord(
         ocid=ocid,
@@ -329,6 +572,17 @@ def normalize_procurement_row(row: Mapping[str, Any]) -> Optional[ProcurementRec
         amended_amount_ksh=_as_float(_pick(row, "amended_amount", "contracts_0_implementation_finalvalue_amount")),
         project_id=str(_pick(row, "project_id", "planning_project_id") or "").strip() or None,
         project_title=str(_pick(row, "project_title", "planning_project_title") or "").strip() or None,
+        supplier_director_id=str(_pick(row, "supplier_director_id", "beneficial_owner_id", "director_id") or "").strip() or None,
+        supplier_bank_account=str(_pick(row, "supplier_bank_account", "bank_account", "supplier_account") or "").strip() or None,
+        inspector_id=str(_pick(row, "inspector_id", "site_inspector_id", "engineer_id") or "").strip() or None,
+        milestone_id=str(_pick(row, "milestone_id", "certificate_id", "inspection_id") or "").strip() or None,
+        delivery_progress_pct=_as_pct(_pick(row, "delivery_progress_pct", "project_delivery_progress_pct", "implementation_progress_pct")),
+        certified_progress_pct=_as_pct(_pick(row, "certified_progress_pct", "inspection_certified_progress_pct", "milestone_progress_pct")),
+        complaint_count=_as_int(_pick(row, "complaint_count", "review_request_count", "bid_complaint_count")) or 0,
+        quality_failure_count=_as_int(_pick(row, "quality_failure_count", "failed_quality_tests", "defect_count")) or 0,
+        delay_days=_as_int(_pick(row, "delay_days", "project_delay_days", "slippage_days")) or 0,
+        supplier_debarred=_as_bool(_pick(row, "supplier_debarred", "debarred_supplier", "blacklisted_supplier")),
+        delivery_status=str(_pick(row, "delivery_status", "project_status", "completion_status") or "").strip() or None,
     )
 
 
@@ -404,6 +658,14 @@ def _touch_entity(
     single_source: bool,
     threshold_split: bool,
     payment_amount_ksh: float = 0.0,
+    family_size: int = 0,
+    complaint_count: int = 0,
+    quality_failure_count: int = 0,
+    delay_days: int = 0,
+    delivery_progress_pct: Optional[float] = None,
+    certified_progress_pct: Optional[float] = None,
+    payment_to_delivery_ratio: float = 0.0,
+    progress_mismatch: float = 0.0,
 ) -> None:
     row = entity_map.setdefault(entity_key, EntityAccumulator(entity_key=entity_key, entity_type=entity_type))
     row.event_count += 1
@@ -422,6 +684,20 @@ def _touch_entity(
         row.single_source_count += 1
     if event_type == "TENDER_AMENDMENT":
         row.amendment_count += 1
+    if event_type == "SITE_INSPECTION":
+        row.inspection_count += 1
+    row.complaint_count += max(0, int(complaint_count or 0))
+    row.quality_failure_count += max(0, int(quality_failure_count or 0))
+    row.delay_days_max = max(row.delay_days_max, max(0, int(delay_days or 0)))
+    row.supplier_family_size = max(row.supplier_family_size, max(0, int(family_size or 0)))
+    row.payment_to_delivery_ratio_max = max(row.payment_to_delivery_ratio_max, max(0.0, float(payment_to_delivery_ratio or 0.0)))
+    row.progress_mismatch_max = max(row.progress_mismatch_max, max(0.0, float(progress_mismatch or 0.0)))
+    if delivery_progress_pct is not None:
+        row.delivery_progress_total += max(0.0, min(1.0, float(delivery_progress_pct)))
+        row.delivery_progress_points += 1
+    if certified_progress_pct is not None:
+        row.certified_progress_total += max(0.0, min(1.0, float(certified_progress_pct)))
+        row.certified_progress_points += 1
     row.risk_flags.update(str(flag) for flag in risk_flags if str(flag))
     if row.first_seen is None or occurred_at < row.first_seen:
         row.first_seen = occurred_at
@@ -440,15 +716,29 @@ def _snapshot_row(row: EntityAccumulator, *, window_start: datetime, window_end:
     if total_value > 0.0 and row.counterparty_amounts:
         concentration_ratio = max(row.counterparty_amounts.values()) / total_value
 
-    execution_rate = 1.0
-    if total_value > 0.0 and row.payment_amount_ksh > 0.0:
+    if row.delivery_progress_points > 0:
+        execution_rate = row.delivery_progress_total / max(1, row.delivery_progress_points)
+    elif total_value > 0.0 and row.payment_amount_ksh > 0.0:
         execution_rate = min(1.0, row.payment_amount_ksh / total_value)
+    else:
+        execution_rate = 1.0
 
     fy_end_fraction = row.fy_end_event_count / max(1, row.event_count)
     related_party_ratio = row.related_party_amount_ksh / total_value if total_value > 0.0 else 0.0
     amendment_ratio = row.amendment_count / max(1, row.corruption_events.get("TENDER_AWARD", 0))
     threshold_splitting = row.threshold_split_hits / max(1, row.award_like_count)
     age_sec = max(0.0, (window_end - (row.last_seen or window_end)).total_seconds())
+    tracked_events = set(CORRUPTION_EVENT_TYPES)
+    other_event_count = sum(
+        count for evt, count in row.corruption_events.items() if evt not in tracked_events
+    )
+    corruption_events = dict(row.corruption_events)
+    if other_event_count > 0:
+        corruption_events["other"] = other_event_count
+    avg_certified_progress = (
+        row.certified_progress_total / max(1, row.certified_progress_points)
+        if row.certified_progress_points > 0 else None
+    )
 
     return {
         "id": uuid.uuid4(),
@@ -467,7 +757,7 @@ def _snapshot_row(row: EntityAccumulator, *, window_start: datetime, window_end:
             "transaction_count": row.event_count,
             "counterparty_count": len(row.counterparty_keys),
             "total_value_ksh": round(total_value, 2),
-            "corruption_events": dict(row.corruption_events),
+            "corruption_events": corruption_events,
             "last_seen_age_sec": age_sec,
             "fy_end_event_fraction": round(fy_end_fraction, 6),
             "related_party_ratio": round(min(1.0, related_party_ratio), 6),
@@ -476,6 +766,15 @@ def _snapshot_row(row: EntityAccumulator, *, window_start: datetime, window_end:
             "concentration_ratio": round(min(1.0, concentration_ratio), 6),
             "threshold_splitting": round(min(1.0, threshold_splitting), 6),
             "single_source": bool(row.single_source_count > 0),
+            "supplier_family_size": row.supplier_family_size,
+            "complaint_count": row.complaint_count,
+            "quality_failure_count": row.quality_failure_count,
+            "delay_days_max": row.delay_days_max,
+            "inspection_count": row.inspection_count,
+            "progress_mismatch_max": round(min(1.0, row.progress_mismatch_max), 6),
+            "payment_to_delivery_ratio_max": round(min(4.0, row.payment_to_delivery_ratio_max), 6),
+            "delivery_progress_avg": round(min(1.0, execution_rate), 6),
+            "certified_progress_avg": round(min(1.0, avg_certified_progress), 6) if avg_certified_progress is not None else None,
         },
         "created_at": _utcnow(),
     }
@@ -518,42 +817,8 @@ def ingest_procurement_records(
                 project_key = _entity_key("project", record.project_id or record.project_title or record.ocid)
                 entities.append(project_key)
 
-            cluster_shared = bool(
-                record.supplier_cluster_key
-                and len(cluster_members.get(record.supplier_cluster_key, set())) > 1
-            )
-            price_inflated = bool(
-                record.estimated_amount_ksh
-                and record.estimated_amount_ksh > 0
-                and record.amount_ksh >= record.estimated_amount_ksh * 1.25
-            )
-            amendment_inflated = bool(
-                record.amended_amount_ksh
-                and record.amended_amount_ksh > record.amount_ksh * 1.20
-            )
-            shell_company = bool(
-                record.supplier_registered_at
-                and (record.occurred_at - record.supplier_registered_at).days <= 180
-                and record.amount_ksh >= 1_000_000.0
-            )
-            single_source = _is_single_source(
-                record.procurement_method,
-                record.procurement_method_details,
-                record.tenderer_count,
-            )
-            emergency = _is_emergency(record.procurement_method, record.procurement_method_details)
-            threshold_split = _is_near_threshold(record.amount_ksh)
-
-            risk_flags = set()
-            if cluster_shared:
-                risk_flags.add("DIRECTOR_CONFLICT")
-                risk_flags.add("RELATED_PARTY_TRANSACTION")
-            if price_inflated or amendment_inflated:
-                risk_flags.add("PRICE_INFLATION")
-            if shell_company:
-                risk_flags.add("SHELL_COMPANY")
-            if record.audit_flag:
-                risk_flags.add("AUDIT_FINDING")
+            family_size = len(cluster_members.get(record.supplier_cluster_key, set())) if record.supplier_cluster_key else 0
+            signals = _derive_procurement_signals(record, family_size=family_size)
 
             payload = {
                 "ocid": record.ocid,
@@ -563,7 +828,15 @@ def ingest_procurement_records(
                 "amount_ksh": round(record.amount_ksh, 2),
                 "procurement_method": record.procurement_method,
                 "procurement_method_details": record.procurement_method_details,
+                "project_id": record.project_id,
+                "project_title": record.project_title,
+                "signals": asdict(signals),
             }
+
+            supplier_family_key = _supplier_family_key(record.supplier_cluster_key)
+            director_key = _entity_key("director", record.supplier_director_id) if record.supplier_director_id else None
+            account_key = _entity_key("account", record.supplier_bank_account) if record.supplier_bank_account else None
+            inspector_key = _entity_key("official", record.inspector_id) if record.inspector_id else None
             _upsert_event(
                 db,
                 event_type="TENDER_AWARD",
@@ -574,24 +847,41 @@ def ingest_procurement_records(
             )
             event_count += 1
 
-            extra_event_types: List[str] = []
-            if single_source:
-                extra_event_types.append("SINGLE_SOURCE_AWARD")
-            if emergency:
-                extra_event_types.append("EMERGENCY_PROCUREMENT")
-            if record.amendment_count > 0 or amendment_inflated:
-                extra_event_types.append("TENDER_AMENDMENT")
-            if record.payment_amount_ksh and record.payment_amount_ksh > 0:
-                extra_event_types.append("PAYMENT_DISBURSEMENT")
-            if record.advance_payment_ksh and record.advance_payment_ksh > 0:
-                extra_event_types.append("ADVANCE_PAYMENT")
-            if record.supplier_registered_at:
-                extra_event_types.append("COMPANY_REGISTRATION")
-            if record.audit_flag:
-                extra_event_types.append("AUDIT_FINDING_EVENT")
+            network_entities = [key for key in [supplier_family_key, director_key, account_key, inspector_key] if key]
+            if network_entities:
+                _upsert_event(
+                    db,
+                    event_type="SUPPLIER_NETWORK_LINK",
+                    entity_keys=[supplier_key, *network_entities],
+                    occurred_at=record.occurred_at,
+                    payload=payload,
+                    idx=idx + 10_000,
+                )
+                event_count += 1
+
+            if project_key and signals.delivery_mismatch:
+                _upsert_event(
+                    db,
+                    event_type="PROJECT_DELIVERY_ALERT",
+                    entity_keys=[contract_key, project_key, supplier_key, department_key],
+                    occurred_at=record.occurred_at,
+                    payload=payload,
+                    idx=idx + 20_000,
+                )
+                event_count += 1
+
+            extra_event_types = list(signals.extra_event_types)
 
             for offset, event_type in enumerate(extra_event_types, start=1):
-                event_entities = entities if event_type != "COMPANY_REGISTRATION" else [supplier_key]
+                event_entities = _event_entities_for_type(
+                    event_type=event_type,
+                    base_entities=entities,
+                    supplier_key=supplier_key,
+                    supplier_family_key=supplier_family_key,
+                    director_key=director_key,
+                    account_key=account_key,
+                    inspector_key=inspector_key,
+                )
                 _upsert_event(
                     db,
                     event_type=event_type,
@@ -602,45 +892,110 @@ def ingest_procurement_records(
                 )
                 event_count += 1
 
-            entity_types = {
+            base_entity_types = {
                 department_key: "department",
                 tender_key: "tender",
                 supplier_key: "supplier",
                 contract_key: "contract",
             }
             if project_key:
-                entity_types[project_key] = "project"
+                base_entity_types[project_key] = "project"
+            entity_types = dict(base_entity_types)
+            if supplier_family_key:
+                entity_types[supplier_family_key] = "supplier"
+            if director_key:
+                entity_types[director_key] = "director"
+            if account_key:
+                entity_types[account_key] = "account"
+            if inspector_key:
+                entity_types[inspector_key] = "official"
 
-            for entity_key, entity_type in entity_types.items():
+            for entity_key, entity_type in base_entity_types.items():
                 _touch_entity(
                     entity_map,
                     entity_key=entity_key,
                     entity_type=entity_type,
                     occurred_at=record.occurred_at,
                     event_type="TENDER_AWARD",
-                    amount_ksh=record.amount_ksh,
+                    amount_ksh=_event_amount_ksh(record, event_type="TENDER_AWARD"),
                     counterparty_keys=[key for key in entities if key != entity_key],
-                    risk_flags=sorted(risk_flags),
-                    related_party=cluster_shared,
-                    single_source=single_source,
-                    threshold_split=threshold_split,
+                    risk_flags=list(signals.risk_flags),
+                    related_party=signals.cluster_shared,
+                    single_source=signals.single_source,
+                    threshold_split=signals.threshold_split,
+                    family_size=signals.family_size,
                 )
-                for event_type in extra_event_types:
-                    if event_type == "COMPANY_REGISTRATION" and entity_key != supplier_key:
-                        continue
+
+            if network_entities:
+                network_event_entities = [supplier_key, *network_entities]
+                for entity_key in network_event_entities:
                     _touch_entity(
                         entity_map,
                         entity_key=entity_key,
-                        entity_type=entity_type,
+                        entity_type=entity_types[entity_key],
+                        occurred_at=record.occurred_at,
+                        event_type="SUPPLIER_NETWORK_LINK",
+                        amount_ksh=0.0,
+                        counterparty_keys=[key for key in network_event_entities if key != entity_key],
+                        risk_flags=list(signals.risk_flags),
+                        related_party=signals.cluster_shared,
+                        single_source=signals.single_source,
+                        threshold_split=signals.threshold_split,
+                        family_size=signals.family_size,
+                    )
+
+            if project_key and signals.delivery_mismatch:
+                alert_entities = [contract_key, project_key, supplier_key, department_key]
+                for entity_key in alert_entities:
+                    _touch_entity(
+                        entity_map,
+                        entity_key=entity_key,
+                        entity_type=entity_types[entity_key],
+                        occurred_at=record.occurred_at,
+                        event_type="PROJECT_DELIVERY_ALERT",
+                        amount_ksh=0.0,
+                        counterparty_keys=[key for key in alert_entities if key != entity_key],
+                        risk_flags=list(signals.risk_flags),
+                        related_party=signals.cluster_shared,
+                        single_source=signals.single_source,
+                        threshold_split=signals.threshold_split,
+                        family_size=signals.family_size,
+                        payment_to_delivery_ratio=signals.payment_to_delivery_ratio,
+                        progress_mismatch=signals.progress_mismatch,
+                    )
+
+            for event_type in extra_event_types:
+                event_entities = _event_entities_for_type(
+                    event_type=event_type,
+                    base_entities=entities,
+                    supplier_key=supplier_key,
+                    supplier_family_key=supplier_family_key,
+                    director_key=director_key,
+                    account_key=account_key,
+                    inspector_key=inspector_key,
+                )
+                for entity_key in event_entities:
+                    _touch_entity(
+                        entity_map,
+                        entity_key=entity_key,
+                        entity_type=entity_types[entity_key],
                         occurred_at=record.occurred_at,
                         event_type=event_type,
-                        amount_ksh=record.amount_ksh,
-                        counterparty_keys=[key for key in entities if key != entity_key],
-                        risk_flags=sorted(risk_flags),
-                        related_party=cluster_shared,
-                        single_source=single_source,
-                        threshold_split=threshold_split,
+                        amount_ksh=_event_amount_ksh(record, event_type=event_type),
+                        counterparty_keys=[key for key in event_entities if key != entity_key],
+                        risk_flags=list(signals.risk_flags),
+                        related_party=signals.cluster_shared,
+                        single_source=signals.single_source,
+                        threshold_split=signals.threshold_split,
                         payment_amount_ksh=float(record.payment_amount_ksh or 0.0) if event_type == "PAYMENT_DISBURSEMENT" else 0.0,
+                        family_size=signals.family_size,
+                        complaint_count=record.complaint_count if event_type == "COMPLAINT_FILED" else 0,
+                        quality_failure_count=record.quality_failure_count if event_type == "DEFECT_NOTICE" else 0,
+                        delay_days=record.delay_days if event_type == "PROJECT_DELAY" else 0,
+                        delivery_progress_pct=record.delivery_progress_pct if event_type in {"SITE_INSPECTION", "DELIVERY_ACCEPTANCE"} else None,
+                        certified_progress_pct=record.certified_progress_pct if event_type == "PROJECT_MILESTONE_CERTIFIED" else None,
+                        payment_to_delivery_ratio=signals.payment_to_delivery_ratio,
+                        progress_mismatch=signals.progress_mismatch,
                     )
 
         snapshot_rows = [_snapshot_row(row, window_start=window_start, window_end=window_end) for row in entity_map.values()]

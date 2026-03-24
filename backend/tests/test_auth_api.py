@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 from app.api.auth import _map_auth_error_to_http, create_user, login, me
 from app.api.deps import AuthPrincipal
 from app.auth.schemas import AuthLoginRequest, AuthUserCreateRequest
+from starlette.requests import Request
 
 
 def test_login_forwards_request_context(monkeypatch):
@@ -23,7 +22,15 @@ def test_login_forwards_request_context(monkeypatch):
     monkeypatch.setattr("app.api.auth.AuthService", _Svc)
 
     payload = AuthLoginRequest(username="alice", password="StrongPass!2026")
-    request = SimpleNamespace(client=SimpleNamespace(host="10.10.10.10"), headers={"user-agent": "pytest"})
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/auth/login",
+            "client": ("10.10.10.10", 12345),
+            "headers": [(b"user-agent", b"pytest")],
+        }
+    )
 
     out = login(payload=payload, request=request, db=object())
     assert out["status"] == "ok"
