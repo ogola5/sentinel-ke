@@ -6,11 +6,11 @@
 # no GNN training workers, no notebook.
 #
 # SETUP (first time at a new agency):
-#   1. Copy .env.edge.example → .env
+#   1. Copy .env.edge.example → .env.edge
 #   2. Fill in EDGE_PARTNER_ID, EDGE_HUB_URL, EDGE_HUB_API_KEY,
 #      EDGE_NATIONAL_SALT (all returned by POST /v1/federation/register
 #      when NCSC onboards this agency).
-#   3. docker compose -f docker-compose.edge.yml up -d
+#   3. docker compose --env-file .env.edge -f docker-compose.edge.yml up -d --build
 #
 # DATA FLOW:
 #   Agency sources → ingest API → postgres → GNN inference (local)
@@ -26,7 +26,7 @@ x-backend-build: &backend-build
   context: ./backend
 
 x-backend-env: &backend-env
-  env_file: .env
+  env_file: .env.edge
   environment:
     PYTHONPATH: /app
     IS_EDGE_NODE: "true"
@@ -41,7 +41,7 @@ services:
     build: *backend-build
     <<: *backend-env
     ports:
-      - "8000:8000"
+      - "${EDGE_BACKEND_PORT:-18000}:8000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -61,7 +61,7 @@ services:
     build:
       context: ./frontend
     ports:
-      - "3000:3000"
+      - "${EDGE_FRONTEND_PORT:-13000}:3000"
     depends_on:
       - backend
     restart: unless-stopped
@@ -77,7 +77,7 @@ services:
     command: >
       /bin/sh -c "while true;
         do python -m app.analytics.layer3.graph_feature_worker --window-key Wmid;
-        sleep 300; done"
+        sleep $${EDGE_GRAPH_INTERVAL_SECONDS:-300}; done"
     restart: unless-stopped
 
   # ── GNN inference — scores entities locally before pushing to hub ───────────
@@ -92,8 +92,8 @@ services:
         condition: service_started
     command: >
       /bin/sh -c "while true;
-        do python -m app.analytics.layer3.ai_inference_worker --window-key Wmid;
-        sleep 300; done"
+        do python -m app.analytics.layer3.ai_inference_worker --window-key Wmid --prediction-type risk_gnn;
+        sleep $${EDGE_INFERENCE_INTERVAL_SECONDS:-300}; done"
     restart: unless-stopped
 
   # ── Threat pattern detection — runs multi-step attack chain rules ────────────
@@ -107,7 +107,7 @@ services:
     command: >
       /bin/sh -c "while true;
         do python -m app.analytics.layer3.threat_pattern_worker --minutes 1440;
-        sleep 300; done"
+        sleep $${EDGE_PATTERN_INTERVAL_SECONDS:-300}; done"
     restart: unless-stopped
 
   # ── Decision fusion — combines GNN + path + anomaly scores ──────────────────
@@ -121,7 +121,7 @@ services:
     command: >
       /bin/sh -c "while true;
         do python -m app.analytics.layer3.decision_fusion_worker --window-key Wmid;
-        sleep 600; done"
+        sleep $${EDGE_FUSION_INTERVAL_SECONDS:-600}; done"
     restart: unless-stopped
 
   # ── Edge sync agent — pushes high-risk patterns to NCSC central hub ─────────
@@ -134,7 +134,7 @@ services:
         condition: service_healthy
     command: >
       /bin/sh -c "while true;
-        do python -m app.sync.edge_agent; sleep ${EDGE_SYNC_INTERVAL_SECONDS:-120}; done"
+        do python -m app.sync.edge_agent; sleep $${EDGE_SYNC_INTERVAL_SECONDS:-120}; done"
     restart: unless-stopped
 
   # ── PostgreSQL — local event store ──────────────────────────────────────────
@@ -145,7 +145,7 @@ services:
       POSTGRES_USER:     ${POSTGRES_USER:-sentinel}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sentinel}
     ports:
-      - "5433:5432"
+      - "${EDGE_POSTGRES_PORT:-15433}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     restart: unless-stopped
@@ -170,7 +170,7 @@ services:
       - --kafka-addr PLAINTEXT://0.0.0.0:9092
       - --advertise-kafka-addr PLAINTEXT://redpanda:9092
     ports:
-      - "9092:9092"
+      - "${EDGE_KAFKA_PORT:-19092}:9092"
     volumes:
       - redpanda_data:/var/lib/redpanda/data
     restart: unless-stopped
