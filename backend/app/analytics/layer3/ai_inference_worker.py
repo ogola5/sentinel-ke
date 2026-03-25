@@ -22,7 +22,7 @@ from __future__ import annotations
 import json
 import logging
 import math
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -311,6 +311,7 @@ def _write_prediction(
     )
 
     if pred:
+        pred.created_at      = datetime.now(timezone.utc)
         pred.score           = score
         pred.model_version   = model_version
         pred.confidence      = confidence

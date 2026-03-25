@@ -82,7 +82,7 @@ export const saveClientCredentials = (next: Partial<ClientCredentials>): ClientC
   return merged;
 };
 
-const getConfiguredApiKey = (): string | null => {
+export const resolveClientApiKey = (): string | null => {
   const fromEnv = import.meta.env.VITE_API_KEY;
   if (fromEnv && String(fromEnv).trim() !== "") {
     return String(fromEnv).trim();
@@ -281,7 +281,7 @@ export async function apiFetchJson<T>(
       headers.set("Authorization", `Bearer ${accessToken}`);
     }
 
-    const key = getConfiguredApiKey();
+    const key = resolveClientApiKey();
     const shouldAttachApiKey =
       Boolean(key) &&
       !headers.has("X-API-Key") &&
@@ -376,7 +376,7 @@ export async function apiFetchBlob(
       headers.set("Authorization", `Bearer ${accessToken}`);
     }
 
-    const key = getConfiguredApiKey();
+    const key = resolveClientApiKey();
     const shouldAttachApiKey =
       Boolean(key) &&
       !headers.has("X-API-Key") &&

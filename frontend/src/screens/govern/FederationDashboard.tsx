@@ -152,6 +152,33 @@ export default function FederationDashboard() {
         </div>
       )}
 
+      {edgeSync?.is_edge_node && (
+        <details className="panel panel-details" open style={{ marginBottom: 16, borderColor: "rgba(var(--info-rgb), 0.24)", background: "rgba(var(--info-rgb), 0.07)" }}>
+          <summary>
+            <span>Local edge sync state</span>
+            <span className="muted">{edgeSync.partner_id}</span>
+          </summary>
+          <div className="detail-grid" style={{ marginTop: 12 }}>
+            <div>
+              <strong>Status</strong>
+              <p className="muted" style={{ marginTop: 4 }}>
+                {edgeSync.status ?? "unknown"} · {edgeSync.total_pushed ?? 0} total pushes
+              </p>
+            </div>
+            <div>
+              <strong>Last sync</strong>
+              <p className="muted" style={{ marginTop: 4 }}>
+                {edgeSync.last_synced_at ? new Date(edgeSync.last_synced_at).toLocaleString() : "No sync recorded yet"}
+              </p>
+            </div>
+            <div>
+              <strong>Last error</strong>
+              <p className="muted" style={{ marginTop: 4 }}>{edgeSync.last_error ?? "None"}</p>
+            </div>
+          </div>
+        </details>
+      )}
+
       {loading ? (
         <div className="state-box">
           <Loader size={24} />
@@ -161,8 +188,17 @@ export default function FederationDashboard() {
         <div className="panel">
           <div className="state-box">
             <Network size={32} />
-            <p>No federation partners registered yet.</p>
-            <p>POST /v1/federation/register to onboard a partner edge agent.</p>
+            {edgeSync?.is_edge_node ? (
+              <>
+                <p>This edge node is connected locally, but the national partner roster is reviewed from the central hub.</p>
+                <p>Use the hub Federation workspace to show all agencies and cross-agency matches.</p>
+              </>
+            ) : (
+              <>
+                <p>No federation partners registered yet.</p>
+                <p>POST /v1/federation/register to onboard a partner edge agent.</p>
+              </>
+            )}
           </div>
         </div>
       ) : (
@@ -243,33 +279,6 @@ export default function FederationDashboard() {
               </div>
             </div>
           </div>
-
-          {edgeSync?.is_edge_node && (
-            <details className="panel panel-details" style={{ marginBottom: 16, borderColor: "rgba(var(--info-rgb), 0.24)", background: "rgba(var(--info-rgb), 0.07)" }}>
-              <summary>
-                <span>Local edge sync state</span>
-                <span className="muted">{edgeSync.partner_id}</span>
-              </summary>
-              <div className="detail-grid" style={{ marginTop: 12 }}>
-                <div>
-                  <strong>Status</strong>
-                  <p className="muted" style={{ marginTop: 4 }}>
-                    {edgeSync.status ?? "unknown"} · {edgeSync.total_pushed ?? 0} total pushes
-                  </p>
-                </div>
-                <div>
-                  <strong>Last sync</strong>
-                  <p className="muted" style={{ marginTop: 4 }}>
-                    {edgeSync.last_synced_at ? new Date(edgeSync.last_synced_at).toLocaleString() : "No sync recorded yet"}
-                  </p>
-                </div>
-                <div>
-                  <strong>Last error</strong>
-                  <p className="muted" style={{ marginTop: 4 }}>{edgeSync.last_error ?? "None"}</p>
-                </div>
-              </div>
-            </details>
-          )}
 
           <details className="panel panel-details" open>
             <summary>

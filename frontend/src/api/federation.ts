@@ -1,4 +1,4 @@
-import { ApiError, apiFetchJson } from "./client";
+import { ApiError, apiFetchJson, resolveClientApiKey } from "./client";
 import { endpoints } from "./endpoints";
 import type {
   FederationCorrelation,
@@ -41,7 +41,18 @@ export async function registerFederationPartner(
 
 export async function fetchEdgeSyncStatus(): Promise<FederationEdgeSyncStatus> {
   try {
-    const data = await apiFetchJson<Record<string, unknown>>(endpoints.federationEdgeStatus());
+    const apiKey = resolveClientApiKey();
+    const response = await fetch(endpoints.federationEdgeStatus(), {
+      headers: {
+        Accept: "application/json",
+        ...(apiKey ? { "X-API-Key": apiKey } : {}),
+      },
+    });
+    const raw = await response.text();
+    const data = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
+    if (!response.ok) {
+      throw new ApiError(response.status, "edge_status_unavailable");
+    }
     const r = asRecord(data);
     return {
       is_edge_node: asBoolean(r.is_edge_node),

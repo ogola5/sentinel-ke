@@ -1732,6 +1732,7 @@ def run_once(
             )
 
             if pred:
+                pred.created_at = now
                 pred.score = score
                 pred.model_version = model_version
                 pred.confidence = confidence

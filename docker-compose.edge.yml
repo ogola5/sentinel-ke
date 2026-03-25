@@ -22,8 +22,12 @@
 #                                       NCSC Central Hub
 # =============================================================================
 
+name: sentinel-edge
+
 x-backend-build: &backend-build
   context: ./backend
+  args:
+    INSTALL_ALL_REQUIREMENTS: ${EDGE_INSTALL_ALL_REQUIREMENTS:-1}
 
 x-backend-env: &backend-env
   env_file: .env.edge
@@ -34,12 +38,19 @@ x-backend-env: &backend-env
 x-backend-volumes: &backend-volumes
   - gnn_artifacts:/app/artifacts
 
+x-backend-extra-hosts: &backend-extra-hosts
+  - "host.docker.internal:host-gateway"
+
 services:
 
   # ── API server ──────────────────────────────────────────────────────────────
   backend:
     build: *backend-build
     <<: *backend-env
+    extra_hosts: *backend-extra-hosts
+    networks:
+      - default
+      - hubnet
     ports:
       - "${EDGE_BACKEND_PORT:-18000}:8000"
     depends_on:
@@ -60,8 +71,11 @@ services:
   frontend:
     build:
       context: ./frontend
+    environment:
+      VITE_API_PROXY_TARGET: http://backend:8000
+      VITE_API_KEY: ${FRONTEND_API_KEY}
     ports:
-      - "${EDGE_FRONTEND_PORT:-13000}:3000"
+      - "${EDGE_FRONTEND_PORT:-13000}:5173"
     depends_on:
       - backend
     restart: unless-stopped
@@ -70,6 +84,7 @@ services:
   graph-feature-worker:
     build: *backend-build
     <<: *backend-env
+    extra_hosts: *backend-extra-hosts
     volumes: *backend-volumes
     depends_on:
       postgres:
@@ -84,6 +99,7 @@ services:
   inference-consumer:
     build: *backend-build
     <<: *backend-env
+    extra_hosts: *backend-extra-hosts
     volumes: *backend-volumes
     depends_on:
       postgres:
@@ -100,6 +116,7 @@ services:
   threat-pattern-worker:
     build: *backend-build
     <<: *backend-env
+    extra_hosts: *backend-extra-hosts
     volumes: *backend-volumes
     depends_on:
       postgres:
@@ -114,6 +131,7 @@ services:
   decision-fusion-worker:
     build: *backend-build
     <<: *backend-env
+    extra_hosts: *backend-extra-hosts
     volumes: *backend-volumes
     depends_on:
       postgres:
@@ -128,6 +146,10 @@ services:
   edge-sync-agent:
     build: *backend-build
     <<: *backend-env
+    extra_hosts: *backend-extra-hosts
+    networks:
+      - default
+      - hubnet
     volumes: *backend-volumes
     depends_on:
       postgres:
@@ -183,3 +205,8 @@ volumes:
   postgres_data:
   redpanda_data:
   gnn_artifacts:
+
+networks:
+  hubnet:
+    external: true
+    name: sentinel-ke_default
