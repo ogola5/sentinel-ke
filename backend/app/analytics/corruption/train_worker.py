@@ -40,7 +40,7 @@ import json
 import logging
 import math
 from datetime import datetime, timedelta, timezone
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from sqlalchemy import and_, func, text
 from sqlalchemy.orm import Session
@@ -59,6 +59,8 @@ from app.analytics.layer3.gnn_train_worker import (
     _apply_feedback_overrides,
     _compute_fairness_metrics,
     _compute_provenance_metrics,
+    _label_ladder_counts,
+    _label_source_counts,
     _latest_feedback_overrides,
     _mark_feedback_consumed,
 )
@@ -80,6 +82,7 @@ from app.analytics.corruption.relations import typed_edges_from_postgres
 from app.analytics.layer3.gnn_backbone import (
     GNNDataset,
     _edges_from_postgres,
+    assess_benchmark_readiness,
     collapse_edges,
 )
 from app.analytics.layer3.gnn_model import (
@@ -170,6 +173,8 @@ def _load_corruption_dataset(
     max_edges: int = 30_000,
     min_edge_weight: int = 1,
     negative_multiplier: float = 1.5,
+    minimum_negative_count: int = 5,
+    minimum_negative_ratio: float = 0.1,
 ) -> Optional[GNNDataset]:
     """
     Load GraphFeatureSnapshot rows for the corruption window and build a
@@ -271,6 +276,7 @@ def _load_corruption_dataset(
             "features":     f,
             "corruption_events": f.get("corruption_events") or f.get("event_types") or {},
             "outcome_label": outcome_label,
+            "label_source": "confirmed_outcome_label" if outcome_label in {0, 1} else "weak_label",
             "provenance_tag": provenance.get("provenance_tag", "unknown"),
             "real_signal_ratio": float(provenance.get("real_signal_ratio") or 0.0),
             "source_type_counts": dict(provenance.get("source_type_counts") or {}),
@@ -335,6 +341,16 @@ def _load_corruption_dataset(
         positive_count      = positive_count,
         negative_count      = negative_count,
         benign_negative_count = negative_count,
+        selection_metadata  = {
+            "selection_strategy": "latest_entity_snapshot_lookback",
+            "benchmark_readiness": assess_benchmark_readiness(
+                total_count=len(labels),
+                positive_count=positive_count,
+                negative_count=negative_count,
+                min_negative_count=minimum_negative_count,
+                min_negative_ratio=minimum_negative_ratio,
+            ),
+        },
     )
 
 
@@ -520,6 +536,10 @@ def run_once(
     dropout:       float = 0.2,
     learning_rate: float = 0.001,
     weight_decay:  float = 0.0001,
+    split_policy:  str   = "temporal_recency_holdout",
+    val_ratio:     float = 0.2,
+    minimum_negative_count: int = 5,
+    minimum_negative_ratio: float = 0.1,
     seed:          int   = 42,
     model_version: str   = "corruption-gnn-v1",
     artifact_dir:  str   = "/app/artifacts/gnn",
@@ -540,6 +560,8 @@ def run_once(
         max_entities    = max_entities,
         max_edges       = max_edges,
         min_edge_weight = min_edge_weight,
+        minimum_negative_count = minimum_negative_count,
+        minimum_negative_ratio = minimum_negative_ratio,
     )
     if dataset is None:
         mark_worker_finished(db, worker_name="corruption_train_worker", status="no_data", detail="no_dataset", metadata=heartbeat_meta)
@@ -576,6 +598,8 @@ def run_once(
             dropout       = dropout,
             learning_rate = learning_rate,
             weight_decay  = weight_decay,
+            split_policy  = split_policy,
+            val_ratio     = val_ratio,
             seed          = seed,
             label_smoothing=0.05,
             pseudo_label_threshold=0.0,
@@ -622,6 +646,10 @@ def run_once(
             labels=dataset.labels,
             probabilities=train_result.probabilities,
         )
+        label_source_counts = _label_source_counts(dataset.node_meta)
+        label_ladder = _label_ladder_counts(label_source_counts)
+        benchmark_readiness = dict((dataset.selection_metadata or {}).get("benchmark_readiness") or {})
+        effective_split_policy = str(train_result.metrics.get("split_policy") or split_policy)
         fairness_gate_override_applied = False
         if fairness.get("fairness_flag") == "FAIL":
             disparity = float(fairness.get("max_positive_rate_disparity") or 0.0)
@@ -710,6 +738,9 @@ def run_once(
                 "epochs": epochs, "hidden_dim": hidden_dim, "embed_dim": embed_dim,
                 "dropout": dropout, "learning_rate": learning_rate,
                 "weight_decay": weight_decay, "seed": seed, "domain": "corruption",
+                "split_policy": split_policy, "val_ratio": val_ratio,
+                "minimum_negative_count": minimum_negative_count,
+                "minimum_negative_ratio": minimum_negative_ratio,
                 "allow_demo_real_data_override": bool(allow_demo_real_data_override),
                 "allow_demo_fairness_override": bool(allow_demo_fairness_override),
             },
@@ -734,35 +765,58 @@ def run_once(
                     "mode": "demo_override" if real_data_gate_override_applied else "strict",
                 },
                 "feedback": feedback_metrics,
+                "evaluation_protocol": {
+                    "temporal_policy": (
+                        "last_seen_recency_holdout"
+                        if effective_split_policy == "temporal_recency_holdout"
+                        else "non_temporal_holdout"
+                    ),
+                    "holdout_policy": effective_split_policy,
+                    "benchmarkable": bool(benchmark_readiness.get("benchmarkable")),
+                    "benchmark_reasons": list(benchmark_readiness.get("reasons") or []),
+                    "minimum_negative_count": int(benchmark_readiness.get("minimum_negative_count") or minimum_negative_count),
+                    "minimum_negative_ratio": float(benchmark_readiness.get("minimum_negative_ratio") or minimum_negative_ratio),
+                    "selected_window_end": dataset.window_end.isoformat(),
+                    "selected_window_strategy": str((dataset.selection_metadata or {}).get("selection_strategy") or "latest_window"),
+                    "calibration": {
+                        "ece": float(train_result.metrics.get("calibration_ece") or 0.0),
+                        "mce": float(train_result.metrics.get("calibration_mce") or 0.0),
+                        "brier_score": float(train_result.metrics.get("brier_score") or 0.0),
+                        "eval_samples": int(train_result.metrics.get("eval_samples") or 0),
+                    },
+                },
                 "label_strategy": {
                     "label_source": (
-                        "weak_plus_analyst_feedback"
-                        if feedback_metrics["override_count"] > 0
+                        "confirmed_outcomes_plus_feedback"
+                        if any(key in label_source_counts for key in ("confirmed_outcome_label", "analyst_feedback"))
                         else "heuristic_procurement_flags"
                     ),
                     "label_quality": (
-                        "weak_with_feedback_overrides"
-                        if feedback_metrics["override_count"] > 0
+                        "mixed_supervision"
+                        if any(key in label_source_counts for key in ("confirmed_outcome_label", "analyst_feedback"))
                         else "weak"
                     ),
                     "feedback_override_count": feedback_metrics["override_count"],
                     "new_feedback_count": feedback_metrics["new_feedback_count"],
+                    "label_source_counts": label_source_counts,
+                    "label_ladder": label_ladder,
                     "positive_definition": (
-                        "Labels come from procurement weak-label heuristics such as single-source "
-                        "awards, director conflicts, emergency procurement, payment anomalies, and "
-                        "event-volume thresholds. Analyst feedback overrides the heuristic label when present. "
-                        "They are not confirmed case outcomes."
+                        "Labels prefer confirmed audit, tribunal, sanction, or recovery outcomes first. "
+                        "Analyst feedback overrides the remaining labels when present. Otherwise the model "
+                        "falls back to procurement weak-label heuristics such as single-source awards, "
+                        "director conflicts, emergency procurement, and payment anomalies."
                     ),
                     "eval_caveat": (
-                        "AUC/F1/Precision/Recall are computed on a holdout split of the same weak-label "
-                        "dataset used for training. They do not establish real-world corruption "
-                        "detection accuracy against adjudicated cases."
+                        "AUC/F1/Precision/Recall are computed on a holdout split of the current supervision mix. "
+                        "Where outcome-backed labels are sparse, the metrics still reflect a partially weakly "
+                        "supervised corruption dataset rather than fully adjudicated national ground truth."
                     ),
                     "recommended_upgrade": (
-                        "Attach confirmed audit or court outcomes before using these metrics as external "
-                        "performance claims."
+                        "Increase confirmed audit, tribunal, and court outcomes to keep shifting supervision "
+                        "up the label ladder before using these metrics as external performance claims."
                     ),
                 },
+                "dataset_selection": dict(dataset.selection_metadata or {}),
                 "explainability": {
                     "method": "gradient_x_input",
                     "top_k": int(settings.ai_explainability_top_k),
@@ -898,6 +952,9 @@ def run_once(
         "predictions":     created,
         "feedback_overrides_applied": feedback_metrics["override_count"],
         "feedback_consumed": consumed_feedback,
+        "benchmarkable": bool(benchmark_readiness.get("benchmarkable")),
+        "benchmark_reasons": list(benchmark_readiness.get("reasons") or []),
+        "selected_window_strategy": str((dataset.selection_metadata or {}).get("selection_strategy") or "latest_window"),
         "fairness_gate_override_applied": bool(fairness_gate_override_applied),
         "real_data_gate_passed": bool(real_data_gate_passed),
         "real_data_gate_override_applied": bool(real_data_gate_override_applied),
@@ -931,6 +988,14 @@ def main() -> None:
     p.add_argument("--embed-dim",     type=int,   default=32)
     p.add_argument("--dropout",       type=float, default=0.2)
     p.add_argument("--learning-rate", type=float, default=0.001)
+    p.add_argument(
+        "--split-policy",
+        default="temporal_recency_holdout",
+        choices=["entity_hash_holdout", "temporal_recency_holdout", "random"],
+    )
+    p.add_argument("--val-ratio", type=float, default=0.2)
+    p.add_argument("--minimum-negative-count", type=int, default=5)
+    p.add_argument("--minimum-negative-ratio", type=float, default=0.1)
     p.add_argument("--seed",          type=int,   default=42)
     p.add_argument("--model-version", default="corruption-gnn-v1")
     p.add_argument("--artifact-dir",  default="/app/artifacts/gnn")
@@ -953,6 +1018,10 @@ def main() -> None:
             embed_dim      = args.embed_dim,
             dropout        = args.dropout,
             learning_rate  = args.learning_rate,
+            split_policy   = args.split_policy,
+            val_ratio      = args.val_ratio,
+            minimum_negative_count = args.minimum_negative_count,
+            minimum_negative_ratio = args.minimum_negative_ratio,
             seed           = args.seed,
             model_version  = args.model_version,
             artifact_dir   = args.artifact_dir,

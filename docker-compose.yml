@@ -36,7 +36,7 @@ services:
     <<: *backend-env
     environment:
       PYTHONPATH: /app
-      WEB_CONCURRENCY: ${WEB_CONCURRENCY:-2}
+      WEB_CONCURRENCY: ${WEB_CONCURRENCY:-1}
     ports:
       - "8000:8000"
     depends_on:
@@ -76,6 +76,10 @@ services:
     environment:
       PYTHONPATH: /app
       JUPYTER_TOKEN: ${JUPYTER_TOKEN:-change-me-jupyter-token}
+      GNN_CPU_THREADS: ${GNN_CPU_THREADS:-4}
+      GNN_PRETRAIN_EPOCHS: ${GNN_PRETRAIN_EPOCHS:-3}
+      GNN_RETRAIN_INTERVAL_SEC: ${GNN_RETRAIN_INTERVAL_SEC:-3600}
+      CUBLAS_WORKSPACE_CONFIG: ${CUBLAS_WORKSPACE_CONFIG:-:4096:8}
     ports:
       - "8888:8888"
     depends_on:
@@ -212,10 +216,12 @@ services:
     environment:
       PYTHONPATH: /app
       INFERENCE_CONSUMER_TOPICS: ${KAFKA_EVENTS_TOPIC:-sentinel.events.v1}
-      INFERENCE_MIN_INTERVAL_SEC: "60"
-      INFERENCE_BATCH_THRESHOLD: "50"
+      INFERENCE_MIN_INTERVAL_SEC: ${INFERENCE_MIN_INTERVAL_SEC:-30}
+      INFERENCE_BATCH_THRESHOLD: ${INFERENCE_BATCH_THRESHOLD:-25}
       INFERENCE_WINDOW_KEY: ${GNN_WINDOW_KEY:-Wshort}
       INFERENCE_PREDICTION_TYPE: ${GNN_PREDICTION_TYPE:-risk_gnn}
+      INFERENCE_MAX_ENTITIES: ${INFERENCE_MAX_ENTITIES:-2500}
+      INFERENCE_CONSUMER_TIMEOUT_MS: ${INFERENCE_CONSUMER_TIMEOUT_MS:-1000}
     command: python -m app.streaming.inference_consumer
     depends_on:
       postgres:
@@ -261,7 +267,23 @@ services:
       PYTHONPATH: /app
       GNN_EDGE_BACKEND: postgres
       CUBLAS_WORKSPACE_CONFIG: ":4096:8"
-    command: /bin/sh -c "while true; do python -m app.analytics.layer3.gnn_train_worker --window-key Wmid --epochs 60; sleep 3600; done"
+      GNN_CPU_THREADS: ${GNN_CPU_THREADS:-4}
+      GNN_PRETRAIN_EPOCHS: ${GNN_PRETRAIN_EPOCHS:-3}
+      GNN_MAX_ENTITIES: ${GNN_MAX_ENTITIES:-2500}
+      GNN_MAX_EDGES: ${GNN_MAX_EDGES:-20000}
+      GNN_EPOCHS: ${GNN_EPOCHS:-30}
+      GNN_HIDDEN_DIM: ${GNN_HIDDEN_DIM:-48}
+      GNN_EMBED_DIM: ${GNN_EMBED_DIM:-24}
+      GNN_SPLIT_POLICY: ${GNN_SPLIT_POLICY:-temporal_recency_holdout}
+      GNN_MIN_NEGATIVE_COUNT: ${GNN_MIN_NEGATIVE_COUNT:-5}
+      GNN_MIN_NEGATIVE_RATIO: ${GNN_MIN_NEGATIVE_RATIO:-0.1}
+      GNN_BENCHMARK_WINDOW_CANDIDATES: ${GNN_BENCHMARK_WINDOW_CANDIDATES:-12}
+      GNN_VAL_RATIO: ${GNN_VAL_RATIO:-0.2}
+      GNN_MIN_REAL_RATIO: ${GNN_MIN_REAL_RATIO:-0.3}
+      GNN_DETERMINISTIC_TRAINING: ${GNN_DETERMINISTIC_TRAINING:-true}
+      GNN_USE_AMP: ${GNN_USE_AMP:-true}
+      GNN_RETRAIN_INTERVAL_SEC: ${GNN_RETRAIN_INTERVAL_SEC:-14400}
+    command: /bin/sh -c "while true; do python -m app.analytics.layer3.gnn_train_worker --window-key ${GNN_WINDOW_KEY:-Wmid} --edge-backend postgres --max-entities ${GNN_MAX_ENTITIES:-2500} --max-edges ${GNN_MAX_EDGES:-20000} --min-edge-weight ${GNN_MIN_EDGE_WEIGHT:-1} --negative-multiplier ${GNN_NEGATIVE_MULTIPLIER:-1.5} --minimum-negative-count ${GNN_MIN_NEGATIVE_COUNT:-5} --minimum-negative-ratio ${GNN_MIN_NEGATIVE_RATIO:-0.1} --benchmark-window-candidates ${GNN_BENCHMARK_WINDOW_CANDIDATES:-12} --threshold-min-samples ${GNN_THRESHOLD_MIN_SAMPLES:-10} --component-discovery-enabled 1 --component-min-size ${GNN_COMPONENT_MIN_SIZE:-3} --component-min-indicator-ratio ${GNN_COMPONENT_MIN_INDICATOR_RATIO:-0.5} --epochs ${GNN_EPOCHS:-30} --hidden-dim ${GNN_HIDDEN_DIM:-48} --embed-dim ${GNN_EMBED_DIM:-24} --dropout ${GNN_DROPOUT:-0.2} --learning-rate ${GNN_LEARNING_RATE:-0.001} --weight-decay ${GNN_WEIGHT_DECAY:-0.0001} --temporal-decay ${AI_TEMPORAL_EDGE_DECAY:-0.015} --split-policy ${GNN_SPLIT_POLICY:-temporal_recency_holdout} --val-ratio ${GNN_VAL_RATIO:-0.2} --pretrain-epochs ${GNN_PRETRAIN_EPOCHS:-3} --seed ${GNN_SEED:-7} --artifact-dir ${GNN_ARTIFACT_DIR:-/app/artifacts/gnn}; sleep ${GNN_RETRAIN_INTERVAL_SEC:-14400}; done"
     depends_on:
       postgres:
         condition: service_healthy
@@ -282,7 +304,17 @@ services:
     environment:
       PYTHONPATH: /app
       CUBLAS_WORKSPACE_CONFIG: ":4096:8"
-    command: /bin/sh -c "while true; do python -m app.analytics.corruption.train_worker --window-key Wcorruption --epochs 60; sleep 3600; done"
+      GNN_CPU_THREADS: ${GNN_CPU_THREADS:-4}
+      GNN_MAX_ENTITIES: ${GNN_MAX_ENTITIES:-2500}
+      GNN_MAX_EDGES: ${GNN_MAX_EDGES:-20000}
+      GNN_EPOCHS: ${GNN_EPOCHS:-30}
+      GNN_HIDDEN_DIM: ${GNN_HIDDEN_DIM:-48}
+      GNN_EMBED_DIM: ${GNN_EMBED_DIM:-24}
+      GNN_DROPOUT: ${GNN_DROPOUT:-0.2}
+      GNN_LEARNING_RATE: ${GNN_LEARNING_RATE:-0.001}
+      GNN_SEED: ${GNN_SEED:-7}
+      GNN_RETRAIN_INTERVAL_SEC: ${GNN_RETRAIN_INTERVAL_SEC:-14400}
+    command: /bin/sh -c "while true; do python -m app.analytics.corruption.train_worker --window-key ${CORRUPTION_WINDOW_KEY:-Wcorruption} --max-entities ${GNN_MAX_ENTITIES:-2500} --max-edges ${GNN_MAX_EDGES:-20000} --epochs ${GNN_EPOCHS:-30} --hidden-dim ${GNN_HIDDEN_DIM:-48} --embed-dim ${GNN_EMBED_DIM:-24} --dropout ${GNN_DROPOUT:-0.2} --learning-rate ${GNN_LEARNING_RATE:-0.001} --seed ${GNN_SEED:-7} --artifact-dir ${GNN_ARTIFACT_DIR:-/app/artifacts/gnn}; sleep ${GNN_RETRAIN_INTERVAL_SEC:-14400}; done"
     depends_on:
       postgres:
         condition: service_healthy

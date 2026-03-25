@@ -1270,6 +1270,118 @@ def _map_urlhaus_ioc(payload: Dict[str, Any], confidence: float, classification:
     )
 
 
+def _map_threatfox_ioc(payload: Dict[str, Any], confidence: float, classification: Optional[str]) -> CanonicalEvent:
+    occurred_at = _as_datetime(
+        payload,
+        ("timestamp", "first_seen", "date_added", "created", "ioc_created_at"),
+    )
+    indicator = _as_str(payload, ("indicator", "ioc", "value"), required=True)
+    indicator_type = (_as_str(payload, ("indicator_type", "ioc_type", "type")) or "").strip().lower()
+    malware = _as_str(payload, ("malware", "malware_family", "threat_type")) or "malware_ioc"
+    tags = _as_str_list(payload, ("tags", "tag"))
+    status = _as_str(payload, ("status", "ioc_status")) or "active"
+
+    anchors: Dict[str, str] = {}
+    host = indicator
+    if indicator_type in {"ip", "ipv4", "ipv6"}:
+        anchors["ip"] = indicator
+    elif indicator_type in {"domain", "hostname"}:
+        anchors["domain"] = indicator.lower()
+        host = indicator.lower()
+    elif indicator_type == "url":
+        anchors["url"] = indicator
+        domain = _extract_domain_from_url(indicator)
+        if domain:
+            anchors["domain"] = domain
+            host = domain
+    else:
+        anchors["endpoint"] = f"{indicator_type or 'ioc'}:{indicator}"
+
+    reason_codes = ["malware_ioc", "osint_feed", "feed:threatfox"]
+    if status:
+        reason_codes.append(f"ioc_status:{status.strip().lower()}")
+    if malware:
+        reason_codes.append(f"malware_family:{malware.strip().lower()}")
+    for tag in tags[:5]:
+        reason_codes.append(f"tag:{tag.strip().lower()}")
+
+    model_payload: Dict[str, Any] = {
+        "source": "threatfox",
+        "host": host,
+        "artifact_name": "threatfox",
+        "finding_type": malware,
+        "severity": _normalize_ioc_severity(status, default="high"),
+        "status": status,
+        "client_ip": indicator if "ip" in anchors else None,
+        "file_path": indicator if indicator_type == "url" else None,
+        "sha256": indicator if indicator_type in {"sha256", "tlsh", "md5"} else None,
+        "case_id": _as_str(payload, ("reporter", "reporter_name")),
+        "hunt_id": _as_str(payload, ("id", "ioc_id", "threatfox_id")),
+        "reason_codes": sorted(set(reason_codes)),
+    }
+    model_payload = {k: v for k, v in model_payload.items() if v is not None}
+
+    return CanonicalEvent(
+        event_type="DFIR_FINDING_EVENT",
+        occurred_at=occurred_at,
+        confidence=_coerce_confidence(confidence),
+        payload=model_payload,
+        anchors=anchors,
+        classification=classification,
+    )
+
+
+def _map_malwarebazaar_sample(payload: Dict[str, Any], confidence: float, classification: Optional[str]) -> CanonicalEvent:
+    occurred_at = _as_datetime(
+        payload,
+        ("timestamp", "first_seen", "date_added", "created", "file_added"),
+    )
+    sha256 = _as_str(payload, ("sha256_hash", "sha256", "hash"), required=True)
+    family = _as_str(payload, ("malware_family", "signature", "family")) or "malware_sample"
+    filename = _as_str(payload, ("file_name", "filename"))
+    delivery_url = _as_str(payload, ("delivery_url", "url"))
+    tag_list = _as_str_list(payload, ("tags", "tag"))
+    status = _as_str(payload, ("status", "sample_status")) or "active"
+
+    anchors: Dict[str, str] = {"endpoint": f"sha256:{sha256.lower()}"}
+    if delivery_url:
+        anchors["url"] = delivery_url
+        domain = _extract_domain_from_url(delivery_url)
+        if domain:
+            anchors["domain"] = domain
+
+    reason_codes = ["malware_sample", "osint_feed", "feed:malwarebazaar"]
+    if family:
+        reason_codes.append(f"malware_family:{family.strip().lower()}")
+    for tag in tag_list[:5]:
+        reason_codes.append(f"tag:{tag.strip().lower()}")
+
+    model_payload: Dict[str, Any] = {
+        "source": "malwarebazaar",
+        "host": family,
+        "artifact_name": filename or family,
+        "finding_type": family,
+        "severity": _normalize_ioc_severity(status, default="high"),
+        "status": status,
+        "sha256": sha256.lower(),
+        "file_path": delivery_url,
+        "command_line": _as_str(payload, ("file_type", "file_type_mime")),
+        "case_id": _as_str(payload, ("reporter", "reporter_name")),
+        "hunt_id": _as_str(payload, ("sha256_hash", "sample_id", "id")),
+        "reason_codes": sorted(set(reason_codes)),
+    }
+    model_payload = {k: v for k, v in model_payload.items() if v is not None}
+
+    return CanonicalEvent(
+        event_type="DFIR_FINDING_EVENT",
+        occurred_at=occurred_at,
+        confidence=_coerce_confidence(confidence),
+        payload=model_payload,
+        anchors=anchors,
+        classification=classification,
+    )
+
+
 def _map_otx_indicator(payload: Dict[str, Any], confidence: float, classification: Optional[str]) -> CanonicalEvent:
     occurred_at = _as_datetime(
         payload,
@@ -1477,6 +1589,44 @@ def _map_backup_attestation(payload: Dict[str, Any], confidence: float, classifi
     )
 
 
+def _map_vpn_gateway_session(payload: Dict[str, Any], confidence: float, classification: Optional[str]) -> CanonicalEvent:
+    occurred_at = _as_datetime(payload, ("timestamp", "time", "occurred_at", "first_seen", "flow_start_time"))
+    client_ip = _as_str(payload, ("src_ip", "ip", "client_ip", "source_ip"))
+    gateway = _as_str(payload, ("gateway_id", "service_id", "dst_ip", "destination_ip", "vpn_gateway")) or "vpn-gateway"
+    device_id = _as_str(payload, ("device_id", "session_id", "dst_ip", "client_id")) or gateway
+    if not client_ip and not device_id:
+        raise ValueError("vpn_gateway_session_v1 requires src_ip/ip/client_ip or device_id")
+
+    anchors: Dict[str, str] = {}
+    if client_ip:
+        anchors["ip"] = client_ip
+    if device_id:
+        anchors["device_id"] = device_id
+
+    username = _as_str(payload, ("username", "user", "principal", "app_label"))
+    outcome = _normalize_login_outcome(_as_str(payload, ("result", "status", "outcome")) or "success")
+    model_payload: Dict[str, Any] = {
+        "username": username,
+        "outcome": outcome,
+        "user_agent": _as_str(payload, ("protocol", "vpn_proto", "app_label")),
+        "device_id": device_id,
+        "ip": client_ip,
+        "asn": _as_int(payload, ("asn", "src_asn")),
+        "provider": _as_str(payload, ("provider", "vpn_provider", "category")),
+        "request_fingerprint": _as_str(payload, ("request_fingerprint", "flow_id")),
+    }
+    model_payload = {k: v for k, v in model_payload.items() if v is not None}
+
+    return CanonicalEvent(
+        event_type="LOGIN_EVENT",
+        occurred_at=occurred_at,
+        confidence=_coerce_confidence(confidence),
+        payload=model_payload,
+        anchors=anchors,
+        classification=classification,
+    )
+
+
 _CONNECTORS: Dict[str, ConnectorDefinition] = {
     "splunk_login_v1": ConnectorDefinition(
         key="splunk_login_v1",
@@ -1568,6 +1718,18 @@ _CONNECTORS: Dict[str, ConnectorDefinition] = {
         required_fields=("url",),
         mapper=_map_urlhaus_ioc,
     ),
+    "threatfox_ioc_v1": ConnectorDefinition(
+        key="threatfox_ioc_v1",
+        description="ThreatFox malware IOC feed to DFIR_FINDING_EVENT",
+        required_fields=("indicator|ioc|value", "indicator_type|ioc_type|type"),
+        mapper=_map_threatfox_ioc,
+    ),
+    "malwarebazaar_sample_v1": ConnectorDefinition(
+        key="malwarebazaar_sample_v1",
+        description="MalwareBazaar sample metadata to DFIR_FINDING_EVENT",
+        required_fields=("sha256_hash|sha256|hash",),
+        mapper=_map_malwarebazaar_sample,
+    ),
     "otx_indicator_v1": ConnectorDefinition(
         key="otx_indicator_v1",
         description="AlienVault OTX indicators to DFIR_FINDING_EVENT",
@@ -1603,6 +1765,12 @@ _CONNECTORS: Dict[str, ConnectorDefinition] = {
         description="Backup/immutable storage attestations to BACKUP_ATTESTATION_EVENT",
         required_fields=("attested_at|timestamp", "asset_id|service_id", "backup_id|snapshot_id"),
         mapper=_map_backup_attestation,
+    ),
+    "vpn_gateway_session_v1": ConnectorDefinition(
+        key="vpn_gateway_session_v1",
+        description="VPN benchmark or gateway session rows to LOGIN_EVENT",
+        required_fields=("timestamp|time|flow_start_time", "src_ip|ip|client_ip OR device_id|session_id|dst_ip"),
+        mapper=_map_vpn_gateway_session,
     ),
 }
 

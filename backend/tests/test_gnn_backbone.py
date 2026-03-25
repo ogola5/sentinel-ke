@@ -1,5 +1,6 @@
 from app.analytics.layer3.gnn_backbone import (
     _extract_truth_label,
+    assess_benchmark_readiness,
     build_feature_vector,
     collapse_edges,
     entity_key_to_neo4j_ref,
@@ -36,6 +37,7 @@ def test_weak_label_low_signal_is_negative():
 
 def test_feature_vector_shape_and_recency():
     from app.analytics.layer3.gnn_backbone import FEATURE_DIM
+
     v = build_feature_vector(
         entity_type="ip",
         event_count=10,
@@ -52,9 +54,7 @@ def test_feature_vector_shape_and_recency():
         },
     )
     assert len(v) == FEATURE_DIM
-    # Recency signal is in Block 2 (temporal), should be > 0 for recent activity
     assert v[15] > 0
-    # VPN_CLUSTER_MEMBER flag is in Block 3 risk flags (index 21)
     assert v[21] == 1.0
 
 
@@ -88,3 +88,30 @@ def test_extract_truth_label_accepts_confirmed_negative_variants():
     assert _extract_truth_label({"confirmed_benign": True}) == 0
     assert _extract_truth_label({"ground_truth_label": "benign"}) == 0
     assert _extract_truth_label({"case_outcome": "false_positive"}) == 0
+
+
+def test_assess_benchmark_readiness_flags_degenerate_slice():
+    out = assess_benchmark_readiness(
+        total_count=27,
+        positive_count=27,
+        negative_count=0,
+        min_negative_count=5,
+        min_negative_ratio=0.1,
+    )
+
+    assert out["benchmarkable"] is False
+    assert "no_negative_labels" in out["reasons"]
+    assert "negative_ratio_below_floor" in out["reasons"]
+
+
+def test_assess_benchmark_readiness_accepts_usable_slice():
+    out = assess_benchmark_readiness(
+        total_count=40,
+        positive_count=24,
+        negative_count=16,
+        min_negative_count=5,
+        min_negative_ratio=0.1,
+    )
+
+    assert out["benchmarkable"] is True
+    assert out["reasons"] == []

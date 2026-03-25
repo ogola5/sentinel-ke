@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 import logging
 import math
 from pathlib import Path
-from typing import Dict, List, Mapping, Optional, Sequence, Set, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
 from sqlalchemy import text
 from sqlalchemy.dialects.postgresql import insert
@@ -74,6 +74,41 @@ def _label_source_counts(node_meta: Sequence[Mapping[str, object]]) -> Dict[str,
         source = str((meta or {}).get("label_source") or "weak_label")
         out[source] = out.get(source, 0) + 1
     return out
+
+
+LABEL_SOURCE_LADDER = {
+    "confirmed_event_label": "gold",
+    "confirmed_outcome_label": "gold",
+    "analyst_feedback": "gold",
+    "operational_threat_alert": "silver",
+    "weak_label": "bronze",
+}
+
+
+def _label_ladder_counts(label_source_counts: Mapping[str, int]) -> Dict[str, Any]:
+    tier_counts = {"gold": 0, "silver": 0, "bronze": 0, "unknown": 0}
+    tier_sources: Dict[str, Dict[str, int]] = {
+        "gold": {},
+        "silver": {},
+        "bronze": {},
+        "unknown": {},
+    }
+    for source, count in dict(label_source_counts or {}).items():
+        tier = LABEL_SOURCE_LADDER.get(str(source), "unknown")
+        tier_counts[tier] = tier_counts.get(tier, 0) + int(count or 0)
+        tier_sources.setdefault(tier, {})[str(source)] = int(count or 0)
+    dominant_tier = max(tier_counts.items(), key=lambda item: item[1])[0] if tier_counts else "unknown"
+    return {
+        "tier_counts": tier_counts,
+        "tier_sources": tier_sources,
+        "dominant_tier": dominant_tier,
+        "definitions": {
+            "gold": "confirmed outcomes or analyst-confirmed labels",
+            "silver": "externally corroborated operational signals",
+            "bronze": "heuristics or weak labels",
+            "unknown": "unmapped or legacy label sources",
+        },
+    }
 
 
 def _ensure_ai_tables() -> None:
@@ -233,6 +268,7 @@ def _apply_feedback_overrides(
             positive_count=positive_count,
             negative_count=negative_count,
             benign_negative_count=benign_negative_count,
+            selection_metadata=dict(dataset.selection_metadata or {}),
         ),
         {
             "override_count": positive_override_count + negative_override_count,
@@ -1291,6 +1327,9 @@ def run_once(
     max_edges: int = 30000,
     min_edge_weight: int = 1,
     negative_multiplier: float = 1.5,
+    minimum_negative_count: int = 5,
+    minimum_negative_ratio: float = 0.1,
+    benchmark_window_candidates: int = 12,
     threshold_min_samples: int = 10,
     component_discovery_enabled: bool = True,
     component_min_size: int = 3,
@@ -1302,7 +1341,7 @@ def run_once(
     learning_rate: float = 0.001,
     weight_decay: float = 0.0001,
     temporal_decay: float = 0.015,
-    split_policy: str = "entity_hash_holdout",
+    split_policy: str = "temporal_recency_holdout",
     val_ratio: float = 0.2,
     pretrain_epochs: int = 5,
     seed: int = 7,
@@ -1327,6 +1366,9 @@ def run_once(
             min_edge_weight=min_edge_weight,
             max_edges=max_edges,
             negative_multiplier=negative_multiplier,
+            min_negative_count=minimum_negative_count,
+            min_negative_ratio=minimum_negative_ratio,
+            benchmark_window_candidates=benchmark_window_candidates,
         )
     except Exception as exc:
         db.rollback()
@@ -1390,6 +1432,9 @@ def run_once(
         max_nodes=int(settings.ai_explainability_max_nodes),
     )
     label_source_counts = _label_source_counts(dataset.node_meta)
+    label_ladder = _label_ladder_counts(label_source_counts)
+    benchmark_readiness = dict((dataset.selection_metadata or {}).get("benchmark_readiness") or {})
+    effective_split_policy = str(train_result.metrics.get("split_policy") or split_policy)
 
     try:
         thresholds = _calibrate_thresholds(
@@ -1502,6 +1547,9 @@ def run_once(
                 "max_edges": max_edges,
                 "min_edge_weight": min_edge_weight,
                 "negative_multiplier": negative_multiplier,
+                "minimum_negative_count": minimum_negative_count,
+                "minimum_negative_ratio": minimum_negative_ratio,
+                "benchmark_window_candidates": benchmark_window_candidates,
                 "threshold_min_samples": threshold_min_samples,
                 "component_discovery_enabled": component_discovery_enabled,
                 "component_min_size": component_min_size,
@@ -1544,8 +1592,20 @@ def run_once(
                 },
                 "feedback": feedback_metrics,
                 "evaluation_protocol": {
-                    "temporal_policy": "window_ordered",
-                    "holdout_policy": split_policy,
+                    "temporal_policy": (
+                        "last_seen_recency_holdout"
+                        if effective_split_policy == "temporal_recency_holdout"
+                        else "non_temporal_holdout"
+                    ),
+                    "holdout_policy": effective_split_policy,
+                    "benchmarkable": bool(benchmark_readiness.get("benchmarkable")),
+                    "benchmark_reasons": list(benchmark_readiness.get("reasons") or []),
+                    "minimum_negative_count": int(benchmark_readiness.get("minimum_negative_count") or minimum_negative_count),
+                    "minimum_negative_ratio": float(benchmark_readiness.get("minimum_negative_ratio") or minimum_negative_ratio),
+                    "selected_window_end": dataset.window_end.isoformat(),
+                    "selected_window_strategy": str((dataset.selection_metadata or {}).get("selection_strategy") or "latest_window"),
+                    "selected_window_rank": int((dataset.selection_metadata or {}).get("window_rank") or 0),
+                    "candidate_window_count": int((dataset.selection_metadata or {}).get("candidate_window_count") or 1),
                     "calibration": {
                         "ece": float(train_result.metrics.get("calibration_ece") or 0.0),
                         "mce": float(train_result.metrics.get("calibration_mce") or 0.0),
@@ -1573,6 +1633,7 @@ def run_once(
                     "feedback_override_count": feedback_metrics["override_count"],
                     "new_feedback_count": feedback_metrics["new_feedback_count"],
                     "label_source_counts": label_source_counts,
+                    "label_ladder": label_ladder,
                     "positive_definition": (
                         "Labels prefer confirmed event outcomes first, then high-confidence operational "
                         "corroboration such as threat alerts, then analyst feedback overrides, and only "
@@ -1588,6 +1649,7 @@ def run_once(
                         "records to keep reducing reliance on heuristic supervision."
                     ),
                 },
+                "dataset_selection": dict(dataset.selection_metadata or {}),
                 "explainability": {
                     "method": attribution_method,
                     "top_k": int(settings.ai_explainability_top_k),
@@ -1650,6 +1712,7 @@ def run_once(
             params_json=dict(run.params_json or {}),
         )
 
+        now = datetime.now(timezone.utc)
         created = 0
         updated = 0
         indicators_by_entity: Dict[str, Dict[str, object]] = {}
@@ -1907,6 +1970,9 @@ def run_once(
         "campaign_indicators_updated": campaign_indicator_stats["updated"],
         "feedback_overrides_applied": feedback_metrics["override_count"],
         "feedback_consumed": consumed_feedback,
+        "benchmarkable": bool(benchmark_readiness.get("benchmarkable")),
+        "benchmark_reasons": list(benchmark_readiness.get("reasons") or []),
+        "selected_window_strategy": str((dataset.selection_metadata or {}).get("selection_strategy") or "latest_window"),
         "fairness_gate_override_applied": bool(fairness_gate_override_applied),
         "real_data_gate_passed": bool(real_data_gate_passed),
         "real_data_gate_override_applied": bool(real_data_gate_override_applied),
@@ -1929,6 +1995,9 @@ def main() -> None:
     p.add_argument("--max-edges", type=int, default=settings.gnn_max_edges)
     p.add_argument("--min-edge-weight", type=int, default=settings.gnn_min_edge_weight)
     p.add_argument("--negative-multiplier", type=float, default=settings.gnn_negative_multiplier)
+    p.add_argument("--minimum-negative-count", type=int, default=settings.gnn_min_negative_count)
+    p.add_argument("--minimum-negative-ratio", type=float, default=settings.gnn_min_negative_ratio)
+    p.add_argument("--benchmark-window-candidates", type=int, default=settings.gnn_benchmark_window_candidates)
     p.add_argument("--threshold-min-samples", type=int, default=settings.gnn_threshold_min_samples)
     p.add_argument("--component-discovery-enabled", type=int, default=1 if settings.gnn_component_discovery_enabled else 0)
     p.add_argument("--component-min-size", type=int, default=settings.gnn_component_min_size)
@@ -1946,7 +2015,7 @@ def main() -> None:
         choices=["entity_hash_holdout", "temporal_recency_holdout", "random"],
     )
     p.add_argument("--val-ratio", type=float, default=settings.gnn_val_ratio)
-    p.add_argument("--pretrain-epochs", type=int, default=5)
+    p.add_argument("--pretrain-epochs", type=int, default=settings.gnn_pretrain_epochs)
     p.add_argument("--seed", type=int, default=settings.gnn_seed)
     p.add_argument("--uncertainty-abstain-threshold", type=float, default=settings.ai_uncertainty_abstain_threshold)
     p.add_argument("--model-version", default=settings.gnn_model_version)
@@ -1973,6 +2042,9 @@ def main() -> None:
             max_edges=args.max_edges,
             min_edge_weight=args.min_edge_weight,
             negative_multiplier=args.negative_multiplier,
+            minimum_negative_count=args.minimum_negative_count,
+            minimum_negative_ratio=args.minimum_negative_ratio,
+            benchmark_window_candidates=args.benchmark_window_candidates,
             threshold_min_samples=args.threshold_min_samples,
             component_discovery_enabled=bool(args.component_discovery_enabled),
             component_min_size=args.component_min_size,

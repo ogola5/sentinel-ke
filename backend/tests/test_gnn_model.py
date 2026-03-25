@@ -53,7 +53,7 @@ def test_train_graphsage_on_synthetic_graph():
     assert "brier" in out.metrics
     assert "calibration_ece" in out.metrics
     assert "brier_score" in out.metrics
-    assert out.metrics["split_policy"] in {"entity_hash_holdout", "random", "temporal_recency_holdout"}
+    assert out.metrics["split_policy"] == "temporal_recency_holdout"
     assert 0.0 <= out.metrics["auc"] <= 1.0
     assert 0.0 <= out.metrics["ece"] <= 1.0
     assert 0.0 <= out.metrics["brier"] <= 1.0
@@ -82,6 +82,27 @@ def test_train_graphsage_entity_holdout_is_deterministic():
     b = train_graphsage(dataset, epochs=5, hidden_dim=8, embed_dim=4, seed=13, split_policy="entity_hash_holdout")
     assert a.metrics["val_count"] == b.metrics["val_count"]
     assert a.metrics["split_policy"] == "entity_hash_holdout"
+
+
+def test_train_graphsage_defaults_to_temporal_holdout():
+    pytest.importorskip("torch")
+
+    now = datetime.now(timezone.utc)
+    dataset = GNNDataset(
+        window_key="Wmid",
+        window_start=now,
+        window_end=now,
+        entity_keys=[f"node:{i}" for i in range(10)],
+        entity_types=["node"] * 10,
+        feature_matrix=[[float(i), float(10 - i), 0.1 * i, 0.0] + [0.0] * 12 for i in range(10)],
+        labels=[1 if i < 4 else 0 for i in range(10)],
+        edges=[(i, (i + 1) % 10, 1.0) for i in range(10)],
+        node_meta=[{} for _ in range(10)],
+        source_backend_used="synthetic",
+    )
+
+    out = train_graphsage(dataset, epochs=3, hidden_dim=8, embed_dim=4, seed=17)
+    assert out.metrics["split_policy"] == "temporal_recency_holdout"
 
 
 

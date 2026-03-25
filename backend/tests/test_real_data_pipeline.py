@@ -4,18 +4,26 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from app.integrations.real_data_pipeline import (
     build_feodo_records,
     build_kev_epss_records,
+    build_malwarebazaar_records,
     build_otx_indicator_records,
+    build_threatfox_records,
     build_otx_stix_bundle,
     build_urlhaus_records,
     fetch_epss_lookup,
     ingest_records_via_connectors,
     iter_rows_from_path,
     load_feodo_rows,
+    load_malwarebazaar_rows,
+    load_threatfox_rows,
     normalize_caida_row,
     normalize_cic_row,
+    normalize_vpn_benchmark_row,
+    _run_ppra_job,
     NormalizedConnectorRecord,
 )
 
@@ -128,6 +136,76 @@ def test_build_urlhaus_records_extracts_url_and_host():
     assert item.payload["host"] == "bad.example"
 
 
+def test_load_threatfox_rows_accepts_json_list_from_api():
+    def _fake_get(url, params=None, timeout=30):
+        del url, params, timeout
+        return _FakeResponse({"data": [{"ioc": "203.0.113.5", "ioc_type": "ip"}]})
+
+    rows = load_threatfox_rows(getter=_fake_get)
+    assert rows[0]["ioc"] == "203.0.113.5"
+
+
+def test_build_threatfox_records_maps_required_connector_fields():
+    rows = [
+        {
+            "first_seen": "2026-03-09T12:00:00Z",
+            "ioc": "203.0.113.5",
+            "ioc_type": "ip",
+            "malware": "qakbot",
+            "status": "active",
+        }
+    ]
+    records = build_threatfox_records(rows)
+    assert len(records) == 1
+    item = records[0]
+    assert item.connector_key == "threatfox_ioc_v1"
+    assert item.payload["indicator"] == "203.0.113.5"
+    assert item.payload["indicator_type"] == "ip"
+    assert item.payload["malware"] == "qakbot"
+
+
+def test_load_malwarebazaar_rows_accepts_json_list_from_api():
+    def _fake_post(url, data=None, timeout=30):
+        del url, data, timeout
+        return _FakeResponse({"data": [{"sha256_hash": "ab" * 32}]})
+
+    rows = load_malwarebazaar_rows(getter=_fake_post)
+    assert rows[0]["sha256_hash"] == "ab" * 32
+
+
+def test_build_malwarebazaar_records_maps_required_connector_fields():
+    rows = [
+        {
+            "first_seen": "2026-03-09T12:00:00Z",
+            "sha256_hash": "ab" * 32,
+            "signature": "win.qakbot",
+            "file_name": "dropper.exe",
+        }
+    ]
+    records = build_malwarebazaar_records(rows)
+    assert len(records) == 1
+    item = records[0]
+    assert item.connector_key == "malwarebazaar_sample_v1"
+    assert item.payload["sha256_hash"] == "ab" * 32
+    assert item.payload["malware_family"] == "win.qakbot"
+
+
+def test_normalize_vpn_benchmark_row_maps_vpn_rows_to_login_connector():
+    row = {
+        "timestamp": "2016-07-01T10:20:30Z",
+        "src_ip": "10.0.0.5",
+        "dst_ip": "198.51.100.10",
+        "label": "VPN",
+        "app_label": "OpenVPN",
+        "protocol": "udp",
+    }
+    record = normalize_vpn_benchmark_row(row)
+    assert record is not None
+    assert record.connector_key == "vpn_gateway_session_v1"
+    assert record.payload["src_ip"] == "10.0.0.5"
+    assert record.payload["provider"] == "OpenVPN"
+
+
 def test_build_otx_indicator_records_and_stix_bundle():
     pulses = [
         {
@@ -203,6 +281,12 @@ def test_normalize_caida_row_maps_to_ddos_connector():
     assert record.payload["request_rate"] == 22000.0
     assert record.payload["unique_ips_count"] == 1200
     assert record.payload["endpoint"] == "port:443"
+
+
+def test_run_ppra_job_is_deprecated_in_favor_of_corruption_ingesters():
+    args = SimpleNamespace(input_file="/tmp/ppra.csv")
+    with pytest.raises(ValueError, match="deprecated"):
+        _run_ppra_job(args)
 
 
 def test_iter_rows_from_path_supports_csv_and_jsonl(tmp_path: Path):

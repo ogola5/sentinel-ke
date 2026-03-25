@@ -89,6 +89,15 @@ def test_gnn_train_worker_persists_outputs(monkeypatch):
             positive_count=2,
             negative_count=1,
             benign_negative_count=1,
+            selection_metadata={
+                "selection_strategy": "latest_available_window_fallback",
+                "benchmark_readiness": {
+                    "benchmarkable": False,
+                    "reasons": ["negative_floor_not_met"],
+                    "minimum_negative_count": 5,
+                    "minimum_negative_ratio": 0.1,
+                },
+            },
         )
 
         fake_train = GNNTrainResult(
@@ -136,6 +145,9 @@ def test_gnn_train_worker_persists_outputs(monkeypatch):
         runs = db.query(GNNTrainingRun).all()
         assert len(runs) == 1
         assert runs[0].auc == 0.91
+        assert runs[0].metrics_json["evaluation_protocol"]["benchmarkable"] is False
+        assert runs[0].metrics_json["evaluation_protocol"]["holdout_policy"] == "temporal_recency_holdout"
+        assert runs[0].metrics_json["label_strategy"]["label_ladder"]["tier_counts"]["bronze"] >= 1
 
         preds = db.query(AIPrediction).filter(AIPrediction.prediction_type == "risk_gnn").all()
         assert len(preds) == 3

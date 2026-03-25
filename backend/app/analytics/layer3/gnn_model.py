@@ -568,7 +568,7 @@ def _select_train_val_indices(
 
     target_val = max(1, int(math.floor(n_nodes * max(0.05, min(0.45, float(val_ratio))))))
     target_val = min(target_val, n_nodes - 1)
-    policy = str(split_policy or "entity_hash_holdout").strip().lower()
+    policy = str(split_policy or "temporal_recency_holdout").strip().lower()
 
     if policy == "random":
         random.seed(seed)
@@ -645,7 +645,7 @@ def train_graphsage(
     temporal_decay: float = 0.0,
     pretrain_epochs: int = 0,
     mc_samples: int = 20,
-    split_policy: str = "entity_hash_holdout",
+    split_policy: str = "temporal_recency_holdout",
     val_ratio: float = 0.2,
     # ── Speed & accuracy enhancements ────────────────────────────────────────
     label_smoothing: float = 0.05,
@@ -705,7 +705,17 @@ def train_graphsage(
     # ── Device placement (GPU if available) ───────────────────────────────────
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     _use_amp = torch.cuda.is_available() if use_amp is None else (bool(use_amp) and torch.cuda.is_available())
-    scaler = torch.cuda.amp.GradScaler(enabled=_use_amp)
+    amp_device_type = "cuda" if cuda_available else "cpu"
+    try:
+        scaler = torch.amp.GradScaler(amp_device_type, enabled=_use_amp)
+
+        def _amp_autocast():
+            return torch.amp.autocast(amp_device_type, enabled=_use_amp)
+    except (AttributeError, TypeError):
+        scaler = torch.cuda.amp.GradScaler(enabled=_use_amp)
+
+        def _amp_autocast():
+            return torch.cuda.amp.autocast(enabled=_use_amp)
 
     x = torch.tensor(_sanitize(dataset.feature_matrix), dtype=torch.float32).to(device)
     y = torch.tensor([float(v) for v in dataset.labels],
@@ -767,7 +777,7 @@ def train_graphsage(
         for _ in range(pretrain_epochs):
             model.train()
             optim.zero_grad(set_to_none=True)
-            with torch.cuda.amp.autocast(enabled=_use_amp):
+            with _amp_autocast():
                 x_noisy = x + torch.randn_like(x) * 0.02
                 x_hat   = model.reconstruct(x_noisy, edge_src, edge_dst, edge_weight)
                 loss    = recon_loss_fn(x_hat, x)
@@ -791,7 +801,7 @@ def train_graphsage(
     for _ in range(max(1, epochs)):
         model.train()
         optim.zero_grad(set_to_none=True)
-        with torch.cuda.amp.autocast(enabled=_use_amp):
+        with _amp_autocast():
             logits, _ = model(x, edge_src, edge_dst, edge_weight)
             loss      = criterion(logits[train_idx], y_smooth[train_idx])
         scaler.scale(loss).backward()
@@ -807,7 +817,7 @@ def train_graphsage(
         if len(val_idx) > 0:
             model.eval()
             with torch.no_grad():
-                with torch.cuda.amp.autocast(enabled=_use_amp):
+                with _amp_autocast():
                     v_logits, _ = model(x, edge_src, edge_dst, edge_weight)
                     v_loss      = float(criterion(v_logits[val_idx], y[val_idx]).item())
             epoch_val_losses.append(round(v_loss, 5))
@@ -832,7 +842,7 @@ def train_graphsage(
     if pseudo_label_threshold > 0:
         model.eval()
         with torch.no_grad():
-            with torch.cuda.amp.autocast(enabled=_use_amp):
+            with _amp_autocast():
                 pl_logits, _ = model(x, edge_src, edge_dst, edge_weight)
                 pl_probs = torch.sigmoid(pl_logits).view(-1)
 
@@ -855,7 +865,7 @@ def train_graphsage(
         for _ in range(max(5, epochs // 3)):
             model.train()
             pl_optim.zero_grad(set_to_none=True)
-            with torch.cuda.amp.autocast(enabled=_use_amp):
+            with _amp_autocast():
                 pl_out, _ = model(x, edge_src, edge_dst, edge_weight)
                 pl_loss   = criterion(pl_out[expanded_idx], pseudo_y[expanded_idx])
             scaler.scale(pl_loss).backward()

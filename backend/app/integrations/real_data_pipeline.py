@@ -30,6 +30,8 @@ DEFAULT_KEV_FEED_URL = "https://www.cisa.gov/sites/default/files/feeds/known_exp
 DEFAULT_EPSS_API_URL = "https://api.first.org/data/v1/epss"
 DEFAULT_FEODO_URL = "https://feodotracker.abuse.ch/downloads/ipblocklist_recommended.json"
 DEFAULT_URLHAUS_CSV_URL = "https://urlhaus.abuse.ch/downloads/csv_online/"
+DEFAULT_THREATFOX_URL = "https://threatfox.abuse.ch/export/json/recent/"
+DEFAULT_MALWAREBAZAAR_URL = "https://mb-api.abuse.ch/api/v1/"
 DEFAULT_OTX_SUBSCRIBED_URL = "https://otx.alienvault.com/api/v1/pulses/subscribed"
 
 
@@ -194,6 +196,22 @@ def _http_get_text(
     response = getter(url, **kwargs)
     response.raise_for_status()
     return str(getattr(response, "text", ""))
+
+
+def _http_post_any_json(
+    url: str,
+    *,
+    timeout_sec: int = 30,
+    data: Optional[Mapping[str, str]] = None,
+    headers: Optional[Mapping[str, str]] = None,
+    getter: Callable[..., Any] = requests.post,
+) -> Any:
+    kwargs: Dict[str, Any] = {"data": data, "timeout": timeout_sec}
+    if headers:
+        kwargs["headers"] = headers
+    response = getter(url, **kwargs)
+    response.raise_for_status()
+    return response.json()
 
 
 def _iter_csv_rows_from_text(raw: str) -> Iterator[Dict[str, Any]]:
@@ -429,6 +447,125 @@ def build_urlhaus_records(
         out.append(
             NormalizedConnectorRecord(
                 connector_key="urlhaus_ioc_v1",
+                payload={k: v for k, v in payload.items() if v is not None},
+                confidence=confidence,
+            )
+        )
+    return out
+
+
+def load_threatfox_rows(
+    *,
+    threatfox_file: Optional[str] = None,
+    threatfox_url: str = DEFAULT_THREATFOX_URL,
+    timeout_sec: int = 30,
+    getter: Callable[..., Any] = requests.get,
+) -> List[Dict[str, Any]]:
+    if threatfox_file:
+        path = Path(threatfox_file)
+        if path.suffix.lower() == ".csv":
+            return list(iter_rows_from_path(str(path)))
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    else:
+        payload = _http_get_any_json(threatfox_url, timeout_sec=timeout_sec, getter=getter)
+
+    if isinstance(payload, list):
+        return [row for row in payload if isinstance(row, dict)]
+    if isinstance(payload, dict):
+        rows = payload.get("data") or payload.get("items") or payload.get("rows")
+        if isinstance(rows, list):
+            return [row for row in rows if isinstance(row, dict)]
+    raise ValueError("ThreatFox payload missing row list")
+
+
+def build_threatfox_records(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    confidence: float = 0.94,
+) -> List[NormalizedConnectorRecord]:
+    out: List[NormalizedConnectorRecord] = []
+    for row in rows:
+        idx = _row_index(row)
+        indicator = str(_pick(idx, "ioc", "indicator", "value") or "").strip()
+        indicator_type = str(_pick(idx, "ioc_type", "indicator_type", "type") or "").strip().lower()
+        if not indicator or not indicator_type:
+            continue
+        payload: Dict[str, Any] = {
+            "timestamp": _to_iso_utc(_pick(idx, "first_seen", "date_added", "created"), fallback_now=True),
+            "indicator": indicator,
+            "indicator_type": indicator_type,
+            "malware": _pick(idx, "malware", "malware_printable", "threat_type"),
+            "status": _pick(idx, "status", "ioc_status") or "active",
+            "tags": _pick(idx, "tags", "tag"),
+            "reporter": _pick(idx, "reporter", "reporter_name"),
+            "id": _pick(idx, "id", "ioc_id", "threatfox_id"),
+        }
+        out.append(
+            NormalizedConnectorRecord(
+                connector_key="threatfox_ioc_v1",
+                payload={k: v for k, v in payload.items() if v is not None},
+                confidence=confidence,
+            )
+        )
+    return out
+
+
+def load_malwarebazaar_rows(
+    *,
+    malwarebazaar_file: Optional[str] = None,
+    malwarebazaar_url: str = DEFAULT_MALWAREBAZAAR_URL,
+    timeout_sec: int = 30,
+    getter: Callable[..., Any] = requests.post,
+) -> List[Dict[str, Any]]:
+    if malwarebazaar_file:
+        path = Path(malwarebazaar_file)
+        if path.suffix.lower() == ".csv":
+            return list(iter_rows_from_path(str(path)))
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    else:
+        payload = _http_post_any_json(
+            malwarebazaar_url,
+            timeout_sec=timeout_sec,
+            data={"query": "get_recent"},
+            getter=getter,
+        )
+
+    if isinstance(payload, list):
+        return [row for row in payload if isinstance(row, dict)]
+    if isinstance(payload, dict):
+        rows = payload.get("data") or payload.get("items") or payload.get("rows")
+        if isinstance(rows, list):
+            return [row for row in rows if isinstance(row, dict)]
+    raise ValueError("MalwareBazaar payload missing row list")
+
+
+def build_malwarebazaar_records(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    confidence: float = 0.95,
+) -> List[NormalizedConnectorRecord]:
+    out: List[NormalizedConnectorRecord] = []
+    for row in rows:
+        idx = _row_index(row)
+        sha256 = str(_pick(idx, "sha256_hash", "sha256", "hash") or "").strip().lower()
+        if not sha256:
+            continue
+        payload: Dict[str, Any] = {
+            "timestamp": _to_iso_utc(_pick(idx, "first_seen", "date_added", "file_added"), fallback_now=True),
+            "sha256_hash": sha256,
+            "malware_family": _pick(idx, "signature", "malware_family", "family"),
+            "file_name": _pick(idx, "file_name", "filename"),
+            "file_type": _pick(idx, "file_type", "filetype"),
+            "file_type_mime": _pick(idx, "file_type_mime", "mime_type"),
+            "delivery_url": _pick(idx, "delivery_url", "url"),
+            "tags": _pick(idx, "tags", "tag"),
+            "status": _pick(idx, "status", "sample_status") or "active",
+            "sample_id": _pick(idx, "sample_id", "id"),
+            "reporter": _pick(idx, "reporter", "reporter_name"),
+        }
+        out.append(
+            NormalizedConnectorRecord(
+                connector_key="malwarebazaar_sample_v1",
                 payload={k: v for k, v in payload.items() if v is not None},
                 confidence=confidence,
             )
@@ -775,6 +912,54 @@ def normalize_caida_row(
     )
 
 
+def normalize_vpn_benchmark_row(
+    row: Mapping[str, Any],
+    *,
+    dataset_name: str = "iscx_vpn2016",
+    confidence: float = 0.88,
+) -> Optional[NormalizedConnectorRecord]:
+    idx = _row_index(row)
+    label = str(_pick(idx, "label", "category", "traffic_type", "class") or "").strip().lower()
+    app_label = str(_pick(idx, "app_label", "application", "app", "service") or "").strip()
+    vpn_flag = str(_pick(idx, "vpn", "is_vpn", "vpn_label") or "").strip().lower()
+    is_vpn = (
+        "vpn" in label
+        or "tor" in label
+        or vpn_flag in {"1", "true", "yes", "vpn"}
+        or ("vpn" in app_label.lower() if app_label else False)
+    )
+    if not is_vpn:
+        return None
+
+    src_ip = str(_pick(idx, "src_ip", "source_ip", "ip") or "").strip() or None
+    dst_ip = str(_pick(idx, "dst_ip", "destination_ip", "server_ip", "gateway_ip") or "").strip() or None
+    if not src_ip and not dst_ip:
+        return None
+    payload: Dict[str, Any] = {
+        "timestamp": _to_iso_utc(
+            _pick(idx, "timestamp", "flow_start_time", "start_time", "stime"),
+            fallback_now=True,
+        ),
+        "src_ip": src_ip,
+        "dst_ip": dst_ip,
+        "device_id": _pick(idx, "device_id", "session_id", "flow_id"),
+        "gateway_id": dst_ip or _pick(idx, "gateway_id", "service_id"),
+        "username": _pick(idx, "username", "user", "principal"),
+        "result": "success",
+        "protocol": _pick(idx, "protocol", "proto", "vpn_proto"),
+        "provider": _pick(idx, "provider", "vpn_provider") or (app_label or label or dataset_name),
+        "asn": _as_int(_pick(idx, "asn", "src_asn")),
+        "request_fingerprint": _pick(idx, "flow_id", "session_id"),
+        "dataset": dataset_name,
+        "app_label": app_label or None,
+    }
+    return NormalizedConnectorRecord(
+        connector_key="vpn_gateway_session_v1",
+        payload={k: v for k, v in payload.items() if v is not None},
+        confidence=confidence,
+    )
+
+
 def iter_rows_from_path(path: str) -> Iterator[Dict[str, Any]]:
     file_path = Path(path)
     suffix = file_path.suffix.lower()
@@ -1024,6 +1209,17 @@ def _iter_caida_records(
             yield record
 
 
+def _iter_vpn_benchmark_records(
+    rows: Iterable[Mapping[str, Any]],
+    *,
+    dataset_name: str,
+) -> Iterator[NormalizedConnectorRecord]:
+    for row in rows:
+        record = normalize_vpn_benchmark_row(row, dataset_name=dataset_name)
+        if record is not None:
+            yield record
+
+
 def _run_traffic_job(args: argparse.Namespace) -> IngestionJobStats:
     rows = iter_rows_from_path(args.input_file)
     if args.dataset == "cic":
@@ -1100,6 +1296,52 @@ def _run_urlhaus_job(args: argparse.Namespace) -> IngestionJobStats:
         db.close()
 
 
+def _run_threatfox_job(args: argparse.Namespace) -> IngestionJobStats:
+    rows = load_threatfox_rows(
+        threatfox_file=args.threatfox_file,
+        threatfox_url=args.threatfox_url,
+        timeout_sec=args.timeout_sec,
+    )
+    records = build_threatfox_records(rows, confidence=args.confidence)
+    db = SessionLocal()
+    try:
+        return ingest_records_via_connectors(
+            db=db,
+            records=records,
+            source_api_key=args.source_api_key,
+            classification=args.classification,
+            max_records=args.max_records,
+            sleep_every=args.sleep_every,
+            sleep_sec=args.sleep_sec,
+            retry_on_rate_limit=True,
+        )
+    finally:
+        db.close()
+
+
+def _run_malwarebazaar_job(args: argparse.Namespace) -> IngestionJobStats:
+    rows = load_malwarebazaar_rows(
+        malwarebazaar_file=args.malwarebazaar_file,
+        malwarebazaar_url=args.malwarebazaar_url,
+        timeout_sec=args.timeout_sec,
+    )
+    records = build_malwarebazaar_records(rows, confidence=args.confidence)
+    db = SessionLocal()
+    try:
+        return ingest_records_via_connectors(
+            db=db,
+            records=records,
+            source_api_key=args.source_api_key,
+            classification=args.classification,
+            max_records=args.max_records,
+            sleep_every=args.sleep_every,
+            sleep_sec=args.sleep_sec,
+            retry_on_rate_limit=True,
+        )
+    finally:
+        db.close()
+
+
 def _run_otx_job(args: argparse.Namespace) -> IngestionJobStats:
     pulses = load_otx_pulses(
         otx_file=args.otx_file,
@@ -1121,6 +1363,55 @@ def _run_otx_job(args: argparse.Namespace) -> IngestionJobStats:
             return IngestionJobStats(total_records=0, accepted=0, duplicates=0, skipped=0, errors=0)
 
         records = build_otx_indicator_records(pulses, confidence=args.confidence)
+        return ingest_records_via_connectors(
+            db=db,
+            records=records,
+            source_api_key=args.source_api_key,
+            classification=args.classification,
+            max_records=args.max_records,
+            sleep_every=args.sleep_every,
+            sleep_sec=args.sleep_sec,
+            retry_on_rate_limit=True,
+        )
+    finally:
+        db.close()
+
+
+def _run_vpn_benchmark_job(args: argparse.Namespace) -> IngestionJobStats:
+    rows = iter_rows_from_path(args.input_file)
+    records = _iter_vpn_benchmark_records(rows, dataset_name=args.dataset_name or "iscx_vpn2016")
+    db = SessionLocal()
+    try:
+        return ingest_records_via_connectors(
+            db=db,
+            records=records,
+            source_api_key=args.source_api_key,
+            classification=args.classification,
+            max_records=args.max_records,
+            sleep_every=args.sleep_every,
+            sleep_sec=args.sleep_sec,
+            retry_on_rate_limit=True,
+        )
+    finally:
+        db.close()
+
+
+def _run_ddos_benchmark_job(args: argparse.Namespace) -> IngestionJobStats:
+    rows = iter_rows_from_path(args.input_file)
+    if args.dataset == "cic":
+        records = _iter_cic_records(
+            rows,
+            service_id_prefix=args.service_id_prefix,
+            dataset_name=args.dataset_name or "cic_ddos2019",
+        )
+    else:
+        records = _iter_caida_records(
+            rows,
+            service_id_prefix=args.service_id_prefix,
+            dataset_name=args.dataset_name or "caida_ddos",
+        )
+    db = SessionLocal()
+    try:
         return ingest_records_via_connectors(
             db=db,
             records=records,
@@ -1175,6 +1466,22 @@ def build_cli() -> argparse.ArgumentParser:
     p_urlhaus.add_argument("--sleep-sec", type=float, default=65.0, help="Pause duration used to avoid per-source ingest rate limits.")
     p_urlhaus.add_argument("--timeout-sec", type=int, default=30, help="HTTP timeout for remote feed calls.")
 
+    p_threatfox = sub.add_parser("threatfox", help="Import ThreatFox malware IOCs into DFIR events.")
+    p_threatfox.add_argument("--threatfox-file", default=None, help="Local ThreatFox JSON/CSV export.")
+    p_threatfox.add_argument("--threatfox-url", default=DEFAULT_THREATFOX_URL, help="ThreatFox export URL.")
+    p_threatfox.add_argument("--max-records", type=int, default=400, help="Maximum ThreatFox DFIR events to emit per run.")
+    p_threatfox.add_argument("--sleep-every", type=int, default=400, help="Pause after this many ThreatFox DFIR events.")
+    p_threatfox.add_argument("--sleep-sec", type=float, default=65.0, help="Pause duration used to avoid per-source ingest rate limits.")
+    p_threatfox.add_argument("--timeout-sec", type=int, default=30, help="HTTP timeout for remote feed calls.")
+
+    p_mbz = sub.add_parser("malwarebazaar", help="Import MalwareBazaar sample metadata into DFIR events.")
+    p_mbz.add_argument("--malwarebazaar-file", default=None, help="Local MalwareBazaar JSON/CSV export.")
+    p_mbz.add_argument("--malwarebazaar-url", default=DEFAULT_MALWAREBAZAAR_URL, help="MalwareBazaar API endpoint.")
+    p_mbz.add_argument("--max-records", type=int, default=400, help="Maximum MalwareBazaar DFIR events to emit per run.")
+    p_mbz.add_argument("--sleep-every", type=int, default=400, help="Pause after this many MalwareBazaar DFIR events.")
+    p_mbz.add_argument("--sleep-sec", type=float, default=65.0, help="Pause duration used to avoid per-source ingest rate limits.")
+    p_mbz.add_argument("--timeout-sec", type=int, default=30, help="HTTP timeout for remote feed calls.")
+
     p_otx = sub.add_parser("otx", help="Import AlienVault OTX indicators into STIX and DFIR events.")
     p_otx.add_argument("--otx-file", default=None, help="Local OTX pulse export JSON file.")
     p_otx.add_argument("--otx-api-key", default=None, help="OTX API key. Required when --otx-file is not used.")
@@ -1197,8 +1504,24 @@ def build_cli() -> argparse.ArgumentParser:
     p_paysim.add_argument("--sleep-every", type=int, default=450, dest="sleep_every", help="Sleep after every N records to avoid rate limits.")
     p_paysim.add_argument("--sleep-sec", type=float, default=65.0, dest="sleep_sec", help="Seconds to sleep between batches.")
 
+    p_vpn = sub.add_parser("vpn-benchmark", help="Ingest VPN benchmark rows into LOGIN_EVENT via vpn_gateway_session_v1.")
+    p_vpn.add_argument("--input-file", required=True, help="Path to VPN benchmark CSV/JSON/JSONL.")
+    p_vpn.add_argument("--dataset-name", default="iscx_vpn2016", help="Dataset tag written into payload.")
+    p_vpn.add_argument("--max-records", type=int, default=5000, help="Maximum VPN benchmark rows to emit per run.")
+    p_vpn.add_argument("--sleep-every", type=int, default=450, dest="sleep_every", help="Sleep after every N records to avoid rate limits.")
+    p_vpn.add_argument("--sleep-sec", type=float, default=65.0, dest="sleep_sec", help="Seconds to sleep between batches.")
+
+    p_ddos = sub.add_parser("ddos-benchmark", help="Ingest DDoS benchmark rows into DDOS_SIGNAL_EVENT.")
+    p_ddos.add_argument("--dataset", choices=("cic", "caida"), required=True, help="DDoS benchmark family.")
+    p_ddos.add_argument("--input-file", required=True, help="Input path (.csv/.json/.jsonl).")
+    p_ddos.add_argument("--service-id-prefix", default="external", help="Service id prefix for mapped rows.")
+    p_ddos.add_argument("--dataset-name", default=None, help="Optional dataset tag written into payload.")
+    p_ddos.add_argument("--max-records", type=int, default=5000, help="Maximum benchmark rows to emit per run.")
+    p_ddos.add_argument("--sleep-every", type=int, default=450, dest="sleep_every", help="Sleep after every N records to avoid rate limits.")
+    p_ddos.add_argument("--sleep-sec", type=float, default=65.0, dest="sleep_sec", help="Seconds to sleep between batches.")
+
     # ---- PPRA Kenya OCDS ----
-    p_ppra = sub.add_parser("ppra", help="Ingest Kenya PPRA Open Contracting (OCDS) procurement CSV.")
+    p_ppra = sub.add_parser("ppra", help="Deprecated: use the corruption-domain PPRA ingesters instead.")
     p_ppra.add_argument("--input-file", required=True, help="Path to PPRA OCDS flattened CSV.")
     p_ppra.add_argument("--anomalies-only", action="store_true", help="Only ingest rows that have at least one anomaly flag.")
     p_ppra.add_argument("--sleep-every", type=int, default=450, dest="sleep_every", help="Sleep after every N records to avoid rate limits.")
@@ -1228,8 +1551,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         stats = _run_feodo_job(args)
     elif args.job == "urlhaus":
         stats = _run_urlhaus_job(args)
+    elif args.job == "threatfox":
+        stats = _run_threatfox_job(args)
+    elif args.job == "malwarebazaar":
+        stats = _run_malwarebazaar_job(args)
     elif args.job == "paysim":
         stats = _run_paysim_job(args)
+    elif args.job == "vpn-benchmark":
+        stats = _run_vpn_benchmark_job(args)
+    elif args.job == "ddos-benchmark":
+        stats = _run_ddos_benchmark_job(args)
     elif args.job == "ppra":
         stats = _run_ppra_job(args)
     elif args.job == "unsw":
@@ -1614,25 +1945,12 @@ def _run_paysim_job(args: argparse.Namespace) -> IngestionJobStats:
 
 
 def _run_ppra_job(args: argparse.Namespace) -> IngestionJobStats:
-    rows = iter_rows_from_path(args.input_file)
-    records = build_ppra_records(
-        rows,
-        confidence=args.confidence,
-        anomalies_only=args.anomalies_only,
+    raise ValueError(
+        "The generic 'ppra' real-data job is deprecated because PPRA procurement data now belongs "
+        "to the corruption-domain pipeline. Use 'python -m app.analytics.corruption.ppra_awards_ingest "
+        "--input-file ...' for award data or 'python -m app.analytics.corruption.ppra_arb_ingest "
+        "--input-file ...' for review-board decisions."
     )
-    db = SessionLocal()
-    try:
-        return ingest_records_via_connectors(
-            db=db,
-            records=records,
-            source_api_key=args.source_api_key,
-            classification=args.classification,
-            sleep_every=getattr(args, "sleep_every", 450),
-            sleep_sec=getattr(args, "sleep_sec", 65.0),
-            retry_on_rate_limit=True,
-        )
-    finally:
-        db.close()
 
 
 def _run_unsw_job(args: argparse.Namespace) -> IngestionJobStats:

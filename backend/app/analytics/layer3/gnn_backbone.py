@@ -27,8 +27,8 @@ Scientific rationale
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from dataclasses import dataclass, field, replace
+from datetime import datetime, timedelta, timezone
 import math
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -128,6 +128,51 @@ class GNNDataset:
     positive_count:      int = 0
     negative_count:      int = 0
     benign_negative_count: int = 0
+    selection_metadata: Dict[str, Any] = field(default_factory=dict)
+
+
+DEFAULT_MIN_NEGATIVE_COUNT = 5
+DEFAULT_MIN_NEGATIVE_RATIO = 0.10
+DEFAULT_BENCHMARK_WINDOW_CANDIDATES = 12
+
+
+def assess_benchmark_readiness(
+    *,
+    total_count: int,
+    positive_count: int,
+    negative_count: int,
+    min_negative_count: int = DEFAULT_MIN_NEGATIVE_COUNT,
+    min_negative_ratio: float = DEFAULT_MIN_NEGATIVE_RATIO,
+) -> Dict[str, Any]:
+    total = max(0, int(total_count))
+    positives = max(0, int(positive_count))
+    negatives = max(0, int(negative_count))
+    min_negatives = max(1, int(min_negative_count))
+    min_ratio = max(0.0, min(0.95, float(min_negative_ratio)))
+    negative_ratio = float(negatives / total) if total > 0 else 0.0
+
+    reasons: List[str] = []
+    if positives <= 0:
+        reasons.append("no_positive_labels")
+    if negatives <= 0:
+        reasons.append("no_negative_labels")
+    elif negatives < min_negatives:
+        reasons.append("negative_floor_not_met")
+    if total <= 1:
+        reasons.append("insufficient_total_samples")
+    if total > 0 and negative_ratio < min_ratio:
+        reasons.append("negative_ratio_below_floor")
+
+    return {
+        "benchmarkable": len(reasons) == 0,
+        "total_count": total,
+        "positive_count": positives,
+        "negative_count": negatives,
+        "negative_ratio": round(negative_ratio, 6),
+        "minimum_negative_count": min_negatives,
+        "minimum_negative_ratio": min_ratio,
+        "reasons": reasons,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -647,6 +692,23 @@ def _latest_window_end(db: Session, window_key: str) -> Optional[datetime]:
     )
 
 
+def _recent_window_ends(
+    db: Session,
+    *,
+    window_key: str,
+    limit: int,
+) -> List[datetime]:
+    rows = (
+        db.query(GraphFeatureSnapshot.window_end)
+        .filter(GraphFeatureSnapshot.window_key == window_key)
+        .distinct()
+        .order_by(GraphFeatureSnapshot.window_end.desc())
+        .limit(max(1, int(limit)))
+        .all()
+    )
+    return [row[0] for row in rows if row and row[0] is not None]
+
+
 # ---------------------------------------------------------------------------
 # Dataset loader
 # ---------------------------------------------------------------------------
@@ -661,6 +723,9 @@ def load_dataset(
     min_edge_weight:     int = 1,
     max_edges:           int = 30_000,
     negative_multiplier: float = 1.5,
+    min_negative_count: int = DEFAULT_MIN_NEGATIVE_COUNT,
+    min_negative_ratio: float = DEFAULT_MIN_NEGATIVE_RATIO,
+    benchmark_window_candidates: int = DEFAULT_BENCHMARK_WINDOW_CANDIDATES,
 ) -> Optional[GNNDataset]:
     """
     Build a GNNDataset from the current state of the feature store.
@@ -672,198 +737,258 @@ def load_dataset(
     """
     if max_entities is not None and int(max_entities) <= 0:
         return None
-    if window_end is None:
-        window_end = _latest_window_end(db, window_key)
-    if window_end is None:
-        return None
 
     candidate_limit = max(200, int(max_entities) * 4)
-    snapshots = (
-        db.query(GraphFeatureSnapshot)
-        .filter(GraphFeatureSnapshot.window_key == window_key)
-        .filter(GraphFeatureSnapshot.window_end == window_end)
-        .order_by(GraphFeatureSnapshot.event_count.desc())
-        .limit(candidate_limit)
-        .all()
+    explicit_window = window_end is not None
+    candidate_windows = (
+        [window_end]
+        if explicit_window
+        else _recent_window_ends(
+            db,
+            window_key=window_key,
+            limit=benchmark_window_candidates,
+        )
     )
-    if not snapshots:
+    if not candidate_windows:
+        latest = _latest_window_end(db, window_key)
+        candidate_windows = [latest] if latest is not None else []
+    if not candidate_windows:
         return None
 
-    window_start = snapshots[0].window_start
-    label_overrides = _confirmed_label_overrides(
-        db,
-        entity_keys=[str(s.entity_key) for s in snapshots],
-        window_start=window_start,
-        window_end=window_end,
-    )
-
-    entries: List[Dict[str, Any]] = []
-    for s in snapshots:
-        risk_flags   = list(s.risk_flags or [])
-        features_raw = dict(s.features or {})
-        event_types  = features_raw.get("event_types") if isinstance(features_raw.get("event_types"), dict) else {}
-        source_type_counts = (
-            features_raw.get("source_type_counts")
-            if isinstance(features_raw.get("source_type_counts"), dict)
-            else {}
+    def _materialize(candidate_window_end: datetime) -> Optional[GNNDataset]:
+        snapshots = (
+            db.query(GraphFeatureSnapshot)
+            .filter(GraphFeatureSnapshot.window_key == window_key)
+            .filter(GraphFeatureSnapshot.window_end == candidate_window_end)
+            .order_by(GraphFeatureSnapshot.event_count.desc())
+            .limit(candidate_limit)
+            .all()
         )
-        provenance_tag = str(features_raw.get("provenance_tag") or "unknown").strip().lower() or "unknown"
-        try:
-            real_signal_ratio = float(features_raw.get("real_signal_ratio") or 0.0)
-        except Exception:  # noqa: BLE001
-            real_signal_ratio = 0.0
-        source_count = int(features_raw.get("source_count") or 0)
-        event_count  = int(s.event_count or 0)
-        label_override = dict(label_overrides.get(str(s.entity_key)) or {})
-        label = int(
-            label_override.get("label")
-            if "label" in label_override
-            else weak_label(
-                risk_flags=risk_flags,
-                event_count=event_count,
-                source_count=source_count,
+        if not snapshots:
+            return None
+
+        window_start = snapshots[0].window_start
+        label_overrides = _confirmed_label_overrides(
+            db,
+            entity_keys=[str(s.entity_key) for s in snapshots],
+            window_start=window_start,
+            window_end=candidate_window_end,
+        )
+
+        entries: List[Dict[str, Any]] = []
+        for s in snapshots:
+            risk_flags = list(s.risk_flags or [])
+            features_raw = dict(s.features or {})
+            event_types = features_raw.get("event_types") if isinstance(features_raw.get("event_types"), dict) else {}
+            source_type_counts = (
+                features_raw.get("source_type_counts")
+                if isinstance(features_raw.get("source_type_counts"), dict)
+                else {}
             )
-        )
-        entries.append({
-            "snap":          s,
-            "entity_key":    str(s.entity_key),
-            "entity_type":   str(s.entity_type),
-            "risk_flags":    risk_flags,
-            "features":      features_raw,
-            "event_types":   dict(event_types),
-            "source_type_counts": dict(source_type_counts),
-            "provenance_tag": provenance_tag,
-            "real_signal_ratio": max(0.0, min(1.0, real_signal_ratio)),
-            "source_count":  source_count,
-            "event_count":   event_count,
-            "degree":        int(s.degree or 0),
-            "weighted_degree": int(s.weighted_degree or 0),
-            "window_start":  s.window_start,
-            "window_end":    s.window_end,
-            "first_seen":    s.first_seen,
-            "last_seen":     s.last_seen,
-            "label":         label,
-            "label_source":  str(label_override.get("label_source") or "weak_label"),
-            "label_evidence": str(label_override.get("label_evidence") or ""),
-            "is_benign": _is_benign_candidate(
-                risk_flags=risk_flags,
-                event_count=event_count,
-                source_count=source_count,
-                event_types=dict(event_types),
-            ),
-        })
-
-    positives       = sorted([e for e in entries if e["label"] == 1],
-                              key=lambda x: (-x["event_count"], x["entity_key"]))
-    benign_negatives = sorted([e for e in entries if e["label"] == 0 and e["is_benign"]],
-                               key=lambda x: (x["event_count"], x["entity_key"]))
-    other_negatives  = sorted([e for e in entries if e["label"] == 0 and not e["is_benign"]],
-                               key=lambda x: (x["event_count"], x["entity_key"]))
-
-    selected: List[Dict[str, Any]] = []
-    neg_mult = max(0.0, float(negative_multiplier))
-
-    if positives:
-        pos_quota = max(1, int(max_entities / (1.0 + neg_mult))) if neg_mult > 0 else max_entities
-        selected.extend(positives[:pos_quota])
-        remaining = max(0, max_entities - len(selected))
-        selected.extend(benign_negatives[:remaining])
-        remaining = max(0, max_entities - len(selected))
-        if remaining > 0:
-            selected.extend(other_negatives[:remaining])
-        remaining = max(0, max_entities - len(selected))
-        if remaining > 0 and len(positives) > pos_quota:
-            selected.extend(positives[pos_quota: pos_quota + remaining])
-    else:
-        selected.extend(benign_negatives[:max_entities])
-        remaining = max(0, max_entities - len(selected))
-        if remaining > 0:
-            selected.extend(other_negatives[:remaining])
-
-    if not selected:
-        return None
-    selected = selected[:max_entities]
-
-    entity_keys:    List[str]          = []
-    entity_types:   List[str]          = []
-    feature_matrix: List[List[float]]  = []
-    labels:         List[int]          = []
-    node_meta:      List[Dict[str, Any]] = []
-
-    for e in selected:
-        entity_keys.append(e["entity_key"])
-        entity_types.append(e["entity_type"])
-        feature_matrix.append(
-            build_feature_vector(
-                entity_type    = e["entity_type"],
-                event_count    = e["event_count"],
-                source_count   = e["source_count"],
-                degree         = e["degree"],
-                weighted_degree= e["weighted_degree"],
-                risk_flags     = e["risk_flags"],
-                features       = e["features"],
-                window_start   = e["window_start"],
-                window_end     = e["window_end"],
-                first_seen     = e["first_seen"],
-                last_seen      = e["last_seen"],
+            provenance_tag = str(features_raw.get("provenance_tag") or "unknown").strip().lower() or "unknown"
+            try:
+                real_signal_ratio = float(features_raw.get("real_signal_ratio") or 0.0)
+            except Exception:  # noqa: BLE001
+                real_signal_ratio = 0.0
+            source_count = int(features_raw.get("source_count") or 0)
+            event_count = int(s.event_count or 0)
+            label_override = dict(label_overrides.get(str(s.entity_key)) or {})
+            label = int(
+                label_override.get("label")
+                if "label" in label_override
+                else weak_label(
+                    risk_flags=risk_flags,
+                    event_count=event_count,
+                    source_count=source_count,
+                )
             )
+            entries.append({
+                "snap": s,
+                "entity_key": str(s.entity_key),
+                "entity_type": str(s.entity_type),
+                "risk_flags": risk_flags,
+                "features": features_raw,
+                "event_types": dict(event_types),
+                "source_type_counts": dict(source_type_counts),
+                "provenance_tag": provenance_tag,
+                "real_signal_ratio": max(0.0, min(1.0, real_signal_ratio)),
+                "source_count": source_count,
+                "event_count": event_count,
+                "degree": int(s.degree or 0),
+                "weighted_degree": int(s.weighted_degree or 0),
+                "window_start": s.window_start,
+                "window_end": s.window_end,
+                "first_seen": s.first_seen,
+                "last_seen": s.last_seen,
+                "label": label,
+                "label_source": str(label_override.get("label_source") or "weak_label"),
+                "label_evidence": str(label_override.get("label_evidence") or ""),
+                "is_benign": _is_benign_candidate(
+                    risk_flags=risk_flags,
+                    event_count=event_count,
+                    source_count=source_count,
+                    event_types=dict(event_types),
+                ),
+            })
+
+        positives = sorted(
+            [e for e in entries if e["label"] == 1],
+            key=lambda x: (-x["event_count"], x["entity_key"]),
         )
-        labels.append(int(e["label"]))
-        node_meta.append({
-            "entity_key":        e["entity_key"],
-            "entity_type":       e["entity_type"],
-            "event_count":       e["event_count"],
-            "source_count":      e["source_count"],
-            "risk_flags":        e["risk_flags"],
-            "event_types":       e["event_types"],
-            "source_type_counts": e["source_type_counts"],
-            "provenance_tag":    e["provenance_tag"],
-            "real_signal_ratio": e["real_signal_ratio"],
-            "label_source":      e["label_source"],
-            "label_evidence":    e["label_evidence"],
-            "is_benign_negative": bool(e["label"] == 0 and e["is_benign"]),
-        })
+        benign_negatives = sorted(
+            [e for e in entries if e["label"] == 0 and e["is_benign"]],
+            key=lambda x: (x["event_count"], x["entity_key"]),
+        )
+        other_negatives = sorted(
+            [e for e in entries if e["label"] == 0 and not e["is_benign"]],
+            key=lambda x: (x["event_count"], x["entity_key"]),
+        )
 
-    key_to_idx = {k: i for i, k in enumerate(entity_keys)}
+        selected: List[Dict[str, Any]] = []
+        neg_mult = max(0.0, float(negative_multiplier))
 
-    collapsed, edge_source_counts, used = build_graph_edges(
-        db,
-        entity_keys=entity_keys,
-        window_start=selected[0]["snap"].window_start,
-        window_end=window_end,
-        edge_backend=edge_backend,
-        min_edge_weight=min_edge_weight,
-        max_edges=max_edges,
-    )
-    edges: List[Tuple[int, int, float]] = []
-    for src, dst, w in collapsed[:max_edges]:
-        i = key_to_idx.get(src)
-        j = key_to_idx.get(dst)
-        if i is None or j is None or i == j:
+        if positives:
+            pos_quota = max(1, int(max_entities / (1.0 + neg_mult))) if neg_mult > 0 else max_entities
+            selected.extend(positives[:pos_quota])
+            remaining = max(0, max_entities - len(selected))
+            selected.extend(benign_negatives[:remaining])
+            remaining = max(0, max_entities - len(selected))
+            if remaining > 0:
+                selected.extend(other_negatives[:remaining])
+            remaining = max(0, max_entities - len(selected))
+            if remaining > 0 and len(positives) > pos_quota:
+                selected.extend(positives[pos_quota : pos_quota + remaining])
+        else:
+            selected.extend(benign_negatives[:max_entities])
+            remaining = max(0, max_entities - len(selected))
+            if remaining > 0:
+                selected.extend(other_negatives[:remaining])
+
+        if not selected:
+            return None
+        selected = selected[:max_entities]
+
+        entity_keys: List[str] = []
+        entity_types: List[str] = []
+        feature_matrix: List[List[float]] = []
+        labels: List[int] = []
+        node_meta: List[Dict[str, Any]] = []
+
+        for e in selected:
+            entity_keys.append(e["entity_key"])
+            entity_types.append(e["entity_type"])
+            feature_matrix.append(
+                build_feature_vector(
+                    entity_type=e["entity_type"],
+                    event_count=e["event_count"],
+                    source_count=e["source_count"],
+                    degree=e["degree"],
+                    weighted_degree=e["weighted_degree"],
+                    risk_flags=e["risk_flags"],
+                    features=e["features"],
+                    window_start=e["window_start"],
+                    window_end=e["window_end"],
+                    first_seen=e["first_seen"],
+                    last_seen=e["last_seen"],
+                )
+            )
+            labels.append(int(e["label"]))
+            node_meta.append({
+                "entity_key": e["entity_key"],
+                "entity_type": e["entity_type"],
+                "event_count": e["event_count"],
+                "source_count": e["source_count"],
+                "risk_flags": e["risk_flags"],
+                "event_types": e["event_types"],
+                "source_type_counts": e["source_type_counts"],
+                "provenance_tag": e["provenance_tag"],
+                "real_signal_ratio": e["real_signal_ratio"],
+                "label_source": e["label_source"],
+                "label_evidence": e["label_evidence"],
+                "snapshot_window_end": candidate_window_end.isoformat(),
+                "is_benign_negative": bool(e["label"] == 0 and e["is_benign"]),
+            })
+
+        key_to_idx = {k: i for i, k in enumerate(entity_keys)}
+        collapsed, edge_source_counts, used = build_graph_edges(
+            db,
+            entity_keys=entity_keys,
+            window_start=selected[0]["snap"].window_start,
+            window_end=candidate_window_end,
+            edge_backend=edge_backend,
+            min_edge_weight=min_edge_weight,
+            max_edges=max_edges,
+        )
+        edges: List[Tuple[int, int, float]] = []
+        for src, dst, w in collapsed[:max_edges]:
+            i = key_to_idx.get(src)
+            j = key_to_idx.get(dst)
+            if i is None or j is None or i == j:
+                continue
+            edges.append((i, j, float(w)))
+
+        if not edges and len(entity_keys) > 1:
+            for i in range(len(entity_keys) - 1):
+                edges.append((i, i + 1, 1.0))
+
+        benign_count = sum(
+            1 for m, lbl in zip(node_meta, labels) if lbl == 0 and m.get("is_benign_negative")
+        )
+        positive_count = sum(labels)
+        negative_count = len(labels) - positive_count
+        benchmark_readiness = assess_benchmark_readiness(
+            total_count=len(labels),
+            positive_count=positive_count,
+            negative_count=negative_count,
+            min_negative_count=min_negative_count,
+            min_negative_ratio=min_negative_ratio,
+        )
+
+        return GNNDataset(
+            window_key=window_key,
+            window_start=selected[0]["snap"].window_start,
+            window_end=candidate_window_end,
+            entity_keys=entity_keys,
+            entity_types=entity_types,
+            feature_matrix=feature_matrix,
+            labels=labels,
+            edges=edges,
+            node_meta=node_meta,
+            source_backend_used=used,
+            edge_source_counts=edge_source_counts,
+            positive_count=positive_count,
+            negative_count=negative_count,
+            benign_negative_count=benign_count,
+            selection_metadata={
+                "selection_strategy": "explicit_window" if explicit_window else "latest_benchmarkable_window",
+                "benchmark_readiness": benchmark_readiness,
+                "requested_window_end": candidate_window_end.isoformat(),
+            },
+        )
+
+    fallback_dataset: Optional[GNNDataset] = None
+    for index, candidate in enumerate(candidate_windows):
+        dataset = _materialize(candidate)
+        if dataset is None:
             continue
-        edges.append((i, j, float(w)))
+        selection_metadata = dict(dataset.selection_metadata)
+        selection_metadata.update({
+            "window_rank": index,
+            "candidate_window_count": len(candidate_windows),
+        })
+        dataset = replace(dataset, selection_metadata=selection_metadata)
+        if fallback_dataset is None:
+            fallback_dataset = dataset
+        if explicit_window or bool((selection_metadata.get("benchmark_readiness") or {}).get("benchmarkable")):
+            return dataset
 
-    # Fallback chain: if no edges, create a minimal spanning path
-    if not edges and len(entity_keys) > 1:
-        for i in range(len(entity_keys) - 1):
-            edges.append((i, i + 1, 1.0))
+    if fallback_dataset is None:
+        return None
 
-    benign_count = sum(1 for m, lbl in zip(node_meta, labels)
-                       if lbl == 0 and m.get("is_benign_negative"))
-
-    return GNNDataset(
-        window_key=window_key,
-        window_start=selected[0]["snap"].window_start,
-        window_end=window_end,
-        entity_keys=entity_keys,
-        entity_types=entity_types,
-        feature_matrix=feature_matrix,
-        labels=labels,
-        edges=edges,
-        node_meta=node_meta,
-        source_backend_used=used,
-        edge_source_counts=edge_source_counts,
-        positive_count=sum(labels),
-        negative_count=len(labels) - sum(labels),
-        benign_negative_count=benign_count,
-    )
+    selection_metadata = dict(fallback_dataset.selection_metadata)
+    readiness = dict(selection_metadata.get("benchmark_readiness") or {})
+    selection_metadata["selection_strategy"] = "latest_available_window_fallback"
+    selection_metadata["fallback_to_latest_window"] = True
+    readiness["fallback_used"] = True
+    selection_metadata["benchmark_readiness"] = readiness
+    return replace(fallback_dataset, selection_metadata=selection_metadata)

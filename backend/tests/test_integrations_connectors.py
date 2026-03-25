@@ -22,12 +22,15 @@ def test_list_connectors_includes_expected_keys():
     assert "zeek_notice_v1" in keys
     assert "feodo_c2_v1" in keys
     assert "urlhaus_ioc_v1" in keys
+    assert "threatfox_ioc_v1" in keys
+    assert "malwarebazaar_sample_v1" in keys
     assert "otx_indicator_v1" in keys
     assert "velociraptor_artifact_v1" in keys
     assert "m365_bec_mail_v1" in keys
     assert "waf_api_attack_v1" in keys
     assert "kev_vuln_feed_v1" in keys
     assert "backup_attestation_v1" in keys
+    assert "vpn_gateway_session_v1" in keys
 
 
 def test_map_splunk_login_event():
@@ -420,6 +423,66 @@ def test_map_urlhaus_ioc_to_dfir_finding_event():
     assert ev.anchors["domain"] == "mal.example"
     assert ev.anchors["ip"] == "203.0.113.55"
     assert ev.payload["source"] == "urlhaus"
+
+
+def test_map_threatfox_ioc_to_dfir_finding_event():
+    ev = map_external_event(
+        connector_key="threatfox_ioc_v1",
+        payload={
+            "timestamp": "2026-03-09T12:07:00Z",
+            "indicator": "203.0.113.66",
+            "indicator_type": "ip",
+            "malware": "qakbot",
+            "status": "active",
+            "tags": ["botnet"],
+        },
+        confidence=0.92,
+    )
+
+    assert ev.event_type == "DFIR_FINDING_EVENT"
+    assert ev.anchors["ip"] == "203.0.113.66"
+    assert ev.payload["source"] == "threatfox"
+    assert ev.payload["finding_type"] == "qakbot"
+    assert "feed:threatfox" in ev.payload["reason_codes"]
+
+
+def test_map_malwarebazaar_sample_to_dfir_finding_event():
+    ev = map_external_event(
+        connector_key="malwarebazaar_sample_v1",
+        payload={
+            "timestamp": "2026-03-09T12:08:00Z",
+            "sha256_hash": "ab" * 32,
+            "malware_family": "win.qakbot",
+            "file_name": "dropper.exe",
+            "delivery_url": "http://mal.example/dropper.exe",
+        },
+        confidence=0.93,
+    )
+
+    assert ev.event_type == "DFIR_FINDING_EVENT"
+    assert ev.anchors["endpoint"] == f"sha256:{'ab' * 32}"
+    assert ev.anchors["url"] == "http://mal.example/dropper.exe"
+    assert ev.payload["source"] == "malwarebazaar"
+    assert ev.payload["sha256"] == "ab" * 32
+
+
+def test_map_vpn_gateway_session_to_login_event():
+    ev = map_external_event(
+        connector_key="vpn_gateway_session_v1",
+        payload={
+            "timestamp": "2026-03-09T12:09:00Z",
+            "src_ip": "10.0.0.5",
+            "dst_ip": "198.51.100.10",
+            "provider": "OpenVPN",
+            "protocol": "udp",
+        },
+        confidence=0.9,
+    )
+
+    assert ev.event_type == "LOGIN_EVENT"
+    assert ev.anchors["ip"] == "10.0.0.5"
+    assert ev.anchors["device_id"] == "198.51.100.10"
+    assert ev.payload["provider"] == "OpenVPN"
 
 
 def test_map_otx_indicator_to_dfir_finding_event():
