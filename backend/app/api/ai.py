@@ -56,6 +56,21 @@ SCENARIO_LABELS: dict[str, str] = {
 }
 
 
+def _fairness_blocked(metrics_json: dict[str, Any] | None) -> bool:
+    metrics = metrics_json or {}
+    fairness = metrics.get("fairness") or {}
+    fairness_gate = metrics.get("fairness_gate") or {}
+    disparity = fairness.get("max_positive_rate_disparity")
+    try:
+        disparity_value = float(disparity) if disparity is not None else 0.0
+    except (TypeError, ValueError):
+        disparity_value = 0.0
+    return (
+        disparity_value > settings.fairness_disparity_threshold
+        and not bool(fairness_gate.get("override_applied", False))
+    )
+
+
 def _normalize_scenario_name(value: str) -> str:
     raw = str(value or "").strip().lower()
     return SCENARIO_ALIASES.get(raw, raw)
@@ -455,12 +470,7 @@ def list_gnn_runs(
                 "metrics": r.metrics_json,
                 "fairness": (r.metrics_json or {}).get("fairness", {}),
                 "fairness_gate": (r.metrics_json or {}).get("fairness_gate", {}),
-                "fairness_blocked": (
-                    ((r.metrics_json or {}).get("fairness", {}).get(
-                        "max_positive_rate_disparity", 0
-                    ) > settings.fairness_disparity_threshold)
-                    and not bool(((r.metrics_json or {}).get("fairness_gate") or {}).get("override_applied", False))
-                ),
+                "fairness_blocked": _fairness_blocked(r.metrics_json),
                 "provenance": (r.metrics_json or {}).get("provenance", {}),
                 "real_data_gate": (r.metrics_json or {}).get("real_data_gate", {}),
                 "real_data_gate_passed": bool(
@@ -657,12 +667,7 @@ def get_gnn_run(run_id: str, db: Session = Depends(get_db)):
         "metrics": r.metrics_json,
         "fairness": (r.metrics_json or {}).get("fairness", {}),
         "fairness_gate": (r.metrics_json or {}).get("fairness_gate", {}),
-        "fairness_blocked": (
-            ((r.metrics_json or {}).get("fairness", {}).get(
-                "max_positive_rate_disparity", 0
-            ) > settings.fairness_disparity_threshold)
-            and not bool(((r.metrics_json or {}).get("fairness_gate") or {}).get("override_applied", False))
-        ),
+        "fairness_blocked": _fairness_blocked(r.metrics_json),
         "provenance": (r.metrics_json or {}).get("provenance", {}),
         "real_data_gate": (r.metrics_json or {}).get("real_data_gate", {}),
         "real_data_gate_passed": bool(
