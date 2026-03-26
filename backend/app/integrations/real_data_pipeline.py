@@ -405,12 +405,12 @@ def load_urlhaus_rows(
                 return [row for row in rows if isinstance(row, dict)]
         raise ValueError("URLhaus file payload missing row list")
 
-        key = (
-            auth_key
-            or os.environ.get("URLHAUS_AUTH_KEY")
-            or os.environ.get("ABUSECH_AUTH_KEY")
-            or ""
-        ).strip()
+    key = (
+        auth_key
+        or os.environ.get("URLHAUS_AUTH_KEY")
+        or os.environ.get("ABUSECH_AUTH_KEY")
+        or ""
+    ).strip()
     if not key:
         raise ValueError("URLhaus auth key required for live URLhaus downloads")
     text = _http_get_text(
@@ -489,6 +489,18 @@ def load_threatfox_rows(
         rows = payload.get("data") or payload.get("items") or payload.get("rows")
         if isinstance(rows, list):
             return [row for row in rows if isinstance(row, dict)]
+        # ThreatFox export/json/recent returns a dict keyed by IOC ID
+        # where each value is a list of IOC dicts:
+        # {"1776985": [{...ioc...}], "1776984": [{...ioc...}]}
+        if rows is None and not {"data", "items", "rows"}.intersection(payload):
+            flat: List[Dict[str, Any]] = []
+            for v in payload.values():
+                if isinstance(v, list):
+                    flat.extend(r for r in v if isinstance(r, dict))
+                elif isinstance(v, dict):
+                    flat.append(v)
+            if flat:
+                return flat
     raise ValueError("ThreatFox payload missing row list")
 
 
@@ -500,7 +512,8 @@ def build_threatfox_records(
     out: List[NormalizedConnectorRecord] = []
     for row in rows:
         idx = _row_index(row)
-        indicator = str(_pick(idx, "ioc", "indicator", "value") or "").strip()
+        # ThreatFox export/json uses ioc_value + ioc_type field names
+        indicator = str(_pick(idx, "ioc_value", "ioc", "indicator", "value") or "").strip()
         indicator_type = str(_pick(idx, "ioc_type", "indicator_type", "type") or "").strip().lower()
         if not indicator or not indicator_type:
             continue
@@ -549,7 +562,7 @@ def load_malwarebazaar_rows(
         payload = _http_post_any_json(
             malwarebazaar_url,
             timeout_sec=timeout_sec,
-            data={"query": "get_recent"},
+            data={"query": "get_recent", "selector": "100"},
             getter=getter,
             headers=headers,
         )
@@ -557,9 +570,13 @@ def load_malwarebazaar_rows(
     if isinstance(payload, list):
         return [row for row in payload if isinstance(row, dict)]
     if isinstance(payload, dict):
-        rows = payload.get("data") or payload.get("items") or payload.get("rows")
-        if isinstance(rows, list):
-            return [row for row in rows if isinstance(row, dict)]
+        # Use key-presence check so an empty list [] is still accepted
+        for _k in ("data", "items", "rows"):
+            if _k in payload:
+                rows = payload[_k]
+                if isinstance(rows, list):
+                    return [row for row in rows if isinstance(row, dict)]
+                break
     raise ValueError("MalwareBazaar payload missing row list")
 
 
@@ -574,14 +591,20 @@ def build_malwarebazaar_records(
         sha256 = str(_pick(idx, "sha256_hash", "sha256", "hash") or "").strip().lower()
         if not sha256:
             continue
+        # Use sha256 as service_id anchor so the event passes anchor validation.
+        # A malware binary is modelled as a "service" node in the adversarial graph.
+        delivery_url = _pick(idx, "delivery_url", "url")
+        domain = _extract_domain(str(delivery_url)) if delivery_url else None
         payload: Dict[str, Any] = {
             "timestamp": _to_iso_utc(_pick(idx, "first_seen", "date_added", "file_added"), fallback_now=True),
             "sha256_hash": sha256,
+            "service_id": f"malware:{sha256[:16]}",  # anchor — malware binary as adversarial service node
             "malware_family": _pick(idx, "signature", "malware_family", "family"),
             "file_name": _pick(idx, "file_name", "filename"),
             "file_type": _pick(idx, "file_type", "filetype"),
             "file_type_mime": _pick(idx, "file_type_mime", "mime_type"),
-            "delivery_url": _pick(idx, "delivery_url", "url"),
+            "delivery_url": delivery_url,
+            "domain": domain,
             "tags": _pick(idx, "tags", "tag"),
             "status": _pick(idx, "status", "sample_status") or "active",
             "sample_id": _pick(idx, "sample_id", "id"),

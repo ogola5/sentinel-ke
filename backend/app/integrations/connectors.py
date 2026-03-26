@@ -1322,7 +1322,8 @@ def _map_threatfox_ioc(payload: Dict[str, Any], confidence: float, classificatio
             anchors["domain"] = domain
             host = domain
     else:
-        anchors["endpoint"] = f"{indicator_type or 'ioc'}:{indicator}"
+        # Hash/file/other IOC types — use service_id as adversarial service node
+        anchors["service_id"] = f"{indicator_type or 'ioc'}:{indicator[:64]}"
 
     reason_codes = ["malware_ioc", "osint_feed", "feed:threatfox"]
     if status:
@@ -1370,7 +1371,8 @@ def _map_malwarebazaar_sample(payload: Dict[str, Any], confidence: float, classi
     tag_list = _as_str_list(payload, ("tags", "tag"))
     status = _as_str(payload, ("status", "sample_status")) or "active"
 
-    anchors: Dict[str, str] = {"endpoint": f"sha256:{sha256.lower()}"}
+    # service_id is a valid anchor — malware binary is an adversarial service node
+    anchors: Dict[str, str] = {"service_id": f"malware:{sha256.lower()[:16]}"}
     if delivery_url:
         anchors["url"] = delivery_url
         domain = _extract_domain_from_url(delivery_url)
