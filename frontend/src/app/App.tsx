@@ -122,6 +122,7 @@ function AuthenticatedApp({
     }, {} as Record<SourceType, boolean>),
   );
   const [selectedEntity, setSelectedEntity] = useState<EntityProfile | null>(null);
+  const [investigationEntityKey, setInvestigationEntityKey] = useState<string | null>(null);
   const [selectedCampaignId, setSelectedCampaignId] = useState("");
   const [selectedClusterId, setSelectedClusterId] = useState("");
   const [selectedServiceId, setSelectedServiceId] = useState("");
@@ -152,6 +153,7 @@ function AuthenticatedApp({
   useEffect(() => {
     if (entitiesData.length > 0 && (!selectedEntity || !entitiesData.find((entity) => entity.id === selectedEntity.id))) {
       setSelectedEntity(entitiesData[0]);
+      setInvestigationEntityKey((current) => current ?? entitiesData[0].id);
     }
   }, [entitiesData, selectedEntity]);
 
@@ -195,6 +197,7 @@ function AuthenticatedApp({
     );
     if (entity) {
       setSelectedEntity(entity);
+      setInvestigationEntityKey(entity.id);
     }
   };
 
@@ -272,6 +275,7 @@ function AuthenticatedApp({
           onEntityQueryChange={setEntityQuery}
           onInvestigateEntity={(entity) => {
             setSelectedEntity(entity);
+            setInvestigationEntityKey(entity.id);
             setActiveScreen("investigate");
             setInspectorOpen(true);
           }}
@@ -331,6 +335,7 @@ function AuthenticatedApp({
               graphData={graphData}
               activeCase={activeCase}
               selectedEntity={selectedEntity}
+              investigationEntityKey={investigationEntityKey}
               selectedCampaignId={selectedCampaignId}
               selectedClusterId={selectedClusterId}
               selectedServiceId={selectedServiceId}
@@ -345,6 +350,7 @@ function AuthenticatedApp({
               onSelectEvent={handleSelectEvent}
               onSelectEntity={(entity) => {
                 setSelectedEntity(entity);
+                setInvestigationEntityKey(entity.id);
                 setInspectorOpen(true);
               }}
               onSelectCampaignId={setSelectedCampaignId}
@@ -395,10 +401,8 @@ function AuthenticatedApp({
                 );
                 if (match) {
                   setSelectedEntity(match);
-                } else {
-                  // Stub entity so EntityInvestigation receives the key as initialEntityKey
-                  setSelectedEntity({ id: entityKey, label: entityKey } as typeof entitiesData[0]);
                 }
+                setInvestigationEntityKey(entityKey);
                 setActiveScreen("investigate");
               }}
             />

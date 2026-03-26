@@ -133,6 +133,18 @@ function suggestedActionTarget(entityKey: string): string {
   return "";
 }
 
+function preferredParentEntityKey(entityKey: string | null): string | null {
+  if (!entityKey) return null;
+  if (entityKey.startsWith("endpoint:")) {
+    const raw = entityKey.slice("endpoint:".length);
+    const splitIndex = raw.indexOf(":");
+    if (splitIndex > 0) {
+      return `service_id:${raw.slice(0, splitIndex)}`;
+    }
+  }
+  return null;
+}
+
 function suggestedContainmentSection(entityKey: string | null, principal: Principal): string | undefined {
   const principalSection = principal.access_level === "section" ? principal.section_code?.trim() : "";
   if (principalSection) return principalSection;
@@ -462,6 +474,7 @@ export default function EntityInvestigation({ initialEntityKey, analystId, princ
   const recommendedControls = explanation?.recommended_controls ?? [];
   const leadingNextActions = trustBrief?.next_actions.slice(0, 2) ?? [];
   const leadingWhyItMatters = trustBrief?.why_it_matters.slice(0, 2) ?? [];
+  const parentEntityKey = preferredParentEntityKey(entityKey);
 
   return (
     <section className="screen">
@@ -523,6 +536,76 @@ export default function EntityInvestigation({ initialEntityKey, analystId, princ
       {error && (
         <div className="panel" style={{ borderColor: "rgba(255,45,85,0.35)" }}>
           <p style={{ color: "var(--risk-critical)", margin: 0 }}>{error}</p>
+        </div>
+      )}
+
+      {entityKey && !loading && !error && !prediction && (
+        <div className="grid-two">
+          <div className="panel">
+            <div className="panel-header">
+              <h3>No direct model prediction yet</h3>
+              <span className="muted">{entityKey}</span>
+            </div>
+            <p className="muted" style={{ lineHeight: 1.6 }}>
+              This entity exists in the graph or evidence trail, but the current model did not return a direct prediction record for it.
+              That usually means you selected a structural node such as an endpoint, cluster, or helper object rather than a scored service,
+              IP, account, or domain.
+            </p>
+            {parentEntityKey && (
+              <div className="list" style={{ marginTop: 12 }}>
+                <div className="list-item">
+                  <strong>Recommended fallback</strong>
+                  <p className="muted" style={{ marginTop: 4 }}>
+                    Investigate the parent service instead: <span className="mono">{parentEntityKey}</span>
+                  </p>
+                  <div className="chip-row" style={{ marginTop: 10 }}>
+                    <button
+                      className="chip active"
+                      type="button"
+                      onClick={() => {
+                        setQuery(parentEntityKey);
+                        void investigate(parentEntityKey);
+                      }}
+                    >
+                      Investigate parent service
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+            {!parentEntityKey && (
+              <div className="list" style={{ marginTop: 12 }}>
+                <div className="list-item">
+                  <strong>What to do next</strong>
+                  <p className="muted" style={{ marginTop: 4 }}>
+                    Use this entity as structural context, or switch to a directly scored key such as <span className="mono">service_id:…</span>,
+                    <span className="mono"> ip:…</span>, <span className="mono">account_h:…</span>, or <span className="mono">domain:…</span>.
+                  </p>
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="panel">
+            <div className="panel-header">
+              <h3>Available graph context</h3>
+              <span className="muted">{liveGraph?.neighbours?.length ?? 0} neighbours</span>
+            </div>
+            {liveGraph?.neighbours?.length ? (
+              <div className="list">
+                {liveGraph.neighbours.slice(0, 6).map((item) => (
+                  <div key={item.id} className="list-item">
+                    <strong>{item.label}</strong>
+                    <p className="muted" style={{ marginTop: 4 }}>{item.type} · {item.id}</p>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="muted">
+                No live Neo4j neighbours are attached to this entity right now. If you expected graph context here, verify the entity key and retry.
+              </p>
+            )}
+          </div>
         </div>
       )}
 

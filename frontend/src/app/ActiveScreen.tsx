@@ -67,6 +67,7 @@ export default function ActiveScreen({
   graphData,
   activeCase,
   selectedEntity,
+  investigationEntityKey,
   selectedCampaignId,
   selectedClusterId,
   selectedServiceId,
@@ -108,6 +109,7 @@ export default function ActiveScreen({
   graphData: GraphData;
   activeCase?: CasePacket;
   selectedEntity: EntityProfile | null;
+  investigationEntityKey: string | null;
   selectedCampaignId: string;
   selectedClusterId: string;
   selectedServiceId: string;
@@ -269,7 +271,7 @@ export default function ActiveScreen({
       {activeScreen === "audit" && <AuditLog />}
       {activeScreen === "investigate" && (
         <EntityInvestigation
-          initialEntityKey={selectedEntity?.id ?? null}
+          initialEntityKey={investigationEntityKey ?? selectedEntity?.id ?? null}
           analystId={principal.username}
           principal={principal}
         />

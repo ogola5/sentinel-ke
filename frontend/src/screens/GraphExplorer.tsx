@@ -114,6 +114,27 @@ function describeEdge(edge: GraphEdge, nodeById: Map<string, GraphNode>): string
   }
 }
 
+function preferredInvestigationKey(node: GraphNode): string | null {
+  const normalizedType = node.type.toLowerCase();
+  if (normalizedType === "endpoint" && node.id.startsWith("endpoint:")) {
+    const raw = node.id.slice("endpoint:".length);
+    const splitIndex = raw.indexOf(":");
+    if (splitIndex > 0) {
+      return canonicalServiceKey(raw.slice(0, splitIndex));
+    }
+  }
+  return isCanonicalEntityKey(node.id) ? node.id : null;
+}
+
+function preferredInvestigationLabel(node: GraphNode): string {
+  const preferred = preferredInvestigationKey(node);
+  if (!preferred) return "Investigate in depth";
+  if (preferred !== node.id && node.type.toLowerCase() === "endpoint") {
+    return "Investigate parent service";
+  }
+  return "Investigate in depth";
+}
+
 function fmtTs(ts: string): string {
   try {
     return new Date(ts).toLocaleString("en-KE", {
@@ -227,6 +248,32 @@ export default function GraphExplorer({
     setNeighboursLoading(false);
   }
 
+  async function focusExternalEntity(entityKey: string) {
+    setNeighboursLoading(true);
+    setLiveGraphNotice("");
+    const result = await fetchGraphNeighbours(entityKey);
+    setNeighboursLoading(false);
+    if (!result?.node) {
+      setLiveNeighbours(null);
+      setLiveGraphNotice(`No live graph data is currently available for ${entityKey}.`);
+      return;
+    }
+    const externalNode: GraphNode = {
+      id: result.node.id || entityKey,
+      label: result.node.label || entityKey,
+      type: result.node.type || "Service",
+      community: result.node.community || "target",
+      x: ZONE_X.target,
+      y: 120,
+    };
+    setSelectedNode(externalNode);
+    setNodePanel(true);
+    setLiveNeighbours(result);
+    setLiveGraphNotice(
+      `${externalNode.label} is outside the current overview snapshot, so you are seeing its live graph neighbourhood instead of a canvas-highlighted snapshot node.`,
+    );
+  }
+
   function selectNode(node: GraphNode) {
     setSelectedNode(node);
     setNodePanel(true);
@@ -234,7 +281,7 @@ export default function GraphExplorer({
     void loadLiveNeighbours(node);
   }
 
-  function focusFirstMatch() {
+  async function focusFirstMatch() {
     const query = focusQuery.trim().toLowerCase();
     if (!query) return;
     const match = graph.nodes.find(
@@ -242,7 +289,13 @@ export default function GraphExplorer({
         node.label.toLowerCase().includes(query) ||
         node.id.toLowerCase().includes(query),
     );
-    if (match) selectNode(match);
+    if (match) {
+      selectNode(match);
+      return;
+    }
+
+    const canonicalGuess = isCanonicalEntityKey(query) ? query : canonicalServiceKey(query);
+    await focusExternalEntity(canonicalGuess);
   }
 
   // ── Path finder ─────────────────────────────────────────────────────────
@@ -435,9 +488,9 @@ export default function GraphExplorer({
               placeholder="Try safaricom, kplc, /login, 203.0.113.8"
               value={focusQuery}
               onChange={(event) => setFocusQuery(event.target.value)}
-              onKeyDown={(event) => { if (event.key === "Enter") focusFirstMatch(); }}
+              onKeyDown={(event) => { if (event.key === "Enter") void focusFirstMatch(); }}
             />
-            <button className="ghost" type="button" onClick={focusFirstMatch}>
+            <button className="ghost" type="button" onClick={() => void focusFirstMatch()}>
               Focus
             </button>
           </div>
@@ -1116,17 +1169,17 @@ export default function GraphExplorer({
                 >
                   {pinned.find(n => n.id === selectedNode.id) ? "Unpin" : "📌 Pin for comparison"}
                 </button>
-                {onInvestigateEntity && isCanonicalEntityKey(selectedNode.id) && (
+                {onInvestigateEntity && preferredInvestigationKey(selectedNode) && (
                   <button
                     className="ghost"
                     type="button"
                     style={{ color: "var(--accent)" }}
-                    onClick={() => onInvestigateEntity(selectedNode.id)}
+                    onClick={() => onInvestigateEntity(preferredInvestigationKey(selectedNode) ?? selectedNode.id)}
                   >
-                    🔍 Investigate in depth →
+                    🔍 {preferredInvestigationLabel(selectedNode)} →
                   </button>
                 )}
-                {onInvestigateEntity && !isCanonicalEntityKey(selectedNode.id) && (
+                {onInvestigateEntity && !preferredInvestigationKey(selectedNode) && (
                   <p className="muted" style={{ marginTop: 4 }}>
                     This visual helper node does not map to a direct investigation key.
                   </p>
@@ -1211,19 +1264,22 @@ export default function GraphExplorer({
                 </p>
               </div>
             </div>
-            {onInvestigateEntity && isCanonicalEntityKey(selectedNode.id) && (
+            {onInvestigateEntity && preferredInvestigationKey(selectedNode) && (
               <div style={{ marginTop: 14 }}>
                 <button
                   className="ghost"
                   type="button"
                   style={{ color: "var(--accent)" }}
-                  onClick={() => { setNodePanel(false); onInvestigateEntity(selectedNode.id); }}
+                  onClick={() => {
+                    setNodePanel(false);
+                    onInvestigateEntity(preferredInvestigationKey(selectedNode) ?? selectedNode.id);
+                  }}
                 >
-                  🔍 Investigate in depth →
+                  🔍 {preferredInvestigationLabel(selectedNode)} →
                 </button>
               </div>
             )}
-            {onInvestigateEntity && !isCanonicalEntityKey(selectedNode.id) && (
+            {onInvestigateEntity && !preferredInvestigationKey(selectedNode) && (
               <p className="muted" style={{ marginTop: 14 }}>
                 This node is derived for graph context only and does not open a direct investigation record.
               </p>
