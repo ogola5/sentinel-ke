@@ -134,16 +134,21 @@ def project_event_to_delta(*, event: CanonicalEvent, event_hash: str) -> GraphDe
     # ============================================================
 
     if et == "DDOS_SIGNAL_EVENT":
+        svc_ref = NodeRef("Service", service_id) if service_id else None
+        if svc_ref:
+            nodes.append(make_node(svc_ref, **node_props))
+
         if ip and endpoint:
             ip_ref = NodeRef("IP", ip)
             ep_ref = NodeRef("Endpoint", endpoint)
             nodes.append(make_node(ep_ref, **node_props))
             edges.append(make_edge("TARGETS", ip_ref, ep_ref, evidence=ev, **edge_props))
 
-            if service_id:
-                svc_ref = NodeRef("Service", service_id)
-                nodes.append(make_node(svc_ref, **node_props))
+            if svc_ref:
                 edges.append(make_edge("PART_OF_SERVICE", ep_ref, svc_ref, evidence=ev, **edge_props))
+        elif ip and svc_ref:
+            ip_ref = NodeRef("IP", ip)
+            edges.append(make_edge("TARGETS_SERVICE", ip_ref, svc_ref, evidence=ev, **edge_props))
 
         if ip and provider_id:
             ip_ref = NodeRef("IP", ip)
@@ -216,25 +221,6 @@ def project_event_to_delta(*, event: CanonicalEvent, event_hash: str) -> GraphDe
         if url and svc_ref:
             u_ref = NodeRef("URL", url)
             edges.append(make_edge("PHISHES", u_ref, svc_ref, evidence=ev, **edge_props))
-
-    elif et == "DDOS_SIGNAL_EVENT":
-        # IP -> Endpoint -> Service, IP -> Provider (optional)
-        if ip and endpoint:
-            ip_ref = NodeRef("IP", ip)
-            ep_ref = NodeRef("Endpoint", endpoint)
-            nodes.append(make_node(ep_ref, **node_props))
-            edges.append(make_edge("TARGETS", ip_ref, ep_ref, evidence=ev, **edge_props))
-
-            if service_id:
-                svc_ref = NodeRef("Service", service_id)
-                nodes.append(make_node(svc_ref, **node_props))
-                edges.append(make_edge("PART_OF_SERVICE", ep_ref, svc_ref, evidence=ev, **edge_props))
-
-        if ip and provider_id:
-            ip_ref = NodeRef("IP", ip)
-            p_ref = NodeRef("Provider", provider_id)
-            nodes.append(make_node(p_ref, **node_props))
-            edges.append(make_edge("USES_INFRA", ip_ref, p_ref, evidence=ev, **edge_props))
 
     elif et == "SERVICE_HEALTH_EVENT":
         # Store health metrics on Service node

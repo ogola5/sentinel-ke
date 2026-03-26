@@ -253,11 +253,13 @@ export async function createIncidentRun(
   incidentKey: string,
   severity: "critical" | "high" | "medium" | "low",
   metadata: Record<string, unknown> = {},
+  sectionCode?: string,
 ): Promise<PlaybookRun> {
   const raw = await apiPostJson(endpoints.defenseIncidentsCreate(), {
     incident_key: incidentKey,
     severity,
     metadata,
+    section_code: sectionCode,
   });
   return toPlaybookRun(asRecord(raw));
 }
@@ -282,7 +284,7 @@ export async function executeContainmentAction(
   target: string,
   details: Record<string, unknown> = {},
 ): Promise<IncidentActionExecutionResult> {
-  return apiPostJson(`/v1/defense/incidents/runs/${encodeURIComponent(runId)}/actions`, {
+  return apiPostJson(endpoints.defenseIncidentRunExecute(runId), {
     actions: [
       {
         action_type: actionType,

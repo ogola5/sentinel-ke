@@ -114,6 +114,8 @@ export const endpoints = {
   // Defense & Containment
   defenseIncidents: (limit = 20, offset = 0) => withQuery("/v1/defense/incidents/runs", { limit, offset }),
   defenseIncidentsCreate: () => withBase("/v1/defense/incidents/runs"),
+  defenseIncidentRunExecute: (runId: string) =>
+    withBase(`/v1/defense/incidents/runs/${encodeURIComponent(runId)}/actions`),
   defenseIncidentActions: (limit = 50, offset = 0, runId?: string, sectionCode?: string, status?: string) =>
     withQuery("/v1/defense/incidents/actions", { limit, offset, run_id: runId, section_code: sectionCode, status }),
   defenseActionCatalog: () => withBase("/v1/defense/actions/catalog"),

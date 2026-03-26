@@ -63,10 +63,10 @@ def fetch_ip_profiles(
             "ips": {
                 "terms": {"field": "anchors.ip.keyword", "size": max_ips},
                 "aggs": {
-                    "endpoints": {"terms": {"field": "anchors.endpoint_id", "size": per_ip_terms}},
+                    "endpoints": {"terms": {"field": "anchors.endpoint.keyword", "size": per_ip_terms}},
                     "services": {"terms": {"field": "anchors.service_id.keyword", "size": per_ip_terms}},
-                    "domains": {"terms": {"field": "anchors.domain", "size": per_ip_terms}},
-                    "providers": {"terms": {"field": "anchors.provider_id", "size": per_ip_terms}},
+                    "domains": {"terms": {"field": "anchors.domain.keyword", "size": per_ip_terms}},
+                    "providers": {"terms": {"field": "anchors.provider_id.keyword", "size": per_ip_terms}},
                     "first_seen": {"min": {"field": "occurred_at"}},
                     "last_seen": {"max": {"field": "occurred_at"}},
                 },

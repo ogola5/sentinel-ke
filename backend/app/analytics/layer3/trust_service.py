@@ -102,17 +102,44 @@ def _graph_meaning(path_score: AIAttackPathScore | None, evidence_paths: list[An
     )
 
 
+def _raw_entity_target(entity_key: str) -> str:
+    return entity_key.split(":", 1)[1] if ":" in entity_key else entity_key
+
+
+def _suggested_containment_action(entity_key: str) -> str:
+    family = entity_key.split(":", 1)[0] if ":" in entity_key else entity_key
+    if family == "ip":
+        return "block_ip"
+    if family in {"service_id", "url", "domain"}:
+        return "enable_waf_challenge"
+    if family in {"host", "endpoint", "device_id"}:
+        return "isolate_host"
+    if family in {"account_h", "user"}:
+        return "revoke_user"
+    if family == "email":
+        return "quarantine_email"
+    return "block_ip"
+
+
+def _suggested_containment_section(entity_key: str) -> str | None:
+    family = entity_key.split(":", 1)[0] if ":" in entity_key else entity_key
+    if family in {"service_id", "provider_id"}:
+        target = _raw_entity_target(entity_key).strip()
+        return target or None
+    return None
+
+
 def _containment_readiness(active_webhooks: int, recommended_controls: list[str], latest_containment: ContainmentAction | None) -> str:
     if latest_containment:
         return (
             f"Latest containment record is {latest_containment.action_type} on {latest_containment.target} with status {latest_containment.status}. "
-            f"There are {active_webhooks} active webhook(s) available for partner-side delivery."
+            f"There are {active_webhooks} matching active webhook(s) available for partner-side delivery."
         )
     if active_webhooks <= 0:
-        return "Containment is not operationally ready yet because no active partner webhook is registered."
+        return "Containment is not operationally ready yet because no matching active partner webhook is registered for the current action path."
     if not recommended_controls:
-        return f"There are {active_webhooks} active webhook(s), but the explanation did not return a recommended control for this entity."
-    return f"Containment is available: {active_webhooks} active webhook(s) are registered and the explanation returned response guidance."
+        return f"There are {active_webhooks} matching active webhook(s), but the explanation did not return a recommended control for this entity."
+    return f"Containment is available: {active_webhooks} matching active webhook(s) are registered and the explanation returned response guidance."
 
 
 def _status_from_age(dt: datetime | None, *, warn_hours: int, fail_hours: int) -> tuple[str, str, float | None]:
@@ -272,7 +299,16 @@ def build_entity_trust_summary(
     technique_ids = [row.technique_id for row in technique_rows]
     inferred_tools = techniques_to_tools(technique_ids) if technique_ids else []
     linked_campaigns = _campaign_links(db, entity_key=entity_key)
-    active_webhooks = db.query(ContainmentWebhook).filter(ContainmentWebhook.is_active.is_(True)).count()
+    containment_action = _suggested_containment_action(entity_key)
+    containment_section = _suggested_containment_section(entity_key)
+    active_webhooks_q = (
+        db.query(ContainmentWebhook)
+        .filter(ContainmentWebhook.is_active.is_(True))
+        .filter(ContainmentWebhook.action_type == containment_action)
+    )
+    if containment_section:
+        active_webhooks_q = active_webhooks_q.filter(ContainmentWebhook.section_code == containment_section)
+    active_webhooks = active_webhooks_q.count()
     latest_containment = (
         db.query(ContainmentAction)
         .filter(ContainmentAction.target.in_([entity_key, entity_key.split(":", 1)[1] if ":" in entity_key else entity_key]))
@@ -338,9 +374,9 @@ def build_entity_trust_summary(
             "Response readiness",
             "pass" if recommended_controls and active_webhooks > 0 else ("warn" if recommended_controls or active_webhooks > 0 else "fail"),
             (
-                f"{len(recommended_controls)} recommended controls and {active_webhooks} active containment webhooks available."
+                f"{len(recommended_controls)} recommended controls and {active_webhooks} matching containment webhooks available for {containment_action}."
                 if recommended_controls or active_webhooks > 0
-                else "No recommended controls or active containment webhooks are available."
+                else f"No recommended controls or matching containment webhooks are available for {containment_action}."
             ),
             action="Register at least one containment webhook and validate the Defense workflow." if active_webhooks == 0 else None,
         ),

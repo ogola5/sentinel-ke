@@ -22,6 +22,8 @@ import {
   fetchToolAttribution,
   queryAICopilot,
 } from "../api/ai";
+import { fetchGraphNeighbours } from "../api/graph";
+import type { GraphNeighboursResponse } from "../api/graph";
 import {
   createIncidentRun,
   DEFAULT_DEFENSE_ACTIONS,
@@ -131,6 +133,18 @@ function suggestedActionTarget(entityKey: string): string {
   return "";
 }
 
+function suggestedContainmentSection(entityKey: string | null, principal: Principal): string | undefined {
+  const principalSection = principal.access_level === "section" ? principal.section_code?.trim() : "";
+  if (principalSection) return principalSection;
+  if (!entityKey) return undefined;
+  const family = entityFamily(entityKey);
+  if (family === "service_id" || family === "provider_id") {
+    const target = rawEntityTarget(entityKey).trim();
+    return target || undefined;
+  }
+  return undefined;
+}
+
 function containmentReadinessMessage(
   entityKey: string | null,
   actionType: string,
@@ -164,6 +178,7 @@ export default function EntityInvestigation({ initialEntityKey, analystId, princ
   const [toolAttribution, setToolAttribution] = useState<ToolAttributionRecord | null>(null);
   const [pathScore, setPathScore] = useState<PathScoreRecord | null>(null);
   const [fusion, setFusion] = useState<FusionRecord | null>(null);
+  const [liveGraph, setLiveGraph] = useState<GraphNeighboursResponse | null>(null);
   const [reportPreview, setReportPreview] = useState<Record<string, unknown> | null>(null);
   const [trustSummary, setTrustSummary] = useState<EntityTrustSummary | null>(null);
   const [webhooks, setWebhooks] = useState<WebhookRecord[]>([]);
@@ -181,6 +196,10 @@ export default function EntityInvestigation({ initialEntityKey, analystId, princ
   const [copilotQuestion, setCopilotQuestion] = useState("");
   const [copilotAnswer, setCopilotAnswer] = useState<string | null>(null);
   const [copilotLoading, setCopilotLoading] = useState(false);
+  const containmentSectionCode = useMemo(
+    () => suggestedContainmentSection(entityKey, principal),
+    [entityKey, principal],
+  );
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -206,6 +225,7 @@ export default function EntityInvestigation({ initialEntityKey, analystId, princ
   async function investigate(nextEntityKey: string) {
     const trimmed = nextEntityKey.trim();
     if (!trimmed) return;
+    const nextContainmentSectionCode = suggestedContainmentSection(trimmed, principal);
 
     setLoading(true);
     setError(null);
@@ -226,18 +246,19 @@ export default function EntityInvestigation({ initialEntityKey, analystId, princ
 
       const webhookPromise =
         principal.access_level === "central"
-          ? fetchWebhooks({ strict: true })
+          ? fetchWebhooks({ sectionCode: nextContainmentSectionCode, strict: true })
           : Promise.resolve<WebhookRecord[]>([]);
       const deliveryPromise =
         principal.access_level === "central"
-          ? fetchWebhookDeliveries(50, { strict: true })
+          ? fetchWebhookDeliveries(50, { sectionCode: nextContainmentSectionCode, strict: true })
           : Promise.resolve<WebhookDeliveryRecord[]>([]);
 
-      const [explanationPayload, toolPayload, pathPayload, fusionPayload, reportPayload, trustPayload, webhookResult, deliveryResult] = await Promise.allSettled([
+      const [explanationPayload, toolPayload, pathPayload, fusionPayload, liveGraphPayload, reportPayload, trustPayload, webhookResult, deliveryResult] = await Promise.allSettled([
         latestPrediction ? fetchPredictionExplanation(latestPrediction.id) : Promise.resolve(null),
         fetchToolAttribution(trimmed),
         fetchEntityPaths(trimmed),
         fetchEntityFusion(trimmed),
+        fetchGraphNeighbours(trimmed),
         generateReport({
           report_type: "entity_investigation",
           period: "daily",
@@ -255,6 +276,7 @@ export default function EntityInvestigation({ initialEntityKey, analystId, princ
       setToolAttribution(toolPayload.status === "fulfilled" ? (toolPayload.value as ToolAttributionRecord | null) ?? null : null);
       setPathScore(pathPayload.status === "fulfilled" ? extractFirstItem<PathScoreRecord>(pathPayload.value) : null);
       setFusion(fusionPayload.status === "fulfilled" ? extractFirstItem<FusionRecord>(fusionPayload.value) : null);
+      setLiveGraph(liveGraphPayload.status === "fulfilled" ? liveGraphPayload.value : null);
       setReportPreview(reportPayload.status === "fulfilled" ? reportPayload.value : null);
       setTrustSummary(trustPayload.status === "fulfilled" ? trustPayload.value : null);
 
@@ -284,6 +306,7 @@ export default function EntityInvestigation({ initialEntityKey, analystId, princ
       setToolAttribution(null);
       setPathScore(null);
       setFusion(null);
+      setLiveGraph(null);
       setReportPreview(null);
       setTrustSummary(null);
       setWebhooks([]);
@@ -327,7 +350,7 @@ export default function EntityInvestigation({ initialEntityKey, analystId, princ
         entity_key: entityKey,
         prediction_id: prediction.id,
         source: "entity_investigation",
-      });
+      }, containmentSectionCode);
       const result = await executeContainmentAction(run.id, actionType, actionTarget.trim(), {
         entity_key: entityKey,
         prediction_id: prediction.id,
@@ -341,13 +364,17 @@ export default function EntityInvestigation({ initialEntityKey, analystId, princ
         firstAction && firstAction.details && typeof firstAction.details.hint === "string"
           ? firstAction.details.hint
           : null;
+      const detailError =
+        firstAction && firstAction.details && typeof firstAction.details.error === "string"
+          ? firstAction.details.error
+          : null;
       setActionStatus(
-        `${result.status} — ${actionType} requested for ${actionTarget.trim()}.${webhookStatus ? ` Delivery state: ${webhookStatus}.` : ""}${hint ? ` ${hint}` : ""}`,
+        `${result.status} — ${actionType} requested for ${actionTarget.trim()}.${webhookStatus ? ` Delivery state: ${webhookStatus}.` : ""}${detailError ? ` ${detailError}.` : ""}${hint ? ` ${hint}` : ""}`,
       );
       const nextTrust = await fetchEntityTrustSummary(entityKey, prediction.prediction_type);
       setTrustSummary(nextTrust);
       if (principal.access_level === "central") {
-        const nextDeliveries = await fetchWebhookDeliveries(50, { strict: true });
+        const nextDeliveries = await fetchWebhookDeliveries(50, { sectionCode: containmentSectionCode, strict: true });
         setDeliveryReceipts(nextDeliveries);
       }
     } catch (err) {
@@ -695,6 +722,15 @@ export default function EntityInvestigation({ initialEntityKey, analystId, princ
                   <h4>{trustSummary?.evidence_summary?.evidence_hash_count ?? explanation?.evidence_hashes?.length ?? 0} hashes</h4>
                   <p>{trustSummary?.evidence_summary?.counterfactual_available ? "Counterfactual evidence is available." : "Counterfactual evidence is not attached yet."}</p>
                 </div>
+                <div className="story-card">
+                  <p className="story-card-label">Live graph</p>
+                  <h4>{liveGraph?.neighbours?.length ?? 0} neighbours</h4>
+                  <p>
+                    {liveGraph?.neighbours?.length
+                      ? "Neo4j has live linked entities for this case."
+                      : "No live Neo4j neighbours are currently attached to this entity."}
+                  </p>
+                </div>
               </div>
               <div className="panel-subsection">
                 <h4>Evidence paths</h4>
@@ -711,6 +747,39 @@ export default function EntityInvestigation({ initialEntityKey, analystId, princ
                   </div>
                 ) : (
                   <p className="muted">No graph paths are attached to this explanation yet.</p>
+                )}
+              </div>
+              <div className="panel-subsection">
+                <h4>Live graph neighbours</h4>
+                {liveGraph?.neighbours?.length ? (
+                  <div className="list">
+                    {liveGraph.neighbours.slice(0, 6).map((item) => {
+                      const edge = liveGraph.edges.find(
+                        (candidate) =>
+                          (candidate.source === entityKey && candidate.target === item.id) ||
+                          (candidate.target === entityKey && candidate.source === item.id),
+                      );
+                      return (
+                        <div key={item.id} className="list-item">
+                          <strong>{item.label}</strong>
+                          <p className="muted" style={{ marginTop: 4 }}>
+                            {item.type} · {edge?.type ?? "linked"} · {(edge?.evidence?.length ?? 0)} evidence hashes
+                          </p>
+                          <p className="mono" style={{ marginTop: 4, fontSize: "0.78rem" }}>{item.id}</p>
+                        </div>
+                      );
+                    })}
+                    {!pathScore?.path_score ? (
+                      <div className="list-item">
+                        <strong>Graph note</strong>
+                        <p className="muted" style={{ marginTop: 4 }}>
+                          Live graph neighbours exist, but the scored path record for this prediction window has not been attached yet.
+                        </p>
+                      </div>
+                    ) : null}
+                  </div>
+                ) : (
+                  <p className="muted">No live graph neighbours are available from Neo4j for this entity right now.</p>
                 )}
               </div>
               {trustSummary?.linked_campaigns?.length ? (
