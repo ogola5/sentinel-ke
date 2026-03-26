@@ -3,6 +3,7 @@ import { Activity, AlertTriangle, FileWarning, Shield, Wallet } from "lucide-rea
 
 import type { OperationsSnapshot } from "../types/operations";
 import { formatRiskScore, isHighRisk, riskSeverityLabel } from "../utils/risk";
+import { displayEntityLabel, isCanonicalEntityKey } from "../utils/entityKeys";
 
 type OperationsView = "overview" | "review" | "integrity";
 type ReviewQueue = "predictions" | "anomalies";
@@ -23,6 +24,14 @@ const anomalyLabel = (score: number): "high" | "medium" | "low" => {
 const compactAmount = (value: number): string =>
   new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 }).format(value);
 
+const humanEntity = (value: string): string =>
+  isCanonicalEntityKey(value) ? displayEntityLabel(value) : value;
+
+const humanReason = (value: string | undefined): string => {
+  if (!value) return "Model signaled risk from linked evidence.";
+  return value.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
+};
+
 export default function OperationsCenter({ data, onRunLeakage, leakageActionLabel, onOpenCorruptionIntel }: OperationsCenterProps) {
   const [view, setView] = useState<OperationsView>("overview");
   const [reviewQueue, setReviewQueue] = useState<ReviewQueue>("predictions");
@@ -41,15 +50,26 @@ export default function OperationsCenter({ data, onRunLeakage, leakageActionLabe
   );
   const primaryQueue = highRiskPredictions.length >= highAnomalies.length ? "AI risk queue" : "Anomaly queue";
   const reviewCount = reviewQueue === "predictions" ? data.predictions.length : data.anomalies.length;
+  const integrityPressure = data.procurementAnomalies.length + blockedGuardrails.length + data.integrityAlerts.length;
+  const prioritySummary =
+    highRiskPredictions.length > 0
+      ? `${highRiskPredictions.length} AI-scored entities are already above the response threshold.`
+      : highAnomalies.length > 0
+        ? `${highAnomalies.length} sensor anomalies need corroboration before escalation.`
+        : "No urgent cyber queue is active right now.";
+  const leakageSummary =
+    data.leakageSummary.totalAlerts > 0
+      ? `Leakage monitoring is tracking ${data.leakageSummary.totalAlerts} alerts and KES ${data.leakageSummary.suspectedAmountTotal.toLocaleString()} of suspected exposure.`
+      : "Leakage monitoring is currently quiet.";
 
   return (
     <section className="screen">
       <div className="screen-header">
         <div>
           <p className="eyebrow">S7</p>
-          <h2>Operations</h2>
+          <h2>Operational Dashboard</h2>
           <p className="subtle">
-            Posture, review queue, and integrity in one place.
+            What is happening now, what needs review first, and what can be handed to deeper investigation.
           </p>
         </div>
         <div className="screen-header-actions">
@@ -77,26 +97,53 @@ export default function OperationsCenter({ data, onRunLeakage, leakageActionLabe
 
       {view === "overview" && (
         <div className="workflow-stack">
+          {!data.availability.cyberFeedsOk && (
+            <div className="info-note">
+              <AlertTriangle size={13} style={{ flexShrink: 0 }} />
+              <span>Cyber queue feeds are currently unavailable or restricted for this session.</span>
+            </div>
+          )}
+          {!data.availability.integrityFeedsOk && (
+            <div className="info-note">
+              <FileWarning size={13} style={{ flexShrink: 0 }} />
+              <span>Integrity and leakage feeds are limited for this user or not currently available from the backend.</span>
+            </div>
+          )}
           <div className="metric-grid">
             <div className="metric-card">
-              <div className="metric-label">Live events</div>
+              <div className="metric-label">Signals ingested</div>
               <div className="metric-value">{data.metrics.events}</div>
-              <div className="metric-sub">{data.metrics.graphDeltas} graph deltas</div>
+              <div className="metric-sub">{data.metrics.graphDeltas} graph updates</div>
             </div>
             <div className="metric-card">
-              <div className="metric-label">Anomaly queue</div>
-              <div className="metric-value">{data.anomalies.length}</div>
-              <div className="metric-sub">{highAnomalies.length} high severity</div>
-            </div>
-            <div className="metric-card">
-              <div className="metric-label">AI risk queue</div>
+              <div className="metric-label">Cyber queue</div>
               <div className="metric-value">{highRiskPredictions.length}</div>
-              <div className="metric-sub">Scores at or above 70 / 100</div>
+              <div className="metric-sub">{highAnomalies.length} anomalies need corroboration</div>
+            </div>
+            <div className="metric-card">
+              <div className="metric-label">Integrity pressure</div>
+              <div className="metric-value">{integrityPressure}</div>
+              <div className="metric-sub">{blockedGuardrails.length} blocked guardrails</div>
             </div>
             <div className="metric-card">
               <div className="metric-label">Leakage monitor</div>
               <div className="metric-value">KES {compactAmount(data.leakageSummary.suspectedAmountTotal)}</div>
               <div className="metric-sub">{data.leakageSummary.totalAlerts} alerts</div>
+            </div>
+          </div>
+
+          <div className="workflow-summary-banner">
+            <div>
+              <strong>What is happening now</strong>
+              <span className="muted">{prioritySummary}</span>
+            </div>
+            <div>
+              <strong>Why this matters</strong>
+              <span className="muted">{leakageSummary}</span>
+            </div>
+            <div>
+              <strong>Operator intent</strong>
+              <span className="muted">Use this screen to choose the next queue, not to finish the whole investigation here.</span>
             </div>
           </div>
 
@@ -141,8 +188,8 @@ export default function OperationsCenter({ data, onRunLeakage, leakageActionLabe
               <div className="list">
                 {[
                   ...highRiskPredictions.slice(0, 2).map((item) => ({
-                    title: item.entityKey,
-                    subtitle: `${item.predictionType} · ${item.evidenceCount} evidence refs`,
+                    title: humanEntity(item.entityKey),
+                    subtitle: `${humanReason(item.reasonCodes[0])} · ${item.evidenceCount} evidence references`,
                     score: `${formatRiskScore(item.score)} / 100`,
                   })),
                   ...data.mitigations.slice(0, 2).map((item) => ({
@@ -168,11 +215,61 @@ export default function OperationsCenter({ data, onRunLeakage, leakageActionLabe
               </div>
             </div>
           </div>
+
+          <div className="grid-two">
+            <div className="panel workflow-stage-panel">
+              <div className="panel-header">
+                <h3>Shareable cyber indicators</h3>
+                <span className="muted">What can be exported or forwarded</span>
+              </div>
+              <div className="ops-ioc-grid">
+                <div className="ops-ioc-item">
+                  <p className="label">IPs</p>
+                  <p className="stat">{data.iocExport.ips}</p>
+                </div>
+                <div className="ops-ioc-item">
+                  <p className="label">Domains</p>
+                  <p className="stat">{data.iocExport.domains}</p>
+                </div>
+                <div className="ops-ioc-item">
+                  <p className="label">Endpoints</p>
+                  <p className="stat">{data.iocExport.endpoints}</p>
+                </div>
+              </div>
+              <p className="muted" style={{ marginTop: 10 }}>
+                This section is the operational share surface: indicators and mitigation exports that can move into partner workflows or structured formats.
+              </p>
+            </div>
+
+            <div className="panel workflow-stage-panel">
+              <div className="panel-header">
+                <h3>How to read this dashboard</h3>
+                <span className="muted">Plain language first</span>
+              </div>
+              <div className="list">
+                <div className="list-item">
+                  High <strong>Cyber queue</strong> means AI-scored entities or sensor anomalies need analyst review.
+                </div>
+                <div className="list-item">
+                  High <strong>Integrity pressure</strong> means procurement or records risk is rising and should move to Corruption Intelligence.
+                </div>
+                <div className="list-item">
+                  High <strong>Leakage monitor</strong> means money or procurement exposure is accumulating, even if cyber risk is quiet.
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       )}
 
       {view === "review" && (
         <div className="workflow-stack">
+          <div className="info-note">
+            <Shield size={13} style={{ flexShrink: 0 }} />
+            <span>
+              Use <strong>AI Predictions</strong> when the model already sees connected risk. Use <strong>Anomalies</strong> when sensor pressure exists but the case still needs corroboration.
+            </span>
+          </div>
           <div className="chip-row">
             <button
               type="button"
@@ -231,25 +328,25 @@ export default function OperationsCenter({ data, onRunLeakage, leakageActionLabe
                 <p>No AI predictions available.</p>
               </div>
             ) : (
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>Entity</th>
-                    <th>Type</th>
-                    <th>Risk</th>
-                    <th>Evidence</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.predictions.slice(0, 10).map((item) => (
-                    <tr key={item.id}>
-                      <td className="mono" style={{ fontSize: "0.78rem" }}>{item.entityKey}</td>
-                      <td className="muted">{item.predictionType}</td>
-                      <td>
-                        <span className={`risk-badge ${riskSeverityLabel(item.score).toLowerCase()}`}>
-                          {formatRiskScore(item.score)}
-                        </span>
-                      </td>
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Entity</th>
+                      <th>Meaning</th>
+                      <th>Risk</th>
+                      <th>Evidence</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.predictions.slice(0, 10).map((item) => (
+                      <tr key={item.id}>
+                        <td className="mono" style={{ fontSize: "0.78rem" }}>{humanEntity(item.entityKey)}</td>
+                        <td className="muted">{humanReason(item.reasonCodes[0])}</td>
+                        <td>
+                          <span className={`risk-badge ${riskSeverityLabel(item.score).toLowerCase()}`}>
+                            {formatRiskScore(item.score)}
+                          </span>
+                        </td>
                       <td className="muted">{item.evidenceCount}</td>
                     </tr>
                   ))}
@@ -296,6 +393,20 @@ export default function OperationsCenter({ data, onRunLeakage, leakageActionLabe
 
       {view === "integrity" && (
         <div className="workflow-stack">
+          {!data.availability.integrityFeedsOk && (
+            <div className="info-note">
+              <AlertTriangle size={13} style={{ flexShrink: 0 }} />
+              <span>
+                Some integrity feeds are scope-restricted. A quiet table here may mean limited access, not necessarily a clean national picture.
+              </span>
+            </div>
+          )}
+          <div className="info-note">
+            <Wallet size={13} style={{ flexShrink: 0 }} />
+            <span>
+              This tab is for procurement and financial integrity pressure. It is not a cyber-attack trace view; use it to decide whether to open the deeper corruption workflow.
+            </span>
+          </div>
           <div className="grid-two">
             <div className="panel workflow-stage-panel">
               <div className="panel-header">

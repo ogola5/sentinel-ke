@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { FileText, Loader2, ShieldCheck } from "lucide-react";
+import { BookOpen, FileText, Loader2, ShieldCheck } from "lucide-react";
 
 import ArchitectureFlow from "../app/ArchitectureFlow";
 import {
@@ -95,6 +95,8 @@ export default function ReportsCenter({ principal }: { principal: Principal }) {
   const summary = (preview?.summary as Record<string, unknown> | undefined) ?? {};
   const findings = Array.isArray(preview?.findings) ? (preview?.findings as Array<Record<string, unknown>>) : [];
   const governance = (preview?.governance as Record<string, unknown> | undefined) ?? {};
+  const limitations = Array.isArray(preview?.limitations) ? (preview?.limitations as string[]) : [];
+  const downloadMeta = (preview?.download as Record<string, unknown> | undefined) ?? {};
 
   function sanitizeRequest(current: ReportRequest): ReportRequest {
     return {
@@ -176,7 +178,7 @@ export default function ReportsCenter({ principal }: { principal: Principal }) {
           <p className="eyebrow">S8</p>
           <h2>Operational Reports</h2>
           <p className="subtle">
-            Turn predictions, campaigns, and cases into readable outputs without losing audit context.
+            Turn predictions, campaigns, and cases into readable outputs for operators, leadership, and oversight without losing audit context.
           </p>
         </div>
       </div>
@@ -192,6 +194,24 @@ export default function ReportsCenter({ principal }: { principal: Principal }) {
           { stage: "Export", title: "Send the right format", detail: "Download the operator or leadership output you actually need.", tone: "danger" },
         ]}
       />
+
+      <div className="report-top-grid">
+        <article className="panel report-kpi-card">
+          <p className="workflow-stage-kicker">Report types</p>
+          <strong className="case-kpi-value">{visibleReportTypes.length}</strong>
+          <span className="muted">operator, investigation, governance, and legal-friendly outputs</span>
+        </article>
+        <article className="panel report-kpi-card">
+          <p className="workflow-stage-kicker">Formats</p>
+          <strong className="case-kpi-value">{catalog?.formats.length ?? 0}</strong>
+          <span className="muted">JSON, HTML, and PDF delivery options</span>
+        </article>
+        <article className="panel report-kpi-card">
+          <p className="workflow-stage-kicker">Current classification</p>
+          <strong className="case-kpi-value">{request.classification}</strong>
+          <span className="muted">classification travels with the output</span>
+        </article>
+      </div>
 
       <div className="grid-two reports-layout">
         <div className="panel workflow-stage-panel">
@@ -235,16 +255,46 @@ export default function ReportsCenter({ principal }: { principal: Principal }) {
               )}
 
               {selectedType && (
-                <div className="workflow-summary-banner">
-                  <strong>{selectedType.title}</strong>
-                  <div className="chip-row" style={{ marginTop: 10 }}>
-                    {selectedType.audience.map((item) => (
-                      <span key={item} className="chip mono">
-                        {item}
-                      </span>
-                    ))}
+                <>
+                  <div className="workflow-summary-banner">
+                    <div>
+                      <strong>{selectedType.title}</strong>
+                      <p className="muted" style={{ margin: "4px 0 0" }}>{selectedType.description}</p>
+                    </div>
+                    <div>
+                      <div className="label">Audience</div>
+                      <div className="chip-row" style={{ marginTop: 8 }}>
+                        {selectedType.audience.map((item) => (
+                          <span key={item} className="chip mono">
+                            {item}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
                   </div>
-                </div>
+
+                  <div className="info-note">
+                    <BookOpen size={13} style={{ flexShrink: 0 }} />
+                    <span>
+                      Reports should read in this order: <strong>what happened</strong>, <strong>why it matters</strong>, <strong>what to do next</strong>, then the technical appendix.
+                    </span>
+                  </div>
+
+                  <div className="report-standards-grid">
+                    <div className="report-standard-item">
+                      <strong>Required input</strong>
+                      <p className="muted">{selectedType.required_fields.length > 0 ? selectedType.required_fields.join(", ") : "No special subject required."}</p>
+                    </div>
+                    <div className="report-standard-item">
+                      <strong>Formats</strong>
+                      <p className="muted">{selectedType.supported_formats.map((item) => item.toUpperCase()).join(" · ")}</p>
+                    </div>
+                    <div className="report-standard-item">
+                      <strong>Standards posture</strong>
+                      <p className="muted">Classification, evidence references, AI governance, and structured export are kept attached to the output.</p>
+                    </div>
+                  </div>
+                </>
               )}
 
               <label>
@@ -412,7 +462,7 @@ export default function ReportsCenter({ principal }: { principal: Principal }) {
         <div className="panel workflow-stage-panel">
           <div className="panel-header">
             <h3>Preview and findings</h3>
-            <span className="muted">Executive summary first</span>
+            <span className="muted">Everyday language first, technical appendix second</span>
           </div>
 
           {!preview ? (
@@ -428,13 +478,17 @@ export default function ReportsCenter({ principal }: { principal: Principal }) {
                   <p className="muted" style={{ margin: "4px 0 0" }}>{String(summary.overview ?? "No overview available.")}</p>
                 </div>
                 <div>
+                  <div className="label">Classification</div>
+                  <div>{String(preview?.classification ?? request.classification ?? "RESTRICTED")}</div>
+                </div>
+                <div>
                   <div className="label">Next step</div>
                   <div>{String(summary.next_step ?? "Not stated.")}</div>
                 </div>
               </div>
 
               <div className="panel-subsection">
-                <h4>Plain-English summary</h4>
+                <h4>For everyday readers</h4>
                 <p><strong>Why it matters:</strong> {String(summary.why_it_matters ?? "Not stated.")}</p>
                 <p><strong>Confidence:</strong> {String(summary.confidence_statement ?? "Not stated.")}</p>
               </div>
@@ -453,30 +507,59 @@ export default function ReportsCenter({ principal }: { principal: Principal }) {
                 </div>
               </div>
 
-              <details className="panel panel-details">
-                <summary>
-                  <span>Governance snapshot</span>
-                  <span className="muted">Model and real-data state</span>
-                </summary>
+              <div className="panel-subsection">
+                <h4>What technical reviewers will check</h4>
                 <div className="chip-row">
-                  <span className="chip mono">
-                    model {String(governance.model_version ?? "n/a")}
-                  </span>
-                  <span className="chip mono">
-                    prediction {String(governance.prediction_type ?? request.prediction_type ?? "n/a")}
-                  </span>
+                  <span className="chip mono">model {String(governance.model_version ?? "n/a")}</span>
+                  <span className="chip mono">prediction {String(governance.prediction_type ?? request.prediction_type ?? "n/a")}</span>
+                  <span className="chip mono">window {String(governance.window_key ?? "n/a")}</span>
                   <span className="chip mono">
                     real-data gate {String((governance.real_data_gate as Record<string, unknown> | undefined)?.passed ?? "n/a")}
                   </span>
                 </div>
-              </details>
+              </div>
 
               <div className="panel-subsection" style={{ display: "flex", alignItems: "center", gap: 12 }}>
                 <ShieldCheck size={18} />
                 <p className="muted" style={{ margin: 0 }}>
-                  Each report is structured as summary, analyst detail, and evidence appendix.
+                  Each report is structured as summary, analyst detail, and evidence appendix so a non-technical reader can understand it before opening the raw data.
                 </p>
               </div>
+
+              <div className="report-standards-grid">
+                <div className="report-standard-item">
+                  <strong>Governance</strong>
+                  <p className="muted">Model version, prediction type, and real-data gate are attached to the report.</p>
+                </div>
+                <div className="report-standard-item">
+                  <strong>Evidence standard</strong>
+                  <p className="muted">Use Cases/STIX for structured export; use this screen for readable briefings before distribution.</p>
+                </div>
+                <div className="report-standard-item">
+                  <strong>Download package</strong>
+                  <p className="muted">
+                    {Array.isArray(downloadMeta.available_formats)
+                      ? (downloadMeta.available_formats as string[]).join(" · ").toUpperCase()
+                      : "Output formats depend on the selected report type."}
+                  </p>
+                </div>
+              </div>
+
+              {limitations.length > 0 && (
+                <details className="panel panel-details">
+                  <summary>
+                    <span>Limitations and caveats</span>
+                    <span className="muted">What should not be overstated</span>
+                  </summary>
+                  <div className="list">
+                    {limitations.map((item, index) => (
+                      <div key={`${item}-${index}`} className="list-item muted">
+                        {item}
+                      </div>
+                    ))}
+                  </div>
+                </details>
+              )}
 
               <details className="collapsible-panel">
                 <summary>

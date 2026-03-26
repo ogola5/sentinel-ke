@@ -96,6 +96,11 @@ export type OpsLeakageSummary = {
 
 export type OperationsSnapshot = {
   metrics: OpsMetrics;
+  availability: {
+    cyberFeedsOk: boolean;
+    integrityFeedsOk: boolean;
+    leakageFeedsOk: boolean;
+  };
   anomalies: OpsAnomaly[];
   mitigations: OpsMitigation[];
   iocExport: OpsIocExport;

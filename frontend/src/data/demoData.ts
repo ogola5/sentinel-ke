@@ -596,6 +596,11 @@ export const operationsSnapshotDemo: OperationsSnapshot = {
     anomalies: 37,
     mitigations: 18,
   },
+  availability: {
+    cyberFeedsOk: true,
+    integrityFeedsOk: true,
+    leakageFeedsOk: true,
+  },
   anomalies: [
     {
       id: "az-1",

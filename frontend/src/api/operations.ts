@@ -69,6 +69,11 @@ const toCounts = (input: Record<string, unknown> | undefined): Record<string, nu
 
 export const emptyOperationsSnapshot: OperationsSnapshot = {
   metrics: { events: 0, graphDeltas: 0, anomalies: 0, mitigations: 0 },
+  availability: {
+    cyberFeedsOk: false,
+    integrityFeedsOk: false,
+    leakageFeedsOk: false,
+  },
   anomalies: [],
   mitigations: [],
   iocExport: { records: 0, actions: 0, ips: 0, domains: 0, providers: 0, endpoints: 0 },
@@ -175,6 +180,11 @@ export async function fetchOperationsSnapshot(): Promise<OperationsSnapshot> {
       graphDeltas: asNumber(metricsRes.value.graph_deltas, 0),
       anomalies: asNumber(metricsRes.value.anomalies, 0),
       mitigations: asNumber(metricsRes.value.mitigations, 0),
+    },
+    availability: {
+      cyberFeedsOk: metricsRes.ok || anomaliesRes.ok || predictionsRes.ok || mitigationsRes.ok,
+      integrityFeedsOk: economySignalsRes.ok || procurementRes.ok || guardrailRes.ok || integrityRes.ok,
+      leakageFeedsOk: leakageAlertsRes.ok || leakageSummaryRes.ok,
     },
     anomalies: (anomaliesRes.value.items ?? []).map((item) => ({
       id: asString(item.id, ""),

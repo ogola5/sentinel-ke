@@ -1109,9 +1109,42 @@
   gap: 16px;
 }
 
+.metric-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
 .reports-layout {
   align-items: start;
   grid-template-columns: minmax(320px, 0.95fr) minmax(0, 1.05fr);
+}
+
+.report-top-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.report-kpi-card {
+  display: grid;
+  gap: 6px;
+}
+
+.report-standards-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.report-standard-item {
+  border: 1px solid rgba(239, 232, 210, 0.08);
+  border-radius: 12px;
+  background: rgba(var(--surface-rgb), 0.58);
+  padding: 12px;
+  display: grid;
+  gap: 6px;
 }
 
 .grid-three {
@@ -2095,6 +2128,9 @@
 @media (max-width: 720px) {
   .grid-two,
   .grid-three,
+  .metric-grid,
+  .report-top-grid,
+  .report-standards-grid,
   .focus-layout,
   .visibility-grid,
   .workflow-compact-grid,

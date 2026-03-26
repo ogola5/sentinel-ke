@@ -1,0 +1,21 @@
+frontend/src/screens/respond/DefenseCenter.tsx:238:          <p className="eyebrow">S6</p>
+frontend/src/screens/Campaigns.tsx:274:            <p className="eyebrow">S4</p>
+frontend/src/screens/Campaigns.tsx:290:          <p className="eyebrow">S4</p>
+frontend/src/screens/command/CentralCommand.tsx:269:          <p className="eyebrow">C1</p>
+frontend/src/screens/OperationsCenter.tsx:49:          <p className="eyebrow">S7</p>
+frontend/src/screens/EntityInvestigation.tsx:483:          <p className="eyebrow">S3</p>
+frontend/src/screens/govern/FederationDashboard.tsx:121:          <p className="eyebrow">S15</p>
+frontend/src/screens/InfraCorrelation.tsx:25:            <p className="eyebrow">S5</p>
+frontend/src/screens/InfraCorrelation.tsx:44:          <p className="eyebrow">S5</p>
+frontend/src/screens/Timeline.tsx:115:            <p className="eyebrow">S2</p>
+frontend/src/screens/Timeline.tsx:160:          <p className="eyebrow">S2</p>
+frontend/src/screens/admin/AgencyOnboarding.tsx:162:          <p className="eyebrow">S14</p>
+frontend/src/screens/admin/UserManagement.tsx:116:          <p className="eyebrow">S16</p>
+frontend/src/screens/ReportsCenter.tsx:176:          <p className="eyebrow">S8</p>
+frontend/src/screens/CasePackets.tsx:83:            <p className="eyebrow">S5</p>
+frontend/src/screens/CasePackets.tsx:184:          <p className="eyebrow">S5</p>
+frontend/src/screens/LiveFeed.tsx:315:          <p className="eyebrow">S1</p>
+frontend/src/screens/GraphExplorer.tsx:418:            <p className="eyebrow">S3</p>
+frontend/src/screens/GraphExplorer.tsx:442:          <p className="eyebrow">S3</p>
+frontend/src/App.css:1030:.eyebrow {
+frontend/src/app/GlobalAssistantPanel.tsx:215:          <p className="eyebrow">Local Copilot</p>
