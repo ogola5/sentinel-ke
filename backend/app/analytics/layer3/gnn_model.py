@@ -25,6 +25,15 @@ from app.analytics.layer3.gnn_backbone import GNNDataset
 log = logging.getLogger(__name__)
 
 
+LABEL_SOURCE_WEIGHTS: Dict[str, float] = {
+    "confirmed_event_label": 1.75,
+    "confirmed_outcome_label": 1.75,
+    "analyst_feedback": 1.75,
+    "operational_threat_alert": 1.35,
+    "weak_label": 1.0,
+}
+
+
 # ---------------------------------------------------------------------------
 # Result container
 # ---------------------------------------------------------------------------
@@ -40,6 +49,8 @@ class GNNTrainResult:
     model_state: Dict[str, Any]
     feat_dim: int = 0
     uncertainties: Optional[List[float]] = None
+    train_indices: Optional[List[int]] = None
+    val_indices: Optional[List[int]] = None
 
 
 # ---------------------------------------------------------------------------
@@ -469,6 +480,16 @@ def _sanitize(matrix: Sequence[Sequence[float]]) -> List[List[float]]:
     ]
 
 
+def _example_label_weights(dataset: GNNDataset) -> List[float]:
+    weights: List[float] = []
+    for meta in dataset.node_meta or []:
+        source = str((meta or {}).get("label_source") or "weak_label")
+        weights.append(float(LABEL_SOURCE_WEIGHTS.get(source, 1.0)))
+    if len(weights) < len(dataset.labels):
+        weights.extend([1.0] * (len(dataset.labels) - len(weights)))
+    return weights[: len(dataset.labels)]
+
+
 # ---------------------------------------------------------------------------
 # Training entry point
 # ---------------------------------------------------------------------------
@@ -743,15 +764,26 @@ def train_graphsage(
         torch=torch,
     )
 
-    # Class-balanced loss
+    # Class-balanced loss with label-quality weighting so confirmed labels
+    # contribute more strongly than weak heuristics when both are present.
     n_pos = int(y.sum().item())
     n_neg = n_nodes - n_pos
+    example_weights = torch.tensor(
+        _example_label_weights(dataset),
+        dtype=torch.float32,
+        device=device,
+    ).view(-1, 1)
     if n_pos > 0 and n_neg > 0:
-        criterion = nn.BCEWithLogitsLoss(
+        criterion_train = nn.BCEWithLogitsLoss(
+            pos_weight=torch.tensor([float(n_neg / n_pos)], device=device),
+            reduction="none",
+        )
+        criterion_eval = nn.BCEWithLogitsLoss(
             pos_weight=torch.tensor([float(n_neg / n_pos)], device=device)
         )
     else:
-        criterion = nn.BCEWithLogitsLoss()
+        criterion_train = nn.BCEWithLogitsLoss(reduction="none")
+        criterion_eval = nn.BCEWithLogitsLoss()
 
     # AdamW: decoupled weight decay (used in BERT, GPT, LLaMA).
     # Converges better than Adam when weight_decay > 0.
@@ -803,7 +835,8 @@ def train_graphsage(
         optim.zero_grad(set_to_none=True)
         with _amp_autocast():
             logits, _ = model(x, edge_src, edge_dst, edge_weight)
-            loss      = criterion(logits[train_idx], y_smooth[train_idx])
+            loss_raw  = criterion_train(logits[train_idx], y_smooth[train_idx])
+            loss      = (loss_raw * example_weights[train_idx]).mean()
         scaler.scale(loss).backward()
         if grad_clip:
             scaler.unscale_(optim)
@@ -819,7 +852,7 @@ def train_graphsage(
             with torch.no_grad():
                 with _amp_autocast():
                     v_logits, _ = model(x, edge_src, edge_dst, edge_weight)
-                    v_loss      = float(criterion(v_logits[val_idx], y[val_idx]).item())
+                    v_loss      = float(criterion_eval(v_logits[val_idx], y[val_idx]).item())
             epoch_val_losses.append(round(v_loss, 5))
             if v_loss < best_val:
                 best_val   = v_loss
@@ -867,7 +900,8 @@ def train_graphsage(
             pl_optim.zero_grad(set_to_none=True)
             with _amp_autocast():
                 pl_out, _ = model(x, edge_src, edge_dst, edge_weight)
-                pl_loss   = criterion(pl_out[expanded_idx], pseudo_y[expanded_idx])
+                pl_loss_raw = criterion_train(pl_out[expanded_idx], pseudo_y[expanded_idx])
+                pl_loss   = (pl_loss_raw * example_weights[expanded_idx]).mean()
             scaler.scale(pl_loss).backward()
             if grad_clip:
                 scaler.unscale_(pl_optim)
@@ -910,4 +944,6 @@ def train_graphsage(
         metrics         = metrics,
         model_state     = model.state_dict(),
         feat_dim        = feat_dim,
+        train_indices   = [int(i) for i in train_idx.tolist()],
+        val_indices     = [int(i) for i in val_idx.tolist()],
     )

@@ -57,12 +57,15 @@ from app.analytics.layer3.evidence_graph import (
 )
 from app.analytics.layer3.gnn_train_worker import (
     _apply_feedback_overrides,
+    _calibrate_thresholds,
+    _compute_feature_attribution_map,
     _compute_fairness_metrics,
     _compute_provenance_metrics,
     _label_ladder_counts,
     _label_source_counts,
     _latest_feedback_overrides,
     _mark_feedback_consumed,
+    _operating_metrics_from_thresholds,
 )
 from app.analytics.layer3.post_prediction_pipeline import run_post_prediction_pipeline
 from app.analytics.layer3.worker_heartbeat import mark_worker_finished, mark_worker_started
@@ -86,9 +89,6 @@ from app.analytics.layer3.gnn_backbone import (
     collapse_edges,
 )
 from app.analytics.layer3.gnn_model import (
-    build_sentinel_gnn,
-    gradient_x_input_attributions,
-    predict_mc,
     train_graphsage,
 )
 from app.core.config import settings
@@ -262,6 +262,8 @@ def _load_corruption_dataset(
             single_source=bool(f.get("single_source")),
             director_conflict="DIRECTOR_CONFLICT" in flags,
             outcome_label=outcome_label,
+            entity_type=str(snap.entity_type),
+            features=f,
         )
 
         entity_keys.append(str(snap.entity_key))
@@ -368,7 +370,55 @@ def _severity(score: float) -> str:
     return "low"
 
 
-def _reason_codes(prob: float, flags: List[str], entity_type: str) -> List[str]:
+def _pattern_evidence(meta: Dict[str, Any]) -> List[str]:
+    features = dict(meta.get("features") or {})
+    flags = set(str(flag) for flag in (meta.get("risk_flags") or []))
+    patterns: List[str] = []
+
+    try:
+        outcome_label = features.get("outcome_label")
+        if outcome_label in {0, 1} and int(outcome_label) == 1:
+            patterns.append("OUTCOME_BACKED_CORRUPTION")
+    except Exception:  # noqa: BLE001
+        pass
+
+    if int(features.get("adverse_outcome_count") or 0) > 0 or int(features.get("sanction_event_count") or 0) > 0:
+        patterns.append("ADVERSE_OUTCOME_PATTERN")
+    if bool(features.get("single_source")):
+        patterns.append("SINGLE_SOURCE_AWARD_PATTERN")
+    if int(features.get("supplier_family_size") or 0) > 1:
+        patterns.append("SUPPLIER_NETWORK_PATTERN")
+    if float(features.get("related_party_ratio") or 0.0) >= 0.25:
+        patterns.append("RELATED_PARTY_PATTERN")
+    if float(features.get("payment_to_delivery_ratio_max") or 0.0) >= 0.8:
+        patterns.append("PAYMENT_DELIVERY_MISMATCH_PATTERN")
+    if float(features.get("threshold_splitting") or 0.0) >= 0.25:
+        patterns.append("THRESHOLD_SPLITTING_PATTERN")
+    if float(features.get("execution_rate") if features.get("execution_rate") is not None else 1.0) < 0.5:
+        patterns.append("LOW_EXECUTION_PATTERN")
+    if int(features.get("complaint_count") or 0) > 0:
+        patterns.append("COMPLAINT_PATTERN")
+    if int(features.get("quality_failure_count") or 0) > 0:
+        patterns.append("QUALITY_FAILURE_PATTERN")
+    if "DIRECTOR_CONFLICT" in flags:
+        patterns.append("DIRECTOR_CONFLICT_PATTERN")
+    if "DEBARRED_SUPPLIER" in flags:
+        patterns.append("DEBARRED_SUPPLIER_PATTERN")
+    if "SHELL_COMPANY" in flags:
+        patterns.append("SHELL_COMPANY_PATTERN")
+    if "PAYMENT_APPROVAL_BYPASS" in flags:
+        patterns.append("PAYMENT_CONTROL_BYPASS_PATTERN")
+    if "ADVANCE_PAYMENT_RISK" in flags:
+        patterns.append("ADVANCE_PAYMENT_PATTERN")
+    if "PROJECT_DELAY_RISK" in flags or int(features.get("delay_days_max") or 0) >= 30:
+        patterns.append("PROJECT_DELAY_PATTERN")
+    if "COMPLAINT_PRESSURE" in flags:
+        patterns.append("COMPLAINT_PRESSURE_PATTERN")
+
+    return sorted(set(patterns))
+
+
+def _reason_codes(prob: float, flags: List[str], entity_type: str, meta: Dict[str, Any], *, is_indicator: bool) -> List[str]:
     reasons: List[str] = []
     if prob >= 0.9:
         reasons.append("CORRUPTION_RISK_CRITICAL")
@@ -380,6 +430,8 @@ def _reason_codes(prob: float, flags: List[str], entity_type: str) -> List[str]:
         reasons.append("CORRUPTION_RISK_LOW")
     for flag in flags:
         reasons.append(f"FLAG_{flag}")
+    reasons.extend(_pattern_evidence(meta))
+    reasons.append("THRESHOLD_EXCEEDED" if is_indicator else "THRESHOLD_NOT_EXCEEDED")
     reasons.append("RISK_INDICATOR_ONLY_NOT_FINAL_PROOF")
     return sorted(set(reasons))
 
@@ -396,6 +448,7 @@ def _write_prediction(
     score: float,
     prob: float,
     uncertainty: float,
+    threshold_score: float,
     reasons: List[str],
     meta: Dict,
     feature_vector: Optional[List[float]],
@@ -403,6 +456,7 @@ def _write_prediction(
 ) -> None:
     confidence = max(0.0, min(1.0, 1.0 - uncertainty))
     abstained  = uncertainty >= float(getattr(settings, "ai_uncertainty_abstain_threshold", 0.45))
+    is_indicator = float(score) >= float(threshold_score)
     if abstained:
         reasons = sorted(set(reasons + ["UNCERTAIN_REQUIRES_ANALYST_REVIEW"]))
 
@@ -426,12 +480,19 @@ def _write_prediction(
 
     details = {
         "risk_flags":    meta.get("risk_flags", []),
+        "pattern_evidence": _pattern_evidence(meta),
         "event_count":   meta.get("event_count", 0),
+        "entity_threshold_score": round(float(threshold_score), 4),
+        "risk_indicator": bool(is_indicator),
+        "predicted_label": int(is_indicator),
         "confidence":    round(confidence, 6),
         "uncertainty":   round(uncertainty, 6),
         "abstained":     bool(abstained),
         "decision_source": "gnn",
         "domain":        "corruption",
+        "label_source":  str(meta.get("label_source") or "weak_label"),
+        "provenance_tag": str(meta.get("provenance_tag") or "unknown"),
+        "outcome_label": meta.get("outcome_label"),
         "explanation_method": explanation_method,
         "feature_attributions": feature_attributions,
         "attribution_group_scores": group_scores,
@@ -496,6 +557,7 @@ def _write_prediction(
         "decision_source": "gnn",
         "window_end":   window_end.isoformat(),
         "explanation_method": explanation_method,
+        "pattern_evidence": _pattern_evidence(meta),
         "feature_attributions": feature_attributions,
         "attribution_group_scores": group_scores,
         "top_feature_hint": top_feature_hint(feature_attributions, fallback="log_event_count"),
@@ -543,6 +605,7 @@ def run_once(
     seed:          int   = 42,
     model_version: str   = "corruption-gnn-v1",
     artifact_dir:  str   = "/app/artifacts/gnn",
+    threshold_min_samples: int = 10,
     allow_demo_real_data_override: bool = False,
     allow_demo_fairness_override: bool = False,
 ) -> Dict:
@@ -641,15 +704,45 @@ def run_once(
 
     # ── Persist training run ──────────────────────────────────────────
     try:
+        thresholds = _calibrate_thresholds(
+            dataset=dataset,
+            probabilities=train_result.probabilities,
+            min_samples=threshold_min_samples,
+            model_version=model_version,
+            prediction_type=CORRUPTION_PREDICTION_TYPE,
+        )
+        base_metrics_fixed_threshold = {
+            "accuracy": float(train_result.metrics.get("accuracy") or 0.0),
+            "precision": float(train_result.metrics.get("precision") or 0.0),
+            "recall": float(train_result.metrics.get("recall") or 0.0),
+            "f1": float(train_result.metrics.get("f1") or 0.0),
+            "threshold_probability": 0.5,
+            "threshold_mode": "fixed_probability",
+        }
+        operating_metrics = _operating_metrics_from_thresholds(
+            dataset=dataset,
+            probabilities=train_result.probabilities,
+            thresholds=thresholds,
+        )
         fairness = _compute_fairness_metrics(
             entity_types=dataset.entity_types,
             labels=dataset.labels,
             probabilities=train_result.probabilities,
+            thresholds_by_type=thresholds,
         )
         label_source_counts = _label_source_counts(dataset.node_meta)
         label_ladder = _label_ladder_counts(label_source_counts)
         benchmark_readiness = dict((dataset.selection_metadata or {}).get("benchmark_readiness") or {})
         effective_split_policy = str(train_result.metrics.get("split_policy") or split_policy)
+        attribution_method, feature_contrib_by_idx = _compute_feature_attribution_map(
+            dataset=dataset,
+            model_state=dict(train_result.model_state or {}),
+            hidden_dim=hidden_dim,
+            embed_dim=embed_dim,
+            dropout=dropout,
+            temporal_decay=0.0,
+            max_nodes=int(settings.ai_explainability_max_nodes),
+        )
         fairness_gate_override_applied = False
         if fairness.get("fairness_flag") == "FAIL":
             disparity = float(fairness.get("max_positive_rate_disparity") or 0.0)
@@ -730,9 +823,9 @@ def run_once(
             train_loss       = float(train_result.metrics.get("train_loss") or 0.0),
             val_loss         = float(train_result.metrics.get("val_loss")   or 0.0),
             auc              = float(train_result.metrics.get("auc")        or 0.0),
-            precision        = float(train_result.metrics.get("precision")  or 0.0),
-            recall           = float(train_result.metrics.get("recall")     or 0.0),
-            f1               = float(train_result.metrics.get("f1")         or 0.0),
+            precision        = float(operating_metrics.get("precision")  or 0.0),
+            recall           = float(operating_metrics.get("recall")     or 0.0),
+            f1               = float(operating_metrics.get("f1")         or 0.0),
             artifact_path    = artifact_path,
             params_json      = {
                 "epochs": epochs, "hidden_dim": hidden_dim, "embed_dim": embed_dim,
@@ -741,11 +834,14 @@ def run_once(
                 "split_policy": split_policy, "val_ratio": val_ratio,
                 "minimum_negative_count": minimum_negative_count,
                 "minimum_negative_ratio": minimum_negative_ratio,
+                "threshold_min_samples": threshold_min_samples,
                 "allow_demo_real_data_override": bool(allow_demo_real_data_override),
                 "allow_demo_fairness_override": bool(allow_demo_fairness_override),
             },
             metrics_json     = {
                 **train_result.metrics,
+                "base_metrics_fixed_threshold": base_metrics_fixed_threshold,
+                "operating_metrics": operating_metrics,
                 "positive_count": dataset.positive_count,
                 "negative_count": dataset.negative_count,
                 "node_count":     len(dataset.entity_keys),
@@ -803,8 +899,9 @@ def run_once(
                     "positive_definition": (
                         "Labels prefer confirmed audit, tribunal, sanction, or recovery outcomes first. "
                         "Analyst feedback overrides the remaining labels when present. Otherwise the model "
-                        "falls back to procurement weak-label heuristics such as single-source awards, "
-                        "director conflicts, emergency procurement, and payment anomalies."
+                        "falls back to entity-specific procurement weak-label patterns, for example "
+                        "single-source-plus-conflict on tenders, related-party or payment-control anomalies "
+                        "on accounts and payments, and supplier-network or shell-company evidence on suppliers."
                     ),
                     "eval_caveat": (
                         "AUC/F1/Precision/Recall are computed on a holdout split of the current supervision mix. "
@@ -818,66 +915,25 @@ def run_once(
                 },
                 "dataset_selection": dict(dataset.selection_metadata or {}),
                 "explainability": {
-                    "method": "gradient_x_input",
+                    "method": attribution_method,
                     "top_k": int(settings.ai_explainability_top_k),
+                    "ig_steps": int(settings.ai_explainability_ig_steps),
+                    "model_based_rows": int(len(feature_contrib_by_idx)),
                 },
             },
         )
         db.add(run)
         db.flush()
 
-        # ── Write per-entity predictions using MC-Dropout ─────────────
-        model = build_sentinel_gnn(feat_dim, hidden_dim, embed_dim, dropout)
-        model.load_state_dict(train_result.model_state)
-
-        import torch as _torch  # noqa: PLC0415
-        x = _torch.tensor(dataset.feature_matrix, dtype=_torch.float32)
-
-        src_idx, dst_idx, edge_w = [], [], []
-        n = len(dataset.entity_keys)
-        for si, di, w in dataset.edges:
-            src_idx += [si, di]
-            dst_idx += [di, si]
-            edge_w  += [w, w]
-        for i in range(n):   # self-loops
-            src_idx.append(i); dst_idx.append(i); edge_w.append(1.0)
-
-        edge_src_t    = _torch.tensor(src_idx, dtype=_torch.long)
-        edge_dst_t    = _torch.tensor(dst_idx, dtype=_torch.long)
-        edge_weight_t = _torch.tensor(edge_w,  dtype=_torch.float32)
-
-        mean_probs, uncertainties = predict_mc(
-            model, x, edge_src_t, edge_dst_t, edge_weight_t, n_samples=20
-        )
-
-        feature_contrib_by_idx: Dict[int, List[float]] = {}
-        if bool(settings.ai_explainability_enabled):
-            ranked_idx = sorted(
-                range(n),
-                key=lambda idx: float(mean_probs[idx]),
-                reverse=True,
-            )
-            try:
-                feature_contrib_by_idx = gradient_x_input_attributions(
-                    model,
-                    x,
-                    edge_src_t,
-                    edge_dst_t,
-                    edge_weight_t,
-                    node_indices=ranked_idx,
-                    max_nodes=int(settings.ai_explainability_max_nodes),
-                )
-            except Exception as exc:  # noqa: BLE001
-                log.warning("corruption_attribution_failed model_version=%s err=%s", model_version, exc)
-                feature_contrib_by_idx = {}
-
         created = updated = 0
-        for i in range(n):
-            prob        = float(mean_probs[i])
-            uncertainty = float(uncertainties[i])
+        for i in range(len(dataset.entity_keys)):
+            prob        = float(train_result.probabilities[i])
+            uncertainty = float((train_result.uncertainties or [])[i] if train_result.uncertainties else (1.0 - abs(prob - 0.5) * 2.0))
             score       = round(prob * 100.0, 4)
             flags       = list(dataset.node_meta[i].get("risk_flags") or [])
-            reasons     = _reason_codes(prob, flags, dataset.entity_types[i])
+            threshold_score = float((thresholds.get(str(dataset.entity_types[i])) or {}).get("threshold_score") or 75.0)
+            is_indicator = score >= threshold_score
+            reasons     = _reason_codes(prob, flags, dataset.entity_types[i], dataset.node_meta[i], is_indicator=is_indicator)
 
             _write_prediction(
                 db,
@@ -890,6 +946,7 @@ def run_once(
                 score         = score,
                 prob          = prob,
                 uncertainty   = uncertainty,
+                threshold_score = threshold_score,
                 reasons       = reasons,
                 meta          = dataset.node_meta[i],
                 feature_vector= dataset.feature_matrix[i],
@@ -912,7 +969,7 @@ def run_once(
         db.commit()
         log.info(
             "corruption_train_complete nodes=%d auc=%.4f predictions=%d artifact=%s",
-            n, float(train_result.metrics.get("auc") or 0), created, artifact_path,
+            len(dataset.entity_keys), float(train_result.metrics.get("auc") or 0), created, artifact_path,
         )
 
     except Exception as exc:  # noqa: BLE001
@@ -958,10 +1015,14 @@ def run_once(
         "fairness_gate_override_applied": bool(fairness_gate_override_applied),
         "real_data_gate_passed": bool(real_data_gate_passed),
         "real_data_gate_override_applied": bool(real_data_gate_override_applied),
-        "model_based_explanations": len(feature_contrib_by_idx) if 'feature_contrib_by_idx' in locals() else 0,
+        "model_based_explanations": int(len(feature_contrib_by_idx)),
         "artifact_path":   artifact_path,
         "post_pipeline":   post_pipeline,
-        "metrics":         train_result.metrics,
+        "metrics":         {
+            **train_result.metrics,
+            "base_metrics_fixed_threshold": base_metrics_fixed_threshold,
+            "operating_metrics": operating_metrics,
+        },
         "legal_notice":    LEGAL_RISK_NOTICE,
     }
 
@@ -996,6 +1057,7 @@ def main() -> None:
     p.add_argument("--val-ratio", type=float, default=0.2)
     p.add_argument("--minimum-negative-count", type=int, default=5)
     p.add_argument("--minimum-negative-ratio", type=float, default=0.1)
+    p.add_argument("--threshold-min-samples", type=int, default=settings.gnn_threshold_min_samples)
     p.add_argument("--seed",          type=int,   default=42)
     p.add_argument("--model-version", default="corruption-gnn-v1")
     p.add_argument("--artifact-dir",  default="/app/artifacts/gnn")
@@ -1022,6 +1084,7 @@ def main() -> None:
             val_ratio      = args.val_ratio,
             minimum_negative_count = args.minimum_negative_count,
             minimum_negative_ratio = args.minimum_negative_ratio,
+            threshold_min_samples = args.threshold_min_samples,
             seed           = args.seed,
             model_version  = args.model_version,
             artifact_dir   = args.artifact_dir,

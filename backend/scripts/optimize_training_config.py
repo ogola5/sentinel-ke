@@ -1,0 +1,205 @@
+#!/usr/bin/env python3
+"""
+optimize_training_config.py — Detect GPU VRAM and write optimal training overrides.
+
+Usage:
+    cd backend
+    python scripts/optimize_training_config.py [--out .env.training] [--dry-run]
+
+Writes backend/.env.training with environment variable overrides tuned for the
+detected hardware.  Source the file before running training workers:
+
+    source .env.training
+    python -m app.analytics.layer3.gnn_train_worker --window-key Wmid ...
+
+The script prints the selected config to stdout regardless of --dry-run so you
+can review it before committing.
+"""
+from __future__ import annotations
+
+import argparse
+import os
+import sys
+from pathlib import Path
+
+# ---------------------------------------------------------------------------
+# Hardware-tuned config profiles
+# ---------------------------------------------------------------------------
+
+# Optimal for Quadro M1000M (3.9 GB VRAM) — fits comfortably with AMP/FP16
+QUADRO_M1000M_CONFIG: dict = {
+    "GNN_HIDDEN_DIM": 64,
+    "GNN_EMBED_DIM": 32,
+    "GNN_MAX_ENTITIES": 50_000,
+    "GNN_MAX_EDGES": 200_000,
+    "GNN_USE_AMP": "true",          # FP16 halves VRAM usage
+    "GNN_GRADIENT_CLIP": 5.0,
+    "MC_SAMPLES_TRAIN": 10,         # reduced during training; use 20 at inference
+    "GNN_EPOCHS": 60,
+    "GNN_NEGATIVE_MULTIPLIER": 1.5,
+    "INFERENCE_BATCH_THRESHOLD": 256,
+    "CUBLAS_WORKSPACE_CONFIG": ":4096:8",
+}
+
+# Generic "budget GPU" profile: VRAM >= 4 GB but not the M1000M
+BUDGET_GPU_CONFIG: dict = {
+    "GNN_HIDDEN_DIM": 64,
+    "GNN_EMBED_DIM": 32,
+    "GNN_MAX_ENTITIES": 30_000,
+    "GNN_MAX_EDGES": 120_000,
+    "GNN_USE_AMP": "true",
+    "GNN_GRADIENT_CLIP": 5.0,
+    "MC_SAMPLES_TRAIN": 10,
+    "GNN_EPOCHS": 60,
+    "GNN_NEGATIVE_MULTIPLIER": 1.5,
+    "INFERENCE_BATCH_THRESHOLD": 128,
+    "CUBLAS_WORKSPACE_CONFIG": ":4096:8",
+}
+
+# Mid-range GPU profile: VRAM >= 8 GB
+MIDRANGE_GPU_CONFIG: dict = {
+    "GNN_HIDDEN_DIM": 128,
+    "GNN_EMBED_DIM": 64,
+    "GNN_MAX_ENTITIES": 100_000,
+    "GNN_MAX_EDGES": 500_000,
+    "GNN_USE_AMP": "true",
+    "GNN_GRADIENT_CLIP": 5.0,
+    "MC_SAMPLES_TRAIN": 20,
+    "GNN_EPOCHS": 80,
+    "GNN_NEGATIVE_MULTIPLIER": 2.0,
+    "INFERENCE_BATCH_THRESHOLD": 512,
+    "CUBLAS_WORKSPACE_CONFIG": ":4096:8",
+}
+
+# CPU fallback — no GPU available
+CPU_CONFIG: dict = {
+    "GNN_HIDDEN_DIM": 48,
+    "GNN_EMBED_DIM": 24,
+    "GNN_MAX_ENTITIES": 10_000,
+    "GNN_MAX_EDGES": 50_000,
+    "GNN_USE_AMP": "false",
+    "GNN_GRADIENT_CLIP": 5.0,
+    "MC_SAMPLES_TRAIN": 5,
+    "GNN_EPOCHS": 30,
+    "GNN_NEGATIVE_MULTIPLIER": 1.5,
+    "INFERENCE_BATCH_THRESHOLD": 25,
+}
+
+# Common settings applied on top of every profile
+COMMON_OVERRIDES: dict = {
+    "GNN_WINDOW_KEY": "Wmid",
+    "GNN_SPLIT_POLICY": "temporal_recency_holdout",
+    "GNN_MIN_NEGATIVE_COUNT": 5,
+    "GNN_MIN_NEGATIVE_RATIO": 0.10,
+    "GNN_BENCHMARK_WINDOW_CANDIDATES": 12,
+    "GNN_PRETRAIN_EPOCHS": 3,
+    "GNN_CPU_THREADS": 4,
+    "RETRAIN_INTERVAL_SEC": 14400,
+    "INFERENCE_MIN_INTERVAL_SEC": 30,
+}
+
+
+# ---------------------------------------------------------------------------
+# GPU detection helpers
+# ---------------------------------------------------------------------------
+
+def _detect_gpu() -> tuple[bool, float, str]:
+    """
+    Returns (cuda_available, vram_gb, gpu_name).
+    vram_gb is 0.0 when CUDA is not available.
+    """
+    try:
+        import torch  # noqa: PLC0415
+    except ImportError:
+        return False, 0.0, "no-torch"
+
+    if not torch.cuda.is_available():
+        return False, 0.0, "cpu"
+
+    props = torch.cuda.get_device_properties(0)
+    vram_gb = props.total_memory / (1024 ** 3)
+    return True, round(vram_gb, 2), props.name
+
+
+def _select_profile(cuda: bool, vram_gb: float, gpu_name: str) -> tuple[dict, str]:
+    """Return (config_dict, profile_label) for the detected hardware."""
+    if not cuda:
+        return CPU_CONFIG, "cpu_fallback"
+
+    name_lower = gpu_name.lower()
+
+    # Exact match for Quadro M1000M
+    if "m1000m" in name_lower or "quadro m1000" in name_lower:
+        return QUADRO_M1000M_CONFIG, f"quadro_m1000m ({vram_gb:.1f} GB)"
+
+    if vram_gb >= 8.0:
+        return MIDRANGE_GPU_CONFIG, f"midrange_gpu ({vram_gb:.1f} GB)"
+
+    if vram_gb >= 4.0:
+        return BUDGET_GPU_CONFIG, f"budget_gpu ({vram_gb:.1f} GB)"
+
+    # Small VRAM GPU — treat as budget GPU but warn
+    print(
+        f"WARNING: GPU VRAM {vram_gb:.1f} GB is very low — "
+        "using budget_gpu profile, consider CPU fallback if OOM errors occur.",
+        file=sys.stderr,
+    )
+    return BUDGET_GPU_CONFIG, f"small_gpu ({vram_gb:.1f} GB)"
+
+
+# ---------------------------------------------------------------------------
+# Writer
+# ---------------------------------------------------------------------------
+
+def _render_env(profile: dict, common: dict) -> str:
+    lines = [
+        "# Sentinel-KE training overrides — generated by optimize_training_config.py",
+        "# Source this file before running training workers:",
+        "#   source backend/.env.training",
+        "#   python -m app.analytics.layer3.gnn_train_worker --window-key Wmid ...",
+        "",
+    ]
+    merged = {**common, **profile}
+    for key, val in sorted(merged.items()):
+        lines.append(f"export {key}={val}")
+    return "\n".join(lines) + "\n"
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--out",
+        default=".env.training",
+        help="Output file path (default: .env.training in cwd)",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print config to stdout without writing the file",
+    )
+    args = parser.parse_args(argv)
+
+    cuda, vram_gb, gpu_name = _detect_gpu()
+
+    print(f"Hardware detected: cuda={cuda} vram_gb={vram_gb} gpu={gpu_name!r}")
+
+    profile, label = _select_profile(cuda, vram_gb, gpu_name)
+    print(f"Selected profile: {label}")
+
+    env_content = _render_env(profile, COMMON_OVERRIDES)
+
+    print("\n--- Recommended overrides ---")
+    print(env_content)
+
+    if args.dry_run:
+        print("(dry-run: file not written)")
+        return 0
+
+    out_path = Path(args.out)
+    out_path.write_text(env_content)
+    print(f"Written to: {out_path.resolve()}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

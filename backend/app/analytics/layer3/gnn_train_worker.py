@@ -618,6 +618,7 @@ def _compute_fairness_metrics(
     labels: Sequence[int],
     probabilities: Sequence[float],
     threshold: float = 0.5,
+    thresholds_by_type: Optional[Mapping[str, Mapping[str, object]]] = None,
     min_group_size: int = 3,
 ) -> Dict[str, object]:
     """
@@ -629,15 +630,17 @@ def _compute_fairness_metrics(
     Metrics per entity_type subgroup:
       positive_rate          P(ŷ=1 | type)  — demographic parity check
       actual_positive_rate   P(y=1 | type)  — calibration check
+      positive_rate_gap      |P(ŷ=1 | type) - P(y=1 | type)|
       precision              TP/(TP+FP)     — equalized odds (positive predictive value)
       recall                 TP/(TP+FN)     — equalized odds (true positive rate)
       count / positive_count — sample sizes for context
 
     Summary scalars:
       max_positive_rate_disparity   max - min positive_rate across evaluated types
+      max_positive_rate_gap         max absolute gap between predicted and actual positive rate
       max_recall_disparity          max - min recall across evaluated types
       types_evaluated               groups with >= min_group_size samples
-      fairness_flag                 PASS (<0.25 disparity) / WARN (<0.40) / FAIL
+      fairness_flag                 PASS/WARN/FAIL using calibration-aware positive-rate gap
     """
     groups: Dict[str, Dict[str, List]] = {}
     for etype, y, prob in zip(entity_types, labels, probabilities):
@@ -647,6 +650,7 @@ def _compute_fairness_metrics(
 
     per_type: Dict[str, Dict[str, object]] = {}
     positive_rates: List[float] = []
+    positive_rate_gaps: List[float] = []
     recalls: List[float] = []
 
     for etype, g in groups.items():
@@ -656,7 +660,21 @@ def _compute_fairness_metrics(
             continue
 
         y_true = g["y"]
-        y_pred = [1 if p >= threshold else 0 for p in g["prob"]]
+        positive_count = int(sum(y_true))
+        if positive_count == 0 or positive_count == n:
+            per_type[etype] = {
+                "count": n,
+                "positive_count": positive_count,
+                "skipped": True,
+                "reason": "single_class_group",
+            }
+            continue
+
+        threshold_prob = float(threshold)
+        if thresholds_by_type is not None:
+            threshold_score = float((thresholds_by_type.get(etype) or {}).get("threshold_score") or _default_threshold(etype))
+            threshold_prob = max(0.0, min(1.0, threshold_score / 100.0))
+        y_pred = [1 if p >= threshold_prob else 0 for p in g["prob"]]
 
         tp = sum(1 for a, b in zip(y_true, y_pred) if a == 1 and b == 1)
         fp = sum(1 for a, b in zip(y_true, y_pred) if a == 0 and b == 1)
@@ -664,32 +682,39 @@ def _compute_fairness_metrics(
 
         pos_rate        = sum(y_pred) / n
         actual_pos_rate = sum(y_true) / n
+        pos_rate_gap    = abs(pos_rate - actual_pos_rate)
         precision       = tp / (tp + fp) if (tp + fp) > 0 else 0.0
         recall          = tp / (tp + fn) if (tp + fn) > 0 else 0.0
 
         per_type[etype] = {
             "count":               n,
-            "positive_count":      sum(y_true),
+            "positive_count":      positive_count,
             "positive_rate":       round(pos_rate, 4),
             "actual_positive_rate": round(actual_pos_rate, 4),
+            "positive_rate_gap":   round(pos_rate_gap, 4),
             "precision":           round(precision, 4),
             "recall":              round(recall, 4),
+            "threshold_probability": round(threshold_prob, 4),
         }
         positive_rates.append(pos_rate)
+        positive_rate_gaps.append(pos_rate_gap)
         recalls.append(recall)
 
     if len(positive_rates) >= 2:
         max_pr_disp = round(max(positive_rates) - min(positive_rates), 4)
+        max_pr_gap = round(max(positive_rate_gaps), 4) if positive_rate_gaps else None
         max_rc_disp = round(max(recalls) - min(recalls), 4) if len(recalls) >= 2 else None
     else:
         max_pr_disp = None
+        max_pr_gap = round(max(positive_rate_gaps), 4) if positive_rate_gaps else None
         max_rc_disp = None
 
-    if max_pr_disp is None:
+    gate_value = max_pr_gap if max_pr_gap is not None else max_pr_disp
+    if gate_value is None:
         flag = "INSUFFICIENT_DATA"
-    elif max_pr_disp < 0.25:
+    elif gate_value < 0.25:
         flag = "PASS"
-    elif max_pr_disp < 0.40:
+    elif gate_value < 0.40:
         flag = "WARN"
     else:
         flag = "FAIL"
@@ -697,10 +722,12 @@ def _compute_fairness_metrics(
     return {
         "per_type":                    per_type,
         "max_positive_rate_disparity": max_pr_disp,
+        "max_positive_rate_gap":       max_pr_gap,
         "max_recall_disparity":        max_rc_disp,
         "types_evaluated":             len(positive_rates),
         "fairness_flag":               flag,
-        "threshold_used":              threshold,
+        "gate_metric":                 "max_positive_rate_gap" if max_pr_gap is not None else "max_positive_rate_disparity",
+        "threshold_used":              "entity_type_calibrated" if thresholds_by_type is not None else threshold,
     }
 
 
@@ -767,6 +794,15 @@ def _f1_for_threshold(labels: Sequence[int], scores: Sequence[float], thr: float
     return (2 * precision * recall / (precision + recall)) if (precision + recall) > 0 else 0.0
 
 
+def _precision_for_threshold(labels: Sequence[int], scores: Sequence[float], thr: float) -> float:
+    y_true = [int(v) for v in labels]
+    y_pred = [1 if float(s) >= thr else 0 for s in scores]
+
+    tp = sum(1 for yt, yp in zip(y_true, y_pred) if yt == 1 and yp == 1)
+    fp = sum(1 for yt, yp in zip(y_true, y_pred) if yt == 0 and yp == 1)
+    return tp / (tp + fp) if (tp + fp) > 0 else 0.0
+
+
 def _cost_weight_for_entity_type(entity_type: str) -> float:
     et = (entity_type or "").lower()
     if et in {"service_id", "endpoint", "ip", "domain", "url"}:
@@ -783,9 +819,16 @@ def _calibrate_thresholds(
     min_samples: int,
     model_version: str,
     prediction_type: str,
+    node_indices: Optional[Sequence[int]] = None,
 ) -> Dict[str, Dict[str, object]]:
     per_type: Dict[str, List[Tuple[int, float]]] = {}
-    for etype, label, prob in zip(dataset.entity_types, dataset.labels, probabilities):
+    indices = [int(i) for i in (node_indices or range(len(dataset.labels)))]
+    for idx in indices:
+        if idx < 0 or idx >= len(dataset.labels) or idx >= len(probabilities) or idx >= len(dataset.entity_types):
+            continue
+        etype = dataset.entity_types[idx]
+        label = dataset.labels[idx]
+        prob = probabilities[idx]
         per_type.setdefault(str(etype), []).append((int(label), float(prob)))
 
     thresholds: Dict[str, Dict[str, object]] = {}
@@ -817,15 +860,31 @@ def _calibrate_thresholds(
             }
             continue
 
-        best_thr = 0.75
+        positive_rate = positive_count / max(1, sample_count)
+        default_threshold_prob = max(0.0, min(1.0, _default_threshold(etype) / 100.0))
+        min_candidate_threshold = 0.35
+        precision_weight = 0.0
+        if prediction_type == "corruption_risk":
+            precision_weight = 0.35
+            if positive_count <= max(5, int(min_samples // 2)) or positive_rate <= 0.08:
+                min_candidate_threshold = max(default_threshold_prob, 0.6)
+            elif positive_count <= max(8, int(min_samples)) or positive_rate <= 0.12:
+                min_candidate_threshold = max(default_threshold_prob, 0.55)
+
+        candidate_thresholds = [thr for thr in candidates if thr >= min_candidate_threshold]
+        if not candidate_thresholds:
+            candidate_thresholds = [default_threshold_prob]
+
+        best_thr = candidate_thresholds[0]
         best_f1 = -1.0
         cost_weight = _cost_weight_for_entity_type(etype)
         best_score = float("-inf")
-        for thr in candidates:
+        for thr in candidate_thresholds:
             f1 = _f1_for_threshold(labels, probs, thr)
+            precision = _precision_for_threshold(labels, probs, thr)
             # Higher weights bias the optimizer toward recall-sensitive thresholds
             # for critical infrastructure entities.
-            objective = f1 + (cost_weight - 1.0) * max(0.0, 0.8 - thr)
+            objective = f1 + (cost_weight - 1.0) * max(0.0, 0.8 - thr) + precision_weight * precision
             if objective > best_score:
                 best_score = objective
                 best_f1 = f1
@@ -840,15 +899,15 @@ def _calibrate_thresholds(
             "metrics": {
                 "f1": round(best_f1, 6),
                 "threshold_probability": best_thr,
-                "objective": "cost_weighted_f1",
+                "objective": "cost_weighted_f1_precision" if precision_weight > 0.0 else "cost_weighted_f1",
                 "objective_score": round(best_score, 6),
+                "minimum_candidate_threshold": round(min_candidate_threshold, 4),
             },
             "model_version": model_version,
             "prediction_type": prediction_type,
         }
 
     return thresholds
-
 
 def _persist_thresholds(
     db: Session,
@@ -901,6 +960,45 @@ def _persist_thresholds(
     )
     res = db.execute(stmt)
     return int(res.rowcount or 0)
+
+
+def _operating_metrics_from_thresholds(
+    *,
+    dataset: GNNDataset,
+    probabilities: Sequence[float],
+    thresholds: Mapping[str, Mapping[str, object]],
+    node_indices: Optional[Sequence[int]] = None,
+) -> Dict[str, float]:
+    indices = [int(i) for i in (node_indices or range(len(dataset.labels)))]
+    y_true: List[int] = []
+    y_pred: List[int] = []
+    for idx in indices:
+        if idx < 0 or idx >= len(dataset.labels) or idx >= len(probabilities) or idx >= len(dataset.entity_types):
+            continue
+        y_true.append(int(dataset.labels[idx]))
+        entity_type = dataset.entity_types[idx]
+        prob = probabilities[idx]
+        threshold_score = float((thresholds.get(str(entity_type)) or {}).get("threshold_score") or _default_threshold(str(entity_type)))
+        y_pred.append(1 if (float(prob) * 100.0) >= threshold_score else 0)
+
+    tp = sum(1 for yt, yp in zip(y_true, y_pred) if yt == 1 and yp == 1)
+    tn = sum(1 for yt, yp in zip(y_true, y_pred) if yt == 0 and yp == 0)
+    fp = sum(1 for yt, yp in zip(y_true, y_pred) if yt == 0 and yp == 1)
+    fn = sum(1 for yt, yp in zip(y_true, y_pred) if yt == 1 and yp == 0)
+
+    precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+    recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+    f1 = (2 * precision * recall / (precision + recall)) if (precision + recall) > 0 else 0.0
+    accuracy = (tp + tn) / max(1, len(y_true))
+
+    return {
+        "sample_count": int(len(y_true)),
+        "accuracy": round(accuracy, 6),
+        "precision": round(precision, 6),
+        "recall": round(recall, 6),
+        "f1": round(f1, 6),
+        "threshold_mode": "entity_type_calibrated",
+    }
 
 
 def _component_primary_key(
@@ -1431,6 +1529,8 @@ def run_once(
         temporal_decay=temporal_decay,
         max_nodes=int(settings.ai_explainability_max_nodes),
     )
+    train_indices = list(train_result.train_indices or [])
+    val_indices = list(train_result.val_indices or [])
     label_source_counts = _label_source_counts(dataset.node_meta)
     label_ladder = _label_ladder_counts(label_source_counts)
     benchmark_readiness = dict((dataset.selection_metadata or {}).get("benchmark_readiness") or {})
@@ -1443,12 +1543,28 @@ def run_once(
             min_samples=threshold_min_samples,
             model_version=model_version,
             prediction_type=prediction_type,
+            node_indices=train_indices or None,
+        )
+        base_metrics_fixed_threshold = {
+            "accuracy": float(train_result.metrics.get("accuracy") or 0.0),
+            "precision": float(train_result.metrics.get("precision") or 0.0),
+            "recall": float(train_result.metrics.get("recall") or 0.0),
+            "f1": float(train_result.metrics.get("f1") or 0.0),
+            "threshold_probability": 0.5,
+            "threshold_mode": "fixed_probability",
+        }
+        operating_metrics = _operating_metrics_from_thresholds(
+            dataset=dataset,
+            probabilities=train_result.probabilities,
+            thresholds=thresholds,
+            node_indices=val_indices or None,
         )
 
         fairness = _compute_fairness_metrics(
             entity_types=dataset.entity_types,
             labels=dataset.labels,
             probabilities=train_result.probabilities,
+            thresholds_by_type=thresholds,
         )
         fairness_gate_override_applied = False
         if fairness.get("fairness_flag") == "FAIL":
@@ -1538,9 +1654,9 @@ def run_once(
             train_loss=float(train_result.metrics.get("train_loss") or 0.0),
             val_loss=float(train_result.metrics.get("val_loss") or 0.0),
             auc=float(train_result.metrics.get("auc") or 0.0),
-            precision=float(train_result.metrics.get("precision") or 0.0),
-            recall=float(train_result.metrics.get("recall") or 0.0),
-            f1=float(train_result.metrics.get("f1") or 0.0),
+            precision=float(operating_metrics.get("precision") or 0.0),
+            recall=float(operating_metrics.get("recall") or 0.0),
+            f1=float(operating_metrics.get("f1") or 0.0),
             params_json={
                 "edge_backend": edge_backend,
                 "max_entities": max_entities,
@@ -1591,6 +1707,8 @@ def run_once(
                     "mode": "demo_override" if real_data_gate_override_applied else "strict",
                 },
                 "feedback": feedback_metrics,
+                "base_metrics_fixed_threshold": base_metrics_fixed_threshold,
+                "operating_metrics": operating_metrics,
                 "evaluation_protocol": {
                     "temporal_policy": (
                         "last_seen_recency_holdout"
@@ -1648,6 +1766,13 @@ def run_once(
                         "Increase confirmed event outcomes and analyst dispositions in event_log or feedback "
                         "records to keep reducing reliance on heuristic supervision."
                     ),
+                    "training_weighting": {
+                        "confirmed_event_label": 1.75,
+                        "operational_threat_alert": 1.35,
+                        "weak_label": 1.0,
+                        "analyst_feedback": 1.75,
+                        "purpose": "Higher-quality labels have more influence in the training loss than weak heuristic labels.",
+                    },
                 },
                 "dataset_selection": dict(dataset.selection_metadata or {}),
                 "explainability": {
@@ -1765,7 +1890,8 @@ def run_once(
 
             details = {
                 "probability": round(prob, 6),
-                "predicted_label": int(train_result.predicted_labels[i]),
+                "predicted_label": int(is_indicator),
+                "predicted_label_fixed_threshold": int(train_result.predicted_labels[i]),
                 "entity_threshold_score": round(threshold_score, 4),
                 "risk_indicator": bool(is_indicator),
                 "confidence": round(confidence, 6),
@@ -1977,7 +2103,11 @@ def run_once(
         "real_data_gate_passed": bool(real_data_gate_passed),
         "real_data_gate_override_applied": bool(real_data_gate_override_applied),
         "model_based_explanations": int(len(attribution_map)),
-        "metrics": train_result.metrics,
+        "metrics": {
+            **train_result.metrics,
+            "base_metrics_fixed_threshold": base_metrics_fixed_threshold,
+            "operating_metrics": operating_metrics,
+        },
         "artifact_path": artifact_path,
         "post_pipeline": post_pipeline,
         "legal_notice": LEGAL_RISK_NOTICE,

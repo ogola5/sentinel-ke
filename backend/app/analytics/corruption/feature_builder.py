@@ -52,7 +52,7 @@ from __future__ import annotations
 
 import math
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 
 # ---------------------------------------------------------------------------
@@ -84,6 +84,23 @@ CORRUPTION_POSITIVE_FLAGS = {
     "RELATED_PARTY_TRANSACTION",
 }
 
+CORRUPTION_GLOBAL_POSITIVE_FLAGS = {
+    "CASE_CONFIRMED_CORRUPTION",
+}
+
+CORRUPTION_ENTITY_POSITIVE_FLAGS = {
+    "official": {"OFFICIAL_SANCTIONED", "RECOVERY_ORDER"},
+    "company": {"DEBARRED_SUPPLIER", "SHELL_COMPANY", "RECOVERY_ORDER"},
+    "supplier": {"DEBARRED_SUPPLIER", "SHELL_COMPANY", "RECOVERY_ORDER"},
+    "contract": {"RECOVERY_ORDER"},
+    "payment": {"RECOVERY_ORDER", "PAYMENT_APPROVAL_BYPASS", "ADVANCE_PAYMENT_RISK"},
+    "project": {"RECOVERY_ORDER"},
+    "account": {"RECOVERY_ORDER", "PAYMENT_APPROVAL_BYPASS", "ADVANCE_PAYMENT_RISK"},
+    "department": {"RECOVERY_ORDER"},
+    "tender": set(),
+    "director": {"DEBARRED_SUPPLIER", "SHELL_COMPANY"},
+}
+
 # Procurement / delivery / network event types tracked in Block 4
 # (11 types + other = 12 dims). The list is intentionally centred on the
 # real procurement lifecycle and supplier-network signals emitted by the
@@ -112,12 +129,38 @@ KE_FY_END_MONTHS = {5, 6}
 # Weak labelling
 # ---------------------------------------------------------------------------
 
+def _normalized_entity_type(entity_type: Optional[str]) -> str:
+    etype = (entity_type or "").lower().split(":", 1)[0]
+    if etype == "supplier_family":
+        return "company"
+    return etype
+
+
+def _feature_int(features: Mapping[str, Any], key: str) -> int:
+    try:
+        return int(features.get(key) or 0)
+    except Exception:  # noqa: BLE001
+        return 0
+
+
+def _feature_float(features: Mapping[str, Any], key: str, default: float = 0.0) -> float:
+    raw = features.get(key)
+    if raw is None:
+        return float(default)
+    try:
+        return float(raw)
+    except Exception:  # noqa: BLE001
+        return float(default)
+
+
 def corruption_weak_label(
     *,
     risk_flags: Sequence[str],
     event_count: int,
     single_source: bool,
     director_conflict: bool,
+    entity_type: Optional[str] = None,
+    features: Optional[Mapping[str, Any]] = None,
 ) -> int:
     """
     Generate a positive/negative weak label for GNN training.
@@ -126,10 +169,123 @@ def corruption_weak_label(
     Secondary signal — structural combinations that are independently
                        suspicious (single-source + director overlap).
     """
-    if any(flag in CORRUPTION_POSITIVE_FLAGS for flag in (risk_flags or [])):
+    flags = {str(flag) for flag in (risk_flags or []) if str(flag)}
+    feature_map = dict(features or {})
+    etype = _normalized_entity_type(entity_type)
+
+    if any(flag in CORRUPTION_GLOBAL_POSITIVE_FLAGS for flag in flags):
         return 1
-    # Combined structural signal — both required to fire
-    if single_source and director_conflict:
+
+    adverse_outcome = _feature_int(feature_map, "adverse_outcome_count") > 0
+    sanction_event = _feature_int(feature_map, "sanction_event_count") > 0
+    recovery_amount = _feature_float(feature_map, "recovery_amount_ksh") > 0.0
+    single_source_pattern = bool(single_source or feature_map.get("single_source"))
+    director_conflict_pattern = bool(director_conflict or "DIRECTOR_CONFLICT" in flags)
+    related_party_pattern = bool(
+        "RELATED_PARTY_TRANSACTION" in flags
+        or _feature_float(feature_map, "related_party_ratio") >= 0.25
+    )
+    supplier_network_pattern = _feature_int(feature_map, "supplier_family_size") > 1
+    complaint_pattern = bool(
+        "COMPLAINT_PRESSURE" in flags
+        or _feature_int(feature_map, "complaint_count") > 0
+    )
+    quality_pattern = bool(
+        "QUALITY_FAILURE" in flags
+        or _feature_int(feature_map, "quality_failure_count") > 0
+    )
+    project_delay_pattern = bool(
+        "PROJECT_DELAY_RISK" in flags
+        or _feature_int(feature_map, "delay_days_max") >= 30
+    )
+    low_execution_pattern = _feature_float(feature_map, "execution_rate", 1.0) < 0.5
+    payment_delivery_pattern = bool(
+        "PROJECT_DELIVERY_MISMATCH" in flags
+        or _feature_float(feature_map, "payment_to_delivery_ratio_max") >= 0.8
+        or _feature_float(feature_map, "progress_mismatch_max") >= 0.35
+    )
+    threshold_split_pattern = _feature_float(feature_map, "threshold_splitting") >= 0.25
+    audit_pattern = "AUDIT_FINDING" in flags
+    price_pattern = "PRICE_INFLATION" in flags
+    shell_pattern = "SHELL_COMPANY" in flags
+    debarred_pattern = "DEBARRED_SUPPLIER" in flags
+    official_sanction_pattern = "OFFICIAL_SANCTIONED" in flags
+    ghost_pattern = "GHOST_WORKER" in flags
+    payment_control_pattern = bool(
+        "PAYMENT_APPROVAL_BYPASS" in flags
+        or "ADVANCE_PAYMENT_RISK" in flags
+    )
+    outcome_pattern = adverse_outcome or sanction_event or recovery_amount
+
+    if outcome_pattern or any(flag in CORRUPTION_ENTITY_POSITIVE_FLAGS.get(etype, set()) for flag in flags):
+        return 1
+
+    if etype in {"company", "supplier"}:
+        if shell_pattern or debarred_pattern:
+            return 1
+        if director_conflict_pattern and (single_source_pattern or supplier_network_pattern or related_party_pattern):
+            return 1
+        if price_pattern and (single_source_pattern or complaint_pattern or quality_pattern):
+            return 1
+        if audit_pattern and (related_party_pattern or payment_delivery_pattern or complaint_pattern or quality_pattern):
+            return 1
+        return 0
+
+    if etype == "director":
+        if director_conflict_pattern and (single_source_pattern or supplier_network_pattern or shell_pattern or debarred_pattern):
+            return 1
+        if shell_pattern or debarred_pattern:
+            return 1
+        return 0
+
+    if etype in {"payment", "account"}:
+        if related_party_pattern and (payment_delivery_pattern or threshold_split_pattern or payment_control_pattern):
+            return 1
+        if payment_delivery_pattern and (low_execution_pattern or payment_control_pattern or audit_pattern):
+            return 1
+        if payment_control_pattern and (payment_delivery_pattern or threshold_split_pattern):
+            return 1
+        return 0
+
+    if etype in {"contract", "project"}:
+        if price_pattern and (single_source_pattern or complaint_pattern):
+            return 1
+        if audit_pattern and (payment_delivery_pattern or low_execution_pattern or complaint_pattern or quality_pattern):
+            return 1
+        if payment_delivery_pattern and (low_execution_pattern or complaint_pattern or quality_pattern or project_delay_pattern):
+            return 1
+        if quality_pattern and complaint_pattern:
+            return 1
+        return 0
+
+    if etype == "tender":
+        if single_source_pattern and (director_conflict_pattern or price_pattern or complaint_pattern):
+            return 1
+        if price_pattern and complaint_pattern:
+            return 1
+        if audit_pattern and (single_source_pattern or complaint_pattern or quality_pattern):
+            return 1
+        return 0
+
+    if etype == "official":
+        if official_sanction_pattern:
+            return 1
+        if ghost_pattern and audit_pattern:
+            return 1
+        if audit_pattern and (related_party_pattern or single_source_pattern or complaint_pattern or quality_pattern):
+            return 1
+        return 0
+
+    if etype == "department":
+        if audit_pattern and (single_source_pattern or complaint_pattern or quality_pattern or price_pattern or project_delay_pattern):
+            return 1
+        if ghost_pattern and audit_pattern:
+            return 1
+        return 0
+
+    if any(flag in CORRUPTION_POSITIVE_FLAGS for flag in flags):
+        return 1
+    if single_source_pattern and director_conflict_pattern:
         return 1
     return 0
 
@@ -141,6 +297,8 @@ def corruption_training_label(
     single_source: bool,
     director_conflict: bool,
     outcome_label: Optional[int] = None,
+    entity_type: Optional[str] = None,
+    features: Optional[Mapping[str, Any]] = None,
 ) -> int:
     """
     Prefer real audit / tribunal outcomes when present, otherwise fall back
@@ -153,6 +311,8 @@ def corruption_training_label(
         event_count=event_count,
         single_source=single_source,
         director_conflict=director_conflict,
+        entity_type=entity_type,
+        features=features,
     )
 
 
