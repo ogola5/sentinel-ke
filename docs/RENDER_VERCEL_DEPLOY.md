@@ -20,7 +20,7 @@ This repo is now configured for the deployment split below:
   - `/ready` reports `opensearch=disabled` and `neo4j=disabled`
   - event search / timeline fall back to Postgres when OpenSearch is unavailable
 - Frontend production builds can use either `VITE_API_BASE_URL` or `VITE_API_URL`
-- `frontend/vercel.json` handles SPA route rewrites
+- `frontend/vercel.json` handles SPA route rewrites without rewriting `/assets/*` or other static files
 
 ## Honest Constraints
 
@@ -134,6 +134,20 @@ CORS_ALLOW_ORIGINS=https://YOUR-APP.vercel.app
 ```
 
 Then redeploy Render.
+
+### 4. Important Vercel Rewrite Rule
+
+The frontend must rewrite only application routes to `index.html`.
+
+It must **not** rewrite:
+
+- `/assets/*`
+- files with extensions such as `.js`, `.css`, `.svg`, `.woff`, `.json`
+
+If those are rewritten to `index.html`, the browser will fail with errors like:
+
+- `Expected a JavaScript module script but the server responded with text/html`
+- dynamic import failures on chunk files such as `CentralCommand-*.js`
 
 ## Local ML / GNN Against Render Postgres
 
