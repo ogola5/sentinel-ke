@@ -10,6 +10,7 @@ export type EventRecord = {
   received_at: string;
   service_id: string;
   endpoint: string;
+  ip?: string;
   summary: string;
   evidence: EvidenceItem[];
 };
@@ -43,6 +44,9 @@ export type Campaign = {
   id: string;
   name: string;
   type: string;
+  primaryKey?: string;
+  discovery?: string;
+  eventCount?: number;
   confidence: number;
   status: string;
   severity: string;
@@ -96,6 +100,8 @@ export type GraphEdge = {
   id: string;
   source: string;
   target: string;
+  kind?: string;
+  summary?: string;
   evidence: EvidenceItem[];
   first_seen: string;
   last_seen: string;

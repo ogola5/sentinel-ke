@@ -160,6 +160,52 @@ const asNumber = (value: unknown, fallback = 0): number => {
   return Number.isFinite(n) ? n : fallback;
 };
 
+const SERVICE_PLACEHOLDERS = new Set(["", "unknown_service", "unknown", "n/a", "-", "na"]);
+const ENDPOINT_PLACEHOLDERS = new Set(["", "n/a", "unknown", "unknown_endpoint", "-", "na"]);
+
+const hasUsableService = (value: string): boolean => !SERVICE_PLACEHOLDERS.has(value.trim().toLowerCase());
+const hasUsableEndpoint = (value: string): boolean => !ENDPOINT_PLACEHOLDERS.has(value.trim().toLowerCase());
+
+const isIpAddress = (value: string): boolean => {
+  const trimmed = value.trim();
+  return /^(\d{1,3}\.){3}\d{1,3}$/.test(trimmed) || trimmed.includes(":");
+};
+
+const isSyntheticCampaignKey = (value: string): boolean => {
+  const normalized = value.trim().toLowerCase();
+  return (
+    normalized === "" ||
+    normalized.startsWith("gnn_component:") ||
+    normalized.startsWith("gnn-component:") ||
+    normalized.startsWith("gnn_component") ||
+    normalized.startsWith("gnn-component")
+  );
+};
+
+const humanizeCampaignName = (
+  campaignId: string,
+  type: string,
+  primaryKey: string,
+  eventCount: number,
+  stats: Record<string, unknown>,
+): string => {
+  const explicitName = asString(stats.name, "").trim();
+  if (explicitName && explicitName.toLowerCase() !== "campaign") return explicitName;
+  if (isCanonicalEntityKey(primaryKey)) {
+    return `${type.replaceAll("_", " ")} · ${displayEntityLabel(primaryKey)}`;
+  }
+  if (type === "GNN_COMPONENT") {
+    const shortId = campaignId.slice(0, 4);
+    return eventCount > 0
+      ? `AI campaign group ${shortId} · ${eventCount} linked events`
+      : `AI campaign group ${shortId}`;
+  }
+  if (primaryKey && !isSyntheticCampaignKey(primaryKey)) {
+    return `${type.replaceAll("_", " ")} · ${primaryKey}`;
+  }
+  return `${type.replaceAll("_", " ")} · ${campaignId.slice(0, 4)}`;
+};
+
 const buildEventSummary = (eventType: string, payload: Record<string, unknown>, anchors: Record<string, unknown>): string => {
   const endpoint = asString(anchors.endpoint || payload.endpoint, "");
   const service = asString(anchors.service_id || payload.service_id, "");
@@ -183,6 +229,7 @@ const mapEvents = (items: Array<Record<string, unknown>>): EventRecord[] => {
     const source = toSourceType(item.source_type ?? item.source_id);
     const serviceId = asString(anchors.service_id ?? payload.service_id, "unknown_service");
     const endpoint = asString(anchors.endpoint ?? payload.endpoint, "n/a");
+    const ip = asString(anchors.ip ?? payload.ip ?? payload.src_ip, "");
     const eventHash = asString(item.event_hash, "event-unknown");
     const occurredAt = asString(item.occurred_at, "");
     const receivedAt = asString(item.received_at, occurredAt);
@@ -198,6 +245,7 @@ const mapEvents = (items: Array<Record<string, unknown>>): EventRecord[] => {
       received_at: toClock(receivedAt),
       service_id: serviceId,
       endpoint,
+      ip: isIpAddress(ip) ? ip : undefined,
       summary,
       evidence: [
         {
@@ -226,26 +274,33 @@ const mapCampaigns = (items: Array<Record<string, unknown>>): Campaign[] => {
     const score = clamp(asNumber(c.score, 0));
     const confidence = Math.round(score * 100);
     const status = asString(c.status, "active");
-    const primaryKey = asString(c.primary_key, "campaign");
+    const campaignId = asString(c.campaign_id, `campaign-${idx}`);
+    const primaryKey = asString(c.primary_key, "");
     const firstSeen = asString(c.first_seen, "");
     const lastSeen = asString(c.last_seen, "");
     const eventCount = asNumber(c.event_count, 0);
     const stats = (c.stats as Record<string, unknown> | undefined) ?? {};
+    const discovery = asString(stats.discovery, "");
 
     return {
-      id: asString(c.campaign_id, `campaign-${idx}`),
-      name: asString(stats.name, `${asString(c.type, "Campaign")} ${primaryKey}`),
+      id: campaignId,
+      name: humanizeCampaignName(campaignId, asString(c.type, "Campaign"), primaryKey, eventCount, stats),
       type: asString(c.type, "Campaign"),
+      primaryKey,
+      discovery,
+      eventCount,
       confidence,
       status,
       severity: severityFromScore(score),
       first_seen: toClock(firstSeen),
       last_seen: toClock(lastSeen),
       confidence_history: [Math.max(10, confidence - 35), Math.max(20, confidence - 20), Math.max(30, confidence - 10), confidence],
-      top_entities: [
-        { label: primaryKey, role: "primary_key" },
-        { label: `events:${eventCount}`, role: "activity" },
-      ],
+      top_entities: primaryKey
+        ? [
+            { label: primaryKey, role: "primary_key" },
+            { label: `events:${eventCount}`, role: "activity" },
+          ]
+        : [{ label: `events:${eventCount}`, role: "activity" }],
       factors: [
         `Event count ${eventCount}`,
         `Campaign score ${score.toFixed(2)}`,
@@ -406,11 +461,14 @@ const buildGraphFromSnapshot = (
   infraClusters: InfraCluster[],
 ): GraphData => {
   const nodes = new Map<string, MutableGraphNode>();
+  const servicesByIp = new Map<string, Set<string>>();
   const edges = new Map<
     string,
     {
       source: string;
       target: string;
+      kind?: string;
+      summary?: string;
       first_seen: string;
       last_seen: string;
       count: number;
@@ -433,12 +491,16 @@ const buildGraphFromSnapshot = (
     firstSeen: string,
     lastSeen: string,
     evidence: EvidenceItem,
+    kind?: string,
+    summary?: string,
   ) => {
     const prev = edges.get(id);
     if (!prev) {
       edges.set(id, {
         source,
         target,
+        kind,
+        summary,
         first_seen: firstSeen,
         last_seen: lastSeen,
         count: 1,
@@ -455,27 +517,68 @@ const buildGraphFromSnapshot = (
   };
 
   for (const event of events) {
-    const serviceNodeId = canonicalServiceKey(event.service_id);
-    const endpointNodeId = canonicalEndpointKey(
-      event.service_id && event.endpoint ? `${event.service_id}:${event.endpoint}` : event.endpoint,
-    );
-    upsertNode(serviceNodeId, event.service_id, "Service");
-    upsertNode(endpointNodeId, event.endpoint, "Endpoint");
+    const serviceId = hasUsableService(event.service_id) ? event.service_id.trim() : "";
+    const endpoint = hasUsableEndpoint(event.endpoint) ? event.endpoint.trim() : "";
+    const ip = event.ip && isIpAddress(event.ip) ? event.ip.trim() : "";
 
-    const edgeId = `edge:service-endpoint:${event.service_id}:${event.endpoint}`;
-    upsertEdge(
-      edgeId,
-      serviceNodeId,
-      endpointNodeId,
-      event.source,
-      event.occurred_at,
-      event.received_at,
-      {
-        event_hash: event.event_hash,
-        source: event.source,
-        detail: event.summary,
-      },
-    );
+    const serviceNodeId = serviceId ? canonicalServiceKey(serviceId) : "";
+    const endpointNodeId = endpoint
+      ? canonicalEndpointKey(serviceId ? `${serviceId}:${endpoint}` : endpoint)
+      : "";
+
+    if (serviceNodeId) {
+      upsertNode(serviceNodeId, serviceId, "Service");
+    }
+    if (endpointNodeId) {
+      upsertNode(endpointNodeId, serviceId ? `${serviceId} ${endpoint}` : endpoint, "Endpoint");
+    }
+    if (ip) {
+      upsertNode(`ip:${ip}`, ip, "IP");
+      if (serviceNodeId) {
+        const linkedServices = servicesByIp.get(ip) ?? new Set<string>();
+        linkedServices.add(serviceNodeId);
+        servicesByIp.set(ip, linkedServices);
+      }
+    }
+
+    if (serviceNodeId && endpointNodeId) {
+      upsertEdge(
+        `edge:service-endpoint:${serviceId}:${endpoint}`,
+        serviceNodeId,
+        endpointNodeId,
+        event.source,
+        event.occurred_at,
+        event.received_at,
+        {
+          event_hash: event.event_hash,
+          source: event.source,
+          detail: `Endpoint ${endpoint} belongs to service ${serviceId}`,
+        },
+        "service_endpoint",
+        `${serviceId} exposes ${endpoint}`,
+      );
+    }
+
+    const attackTargetNodeId = serviceNodeId || endpointNodeId;
+    const attackTargetLabel = serviceId || endpoint;
+    if (ip && attackTargetNodeId && attackTargetLabel) {
+      const targetKind = serviceNodeId ? "service" : "endpoint";
+      upsertEdge(
+        `edge:attack:${ip}:${attackTargetNodeId}`,
+        `ip:${ip}`,
+        attackTargetNodeId,
+        event.source,
+        event.occurred_at,
+        event.received_at,
+        {
+          event_hash: event.event_hash,
+          source: event.source,
+          detail: event.summary,
+        },
+        `attack_${targetKind}`,
+        `${ip} was observed targeting ${attackTargetLabel}`,
+      );
+    }
   }
 
   for (const cluster of infraClusters) {
@@ -500,6 +603,8 @@ const buildGraphFromSnapshot = (
         cluster.rotation[0]?.window ?? "-",
         cluster.rotation[cluster.rotation.length - 1]?.window ?? "-",
         evidence,
+        "cluster_provider",
+        `${cluster.id} is associated with provider ${provider}`,
       );
     }
 
@@ -519,43 +624,69 @@ const buildGraphFromSnapshot = (
         cluster.rotation[0]?.window ?? "-",
         cluster.rotation[cluster.rotation.length - 1]?.window ?? "-",
         evidence,
+        "cluster_member",
+        `${member} is a member of infra cluster ${cluster.id}`,
       );
+
+      for (const serviceNodeId of servicesByIp.get(member) ?? []) {
+        const serviceNode = nodes.get(serviceNodeId);
+        if (!serviceNode) continue;
+        upsertEdge(
+          `edge:cluster-target:${cluster.id}:${serviceNodeId}`,
+          clusterNodeId,
+          serviceNodeId,
+          "infra",
+          cluster.rotation[0]?.window ?? "-",
+          cluster.rotation[cluster.rotation.length - 1]?.window ?? "-",
+          evidence,
+          "cluster_target",
+          `Infra cluster ${cluster.id} includes members observed against ${serviceNode.label}`,
+        );
+      }
     }
   }
 
-  for (const campaign of campaigns) {
+  for (const campaign of campaigns.slice(0, 8)) {
     const campaignNodeId = `campaign:${campaign.id}`;
-    upsertNode(campaignNodeId, campaign.id, "Campaign");
-    for (const entity of campaign.top_entities) {
-      const label = entity.label.trim();
-      if (!label || label.startsWith("events:")) continue;
-      const linkedService = events.find((item) => item.service_id.toLowerCase() === label.toLowerCase());
-      const targetNodeId = isCanonicalEntityKey(label)
-        ? label
-        : linkedService
-          ? canonicalServiceKey(linkedService.service_id)
-          : `campaign-entity:${campaign.id}:${label}`;
-      if (!nodes.has(targetNodeId)) {
-        upsertNode(
-          targetNodeId,
-          isCanonicalEntityKey(label) ? displayEntityLabel(label) : label,
-          linkedService ? "Service" : "Entity",
-        );
-      }
-      upsertEdge(
-        `edge:campaign-entity:${campaign.id}:${targetNodeId}`,
-        campaignNodeId,
+    upsertNode(campaignNodeId, campaign.name, "Campaign");
+    const label = campaign.primaryKey?.trim() ?? "";
+    if (!label || isSyntheticCampaignKey(label) || label.startsWith("events:")) continue;
+
+    const linkedService = events.find((item) => item.service_id.toLowerCase() === label.toLowerCase());
+    const targetNodeId = isCanonicalEntityKey(label)
+      ? label
+      : linkedService
+        ? canonicalServiceKey(linkedService.service_id)
+        : "";
+    if (!targetNodeId) continue;
+    if (!nodes.has(targetNodeId)) {
+      upsertNode(
         targetNodeId,
-        "infra",
-        campaign.first_seen,
-        campaign.last_seen,
-        {
-          event_hash: `campaign-${campaign.id}`,
-          source: "infra",
-          detail: `${entity.role}:${label}`,
-        },
+        isCanonicalEntityKey(label) ? displayEntityLabel(label) : label,
+        linkedService ? "Service" : "Entity",
       );
     }
+    upsertEdge(
+      `edge:campaign-entity:${campaign.id}:${targetNodeId}`,
+      campaignNodeId,
+      targetNodeId,
+      "infra",
+      campaign.first_seen,
+      campaign.last_seen,
+      {
+        event_hash: `campaign-${campaign.id}`,
+        source: "infra",
+        detail: `${campaign.type} references ${displayEntityLabel(label)}`,
+      },
+      "campaign_link",
+      `${campaign.name} is grouped around ${displayEntityLabel(label)}`,
+    );
+  }
+
+  const degree = new Map<string, number>();
+  for (const edge of edges.values()) {
+    degree.set(edge.source, (degree.get(edge.source) ?? 0) + 1);
+    degree.set(edge.target, (degree.get(edge.target) ?? 0) + 1);
   }
 
   const grouped = new Map<string, MutableGraphNode[]>();
@@ -565,23 +696,46 @@ const buildGraphFromSnapshot = (
     grouped.set(node.community, list);
   }
 
-  const columnX: Record<string, number> = {
-    target: 130,
-    infra: 360,
-    campaign: 590,
-    support: 640,
+  const nodeTypeOrder: Record<string, number> = {
+    Service: 0,
+    Endpoint: 1,
+    Cluster: 0,
+    Provider: 1,
+    IP: 2,
+    Campaign: 0,
+    Entity: 3,
+  };
+
+  for (const list of grouped.values()) {
+    list.sort((a, b) => {
+      const degreeDelta = (degree.get(b.id) ?? 0) - (degree.get(a.id) ?? 0);
+      if (degreeDelta !== 0) return degreeDelta;
+      const typeDelta = (nodeTypeOrder[a.type] ?? 99) - (nodeTypeOrder[b.type] ?? 99);
+      if (typeDelta !== 0) return typeDelta;
+      return a.label.localeCompare(b.label);
+    });
+  }
+
+  const columnXByType: Record<string, number> = {
+    Service: 94,
+    Endpoint: 174,
+    Cluster: 320,
+    Provider: 360,
+    IP: 408,
+    Campaign: 590,
+    Entity: 670,
   };
 
   const graphNodes = Array.from(nodes.values()).map((node) => {
     const group = grouped.get(node.community) ?? [node];
     const index = group.findIndex((item) => item.id === node.id);
-    const step = Math.max(42, Math.floor(320 / Math.max(1, group.length)));
-    const y = 70 + Math.min(index, 7) * step;
+    const step = Math.max(30, Math.floor(332 / Math.max(1, group.length)));
+    const y = 70 + Math.min(index, 9) * step;
     return {
       id: node.id,
       label: node.label,
       type: node.type,
-      x: columnX[node.community] ?? 680,
+      x: columnXByType[node.type] ?? 680,
       y,
       community: node.community,
     };
@@ -591,6 +745,8 @@ const buildGraphFromSnapshot = (
     id,
     source: edge.source,
     target: edge.target,
+    kind: edge.kind,
+    summary: edge.summary,
     evidence: edge.evidence,
     first_seen: edge.first_seen,
     last_seen: edge.last_seen,

@@ -38,16 +38,16 @@ const COMMUNITY_HEX: Record<string, string> = {
 };
 
 const COMMUNITY_LABEL: Record<string, string> = {
-  target:   "TARGET SERVICES",
-  infra:    "ATTACK INFRA",
-  campaign: "CAMPAIGNS",
+  target:   "TARGET SIDE",
+  infra:    "ATTACKER INFRASTRUCTURE",
+  campaign: "CAMPAIGN GROUPING",
   support:  "SUPPORT",
 };
 
 const COMMUNITY_DESC: Record<string, string> = {
-  target:   "Govt portals & financial services under attack",
-  infra:    "C2 servers, malicious IPs & botnet clusters",
-  campaign: "Coordinated threat operations (named actors)",
+  target:   "Services and exposed endpoints receiving hostile activity",
+  infra:    "Attacker IPs, clusters, and providers used in the activity",
+  campaign: "Operational groupings that tie multiple observations together",
   support:  "Enabler nodes — proxies, registrars, relays",
 };
 
@@ -70,6 +70,48 @@ const ZONE_X: Record<string, number> = {
 
 function shortLabel(label: string, max = 13): string {
   return label.length > max ? label.slice(0, max - 1) + "…" : label;
+}
+
+function readableNodeType(node: GraphNode): string {
+  switch (node.type.toLowerCase()) {
+    case "service":
+      return "target service";
+    case "endpoint":
+      return "target endpoint";
+    case "ip":
+      return "attacker IP";
+    case "cluster":
+      return "infra cluster";
+    case "provider":
+      return "provider";
+    case "campaign":
+      return "campaign group";
+    default:
+      return node.type.toLowerCase();
+  }
+}
+
+function describeEdge(edge: GraphEdge, nodeById: Map<string, GraphNode>): string {
+  const sourceLabel = nodeById.get(edge.source)?.label ?? edge.source;
+  const targetLabel = nodeById.get(edge.target)?.label ?? edge.target;
+  switch (edge.kind) {
+    case "attack_service":
+      return `${sourceLabel} was observed attacking service ${targetLabel}.`;
+    case "attack_endpoint":
+      return `${sourceLabel} was observed targeting endpoint ${targetLabel}.`;
+    case "service_endpoint":
+      return `${targetLabel} is an exposed endpoint on service ${sourceLabel}.`;
+    case "cluster_member":
+      return `${targetLabel} belongs to infra cluster ${sourceLabel}.`;
+    case "cluster_provider":
+      return `${sourceLabel} is associated with provider ${targetLabel}.`;
+    case "cluster_target":
+      return `${sourceLabel} contains members observed against ${targetLabel}.`;
+    case "campaign_link":
+      return `${sourceLabel} groups activity linked to ${targetLabel}.`;
+    default:
+      return `${sourceLabel} is linked to ${targetLabel}.`;
+  }
 }
 
 function fmtTs(ts: string): string {
@@ -104,15 +146,23 @@ type GraphExplorerProps = {
   onSelectNode: (node: GraphNode) => void;
   onSelectEdge: (edge: GraphEdge) => void;
   onInvestigateEntity?: (entityKey: string) => void;
+  campaignCount?: number;
 };
 
-export default function GraphExplorer({ graph, onSelectNode, onSelectEdge, onInvestigateEntity }: GraphExplorerProps) {
+export default function GraphExplorer({
+  graph,
+  onSelectNode,
+  onSelectEdge,
+  onInvestigateEntity,
+  campaignCount,
+}: GraphExplorerProps) {
   const [selectedEdge,      setSelectedEdge]      = useState<GraphEdge | null>(null);
   const [selectedNode,      setSelectedNode]      = useState<GraphNode | null>(null);
   const [pinned,            setPinned]            = useState<GraphNode[]>([]);
   const [showPath,          setShowPath]          = useState(false);
   const [nodePanel,         setNodePanel]         = useState(false);
   const [showGuide,         setShowGuide]         = useState(false);
+  const [focusQuery,        setFocusQuery]        = useState("");
   // Live graph data from Neo4j
   const [liveNeighbours,    setLiveNeighbours]    = useState<GraphNeighboursResponse | null>(null);
   const [neighboursLoading, setNeighboursLoading] = useState(false);
@@ -177,6 +227,24 @@ export default function GraphExplorer({ graph, onSelectNode, onSelectEdge, onInv
     setNeighboursLoading(false);
   }
 
+  function selectNode(node: GraphNode) {
+    setSelectedNode(node);
+    setNodePanel(true);
+    onSelectNode(node);
+    void loadLiveNeighbours(node);
+  }
+
+  function focusFirstMatch() {
+    const query = focusQuery.trim().toLowerCase();
+    if (!query) return;
+    const match = graph.nodes.find(
+      (node) =>
+        node.label.toLowerCase().includes(query) ||
+        node.id.toLowerCase().includes(query),
+    );
+    if (match) selectNode(match);
+  }
+
   // ── Path finder ─────────────────────────────────────────────────────────
   async function runPathFinder() {
     if (!pathFromKey.trim() || !pathToKey.trim()) return;
@@ -232,11 +300,61 @@ export default function GraphExplorer({ graph, onSelectNode, onSelectEdge, onInv
 
   const isLive = streamStatus === "live";
 
-  const counts = useMemo(() => ({
-    target:   graph.nodes.filter(n => n.community === "target").length,
-    infra:    graph.nodes.filter(n => n.community === "infra").length,
-    campaign: graph.nodes.filter(n => n.community === "campaign").length,
-  }), [graph.nodes]);
+  const counts = useMemo(() => {
+    const services = graph.nodes.filter((n) => n.type === "Service");
+    const endpoints = graph.nodes.filter((n) => n.type === "Endpoint");
+    const ips = graph.nodes.filter((n) => n.type === "IP");
+    const clusters = graph.nodes.filter((n) => n.type === "Cluster");
+    const providers = graph.nodes.filter((n) => n.type === "Provider");
+    const campaignsVisible = graph.nodes.filter((n) => n.community === "campaign");
+    return {
+      target: services.length + endpoints.length,
+      services: services.length,
+      endpoints: endpoints.length,
+      infra: ips.length + clusters.length + providers.length,
+      ips: ips.length,
+      clusters: clusters.length,
+      providers: providers.length,
+      campaign: campaignsVisible.length,
+      campaignTotal: campaignCount ?? campaignsVisible.length,
+    };
+  }, [campaignCount, graph.nodes]);
+
+  const topTargets = useMemo(
+    () =>
+      graph.nodes
+        .filter((node) => node.type === "Service" || node.type === "Endpoint")
+        .sort((a, b) => (nodeDegree.get(b.id) ?? 0) - (nodeDegree.get(a.id) ?? 0))
+        .slice(0, 3),
+    [graph.nodes, nodeDegree],
+  );
+
+  const topInfra = useMemo(
+    () =>
+      graph.nodes
+        .filter((node) => node.community === "infra")
+        .sort((a, b) => (nodeDegree.get(b.id) ?? 0) - (nodeDegree.get(a.id) ?? 0))
+        .slice(0, 4),
+    [graph.nodes, nodeDegree],
+  );
+
+  const topCampaigns = useMemo(
+    () =>
+      graph.nodes
+        .filter((node) => node.community === "campaign")
+        .slice(0, 3),
+    [graph.nodes],
+  );
+
+  const selectedNeighborhood = useMemo(() => {
+    if (!selectedNode) return null;
+    const connected = new Set<string>([selectedNode.id]);
+    for (const edge of graph.edges) {
+      if (edge.source === selectedNode.id) connected.add(edge.target);
+      if (edge.target === selectedNode.id) connected.add(edge.source);
+    }
+    return connected;
+  }, [graph.edges, selectedNode]);
 
   // ── Empty state ──────────────────────────────────────────────────────────
   if (graph.nodes.length === 0) {
@@ -271,7 +389,7 @@ export default function GraphExplorer({ graph, onSelectNode, onSelectEdge, onInv
           <p className="eyebrow">S3</p>
           <h2>Threat Graph Explorer</h2>
           <p className="subtle">
-            Services, attack infrastructure, and campaigns linked by evidence.
+            Read left to right: who is under attack, which infrastructure is being used, and which campaign groupings are active.
           </p>
         </div>
         <div className="chip-row">
@@ -293,6 +411,49 @@ export default function GraphExplorer({ graph, onSelectNode, onSelectEdge, onInv
         </div>
       </div>
 
+      <div className="panel" style={{
+        display: "grid",
+        gridTemplateColumns: "1.15fr 1fr 1fr",
+        gap: 16,
+        alignItems: "start",
+      }}>
+        <div>
+          <p className="label" style={{ marginBottom: 4 }}>Operational reading</p>
+          <p style={{ fontWeight: 700, marginBottom: 6 }}>
+            Who is attacking whom, through what infrastructure, and under which campaign grouping?
+          </p>
+          <p className="muted" style={{ fontSize: "0.8rem", lineHeight: 1.55 }}>
+            This overview uses the recent activity snapshot to show target-side nodes on the left, attacker infrastructure in the middle,
+            and campaign grouping on the right. Click a node to focus the graph. Use <strong>Find path</strong> for live Neo4j path lookup.
+          </p>
+        </div>
+        <div>
+          <p className="label" style={{ marginBottom: 4 }}>Focus entity</p>
+          <div style={{ display: "flex", gap: 8 }}>
+            <input
+              className="input"
+              placeholder="Try safaricom, kplc, /login, 203.0.113.8"
+              value={focusQuery}
+              onChange={(event) => setFocusQuery(event.target.value)}
+              onKeyDown={(event) => { if (event.key === "Enter") focusFirstMatch(); }}
+            />
+            <button className="ghost" type="button" onClick={focusFirstMatch}>
+              Focus
+            </button>
+          </div>
+          <p className="muted" style={{ fontSize: "0.75rem", marginTop: 6 }}>
+            Selecting a node dims unrelated nodes so the attack story is easier to follow.
+          </p>
+        </div>
+        <div>
+          <p className="label" style={{ marginBottom: 4 }}>What this screen is best for</p>
+          <p className="muted" style={{ fontSize: "0.8rem", lineHeight: 1.55 }}>
+            Rapid operator understanding: victim, attacker infrastructure, and grouping. For legal-grade detail, move to Investigate,
+            Evidence, or Find path.
+          </p>
+        </div>
+      </div>
+
       {/* ── Explainer guide (collapsible) ──────────────────────────────────── */}
       {showGuide && (
         <div className="panel" style={{
@@ -307,10 +468,10 @@ export default function GraphExplorer({ graph, onSelectNode, onSelectEdge, onInv
             gap: 16,
           }}>
             {[
-              { icon: "🟢", title: "Target services", body: "Services under attack or pressure." },
-              { icon: "🔵", title: "Attack infrastructure", body: "IPs, clusters, and providers linked to the activity." },
-              { icon: "🟡", title: "Campaigns", body: "Coordinated operations that connect multiple entities." },
-              { icon: "↔", title: "Edges and live pulse", body: "Lines are observed relationships. A glowing ring means a fresh event touched that node." },
+              { icon: "🟢", title: "Target side", body: "Victim services and exposed endpoints receiving hostile traffic or pressure." },
+              { icon: "🔵", title: "Attacker infrastructure", body: "Attacker IPs, infrastructure clusters, and providers used in the activity." },
+              { icon: "🟡", title: "Campaign grouping", body: "Higher-level operational groupings. These help answer whether separate observations belong to one broader operation." },
+              { icon: "↔", title: "Snapshot vs live graph", body: "The canvas is a recent snapshot. Find path and live node connections come from the live Neo4j graph." },
             ].map(item => (
               <div key={item.title}>
                 <p style={{ fontWeight: 600, marginBottom: 3, fontSize: "0.85rem" }}>
@@ -322,6 +483,72 @@ export default function GraphExplorer({ graph, onSelectNode, onSelectEdge, onInv
           </div>
         </div>
       )}
+
+      <div style={{
+        display: "grid",
+        gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+        gap: "0.5rem",
+      }}>
+        <div className="panel" style={{ padding: "12px 14px" }}>
+          <p className="label" style={{ marginBottom: 6 }}>Who is under attack</p>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            {topTargets.map((node) => (
+              <button
+                key={node.id}
+                type="button"
+                className="chip"
+                onClick={() => selectNode(node)}
+                style={{ cursor: "pointer" }}
+                title={`${readableNodeType(node)} · ${nodeDegree.get(node.id) ?? 0} connections`}
+              >
+                {shortLabel(node.label, 22)}
+              </button>
+            ))}
+          </div>
+          <p className="muted" style={{ fontSize: "0.75rem", marginTop: 6 }}>
+            {counts.services} services and {counts.endpoints} exposed endpoints are visible in this snapshot.
+          </p>
+        </div>
+        <div className="panel" style={{ padding: "12px 14px" }}>
+          <p className="label" style={{ marginBottom: 6 }}>Through what infrastructure</p>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            {topInfra.map((node) => (
+              <button
+                key={node.id}
+                type="button"
+                className="chip"
+                onClick={() => selectNode(node)}
+                style={{ cursor: "pointer" }}
+                title={`${readableNodeType(node)} · ${nodeDegree.get(node.id) ?? 0} connections`}
+              >
+                {shortLabel(node.label, 22)}
+              </button>
+            ))}
+          </div>
+          <p className="muted" style={{ fontSize: "0.75rem", marginTop: 6 }}>
+            {counts.ips} attacker IPs, {counts.clusters} clusters, and {counts.providers} providers are visible.
+          </p>
+        </div>
+        <div className="panel" style={{ padding: "12px 14px" }}>
+          <p className="label" style={{ marginBottom: 6 }}>Under which campaign grouping</p>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            {topCampaigns.map((node) => (
+              <button
+                key={node.id}
+                type="button"
+                className="chip"
+                onClick={() => selectNode(node)}
+                style={{ cursor: "pointer" }}
+              >
+                {shortLabel(node.label, 24)}
+              </button>
+            ))}
+          </div>
+          <p className="muted" style={{ fontSize: "0.75rem", marginTop: 6 }}>
+            {counts.campaign} groupings are visible on the canvas and {counts.campaignTotal} are active in the wider snapshot.
+          </p>
+        </div>
+      </div>
 
       {/* ── Path finder panel ──────────────────────────────────────────────── */}
       {showPath && (
@@ -337,7 +564,7 @@ export default function GraphExplorer({ graph, onSelectNode, onSelectEdge, onInv
               <p className="label" style={{ marginBottom: 4 }}>From entity key</p>
               <input
                 className="input"
-                placeholder="e.g. ip:1.2.3.4 or service_id:kplc-auth"
+                placeholder="e.g. service_id:safaricom or ip:203.0.113.8"
                 value={pathFromKey}
                 onChange={e => setPathFromKey(e.target.value)}
                 onKeyDown={e => { if (e.key === "Enter") void runPathFinder(); }}
@@ -347,7 +574,7 @@ export default function GraphExplorer({ graph, onSelectNode, onSelectEdge, onInv
               <p className="label" style={{ marginBottom: 4 }}>To entity key</p>
               <input
                 className="input"
-                placeholder="e.g. endpoint:/login or ip:154.72.10.5"
+                placeholder="e.g. endpoint:safaricom:/login or service_id:kplc"
                 value={pathToKey}
                 onChange={e => setPathToKey(e.target.value)}
                 onKeyDown={e => { if (e.key === "Enter") void runPathFinder(); }}
@@ -397,9 +624,9 @@ export default function GraphExplorer({ graph, onSelectNode, onSelectEdge, onInv
         gap: "0.5rem",
       }}>
         {[
-          { label: "Target Services",      value: counts.target,       sub: "under attack",        color: "#2fd67d" },
-          { label: "Attack Infrastructure", value: counts.infra,        sub: "C2 / botnet nodes",   color: "#bbf7d2" },
-          { label: "Campaigns",             value: counts.campaign,     sub: "threat operations",   color: "#f0bf4c" },
+          { label: "Target Side",           value: counts.target,       sub: `${counts.services} services · ${counts.endpoints} endpoints`, color: "#2fd67d" },
+          { label: "Attacker Infrastructure", value: counts.infra,      sub: `${counts.ips} IPs · ${counts.clusters} clusters`, color: "#bbf7d2" },
+          { label: "Campaign Groupings",    value: counts.campaignTotal, sub: `${counts.campaign} shown on canvas`, color: "#f0bf4c" },
           { label: "Relationships",         value: graph.edges.length,  sub: "evidence-backed links", color: "var(--success)" },
         ].map(stat => (
           <div key={stat.label} className="panel" style={{ padding: "10px 14px" }}>
@@ -469,6 +696,19 @@ export default function GraphExplorer({ graph, onSelectNode, onSelectEdge, onInv
             );
           })}
 
+          <text x={94} y={34} textAnchor="middle" fontSize={8} fill="rgba(47,214,125,0.65)">
+            services
+          </text>
+          <text x={174} y={34} textAnchor="middle" fontSize={8} fill="rgba(47,214,125,0.65)">
+            endpoints
+          </text>
+          <text x={320} y={34} textAnchor="middle" fontSize={8} fill="rgba(187,247,210,0.65)">
+            clusters
+          </text>
+          <text x={408} y={34} textAnchor="middle" fontSize={8} fill="rgba(187,247,210,0.65)">
+            attacker IPs
+          </text>
+
           {/* ── Edges ─────────────────────────────────────────────────────── */}
           {graph.edges.map((edge) => {
             const src = nodeById.get(edge.source);
@@ -477,6 +717,11 @@ export default function GraphExplorer({ graph, onSelectNode, onSelectEdge, onInv
 
             const isHot      = showPath && pathEdges.has(edgePairKey(edge.source, edge.target));
             const isSelected = selectedEdge?.id === edge.id;
+            const isRelevant = !selectedNeighborhood
+              || selectedNeighborhood.has(edge.source)
+              || selectedNeighborhood.has(edge.target)
+              || isSelected
+              || isHot;
             const weight     = Math.min(5, 1 + Math.log2(edge.count + 1));
             const mx         = (src.x + tgt.x) / 2;
             const my         = (src.y + tgt.y) / 2;
@@ -486,10 +731,10 @@ export default function GraphExplorer({ graph, onSelectNode, onSelectEdge, onInv
             const markerEnd  = isSelected ? "url(#gr-arrow-sel)" : isHot ? "url(#gr-arrow-hot)" : "url(#gr-arrow)";
 
             return (
-              <g key={edge.id} style={{ cursor: "pointer" }}
+              <g key={edge.id} style={{ cursor: "pointer", opacity: isRelevant ? 1 : 0.14 }}
                 onClick={() => { setSelectedEdge(edge); onSelectEdge(edge); }}
               >
-                <title>{`${nodeById.get(edge.source)?.label ?? edge.source} → ${nodeById.get(edge.target)?.label ?? edge.target}\n${edge.count} event${edge.count !== 1 ? "s" : ""} · sources: ${edge.sources.join(", ")}`}</title>
+                <title>{`${describeEdge(edge, nodeById)}\n${edge.count} event${edge.count !== 1 ? "s" : ""} · sources: ${edge.sources.join(", ")}`}</title>
                 <line
                   x1={src.x} y1={src.y}
                   x2={tgt.x} y2={tgt.y}
@@ -526,6 +771,7 @@ export default function GraphExplorer({ graph, onSelectNode, onSelectEdge, onInv
             const hex         = COMMUNITY_HEX[node.community]   ?? "#abc7b6";
             const isLiveNode  = liveServiceIds.has(node.id);
             const isSelected  = selectedNode?.id === node.id;
+            const isRelevant  = !selectedNeighborhood || selectedNeighborhood.has(node.id);
             const degree      = nodeDegree.get(node.id) ?? 0;
             const r           = Math.min(23, 14 + degree * 1.4);
             const icon        = NODE_ICON[node.type] ?? "◆";
@@ -534,15 +780,10 @@ export default function GraphExplorer({ graph, onSelectNode, onSelectEdge, onInv
               <g
                 key={node.id}
                 className={`graph-node${isLiveNode ? " graph-node-live" : ""}`}
-                style={{ filter: isLiveNode ? "url(#gr-glow)" : undefined }}
-                onClick={() => {
-                  setSelectedNode(node);
-                  setNodePanel(true);
-                  onSelectNode(node);
-                  void loadLiveNeighbours(node);
-                }}
+                style={{ filter: isLiveNode ? "url(#gr-glow)" : undefined, opacity: isRelevant ? 1 : 0.24 }}
+                onClick={() => selectNode(node)}
               >
-                <title>{`${node.label}\nRole: ${COMMUNITY_DESC[node.community] ?? node.community}\nType: ${node.type}\nConnections: ${degree}${isLiveNode ? "\n⚡ LIVE — threat event in last 12s" : ""}`}</title>
+                <title>{`${node.label}\nRole: ${COMMUNITY_DESC[node.community] ?? node.community}\nType: ${readableNodeType(node)}\nConnections: ${degree}${isLiveNode ? "\n⚡ LIVE — threat event in last 12s" : ""}`}</title>
 
                 {/* White selection ring */}
                 {isSelected && (
@@ -611,9 +852,9 @@ export default function GraphExplorer({ graph, onSelectNode, onSelectEdge, onInv
             Node types:
           </span>
           {[
-            { cls: "dot-target",   label: "Target service",   title: "Attacked system" },
-            { cls: "dot-infra",    label: "Attack infra",     title: "C2 / botnet node" },
-            { cls: "dot-campaign", label: "Campaign",         title: "Threat operation" },
+            { cls: "dot-target",   label: "Target side",      title: "Victim service or exposed endpoint" },
+            { cls: "dot-infra",    label: "Attacker infra",   title: "Attacker IP, cluster, or provider" },
+            { cls: "dot-campaign", label: "Campaign group",   title: "Operation grouping" },
             { cls: "dot-live",     label: "⚡ Live activity", title: "Event in last 12s" },
           ].map(l => (
             <span key={l.cls} className="legend-item" title={l.title}>
@@ -650,14 +891,10 @@ export default function GraphExplorer({ graph, onSelectNode, onSelectEdge, onInv
               }}>
                 <p className="label" style={{ marginBottom: 4 }}>Relationship</p>
                 <p style={{ fontWeight: 700, fontSize: "0.88rem" }}>
-                  {nodeById.get(selectedEdge.source)?.label ?? selectedEdge.source}
-                  <span style={{ color: "var(--ink-muted)", margin: "0 8px", fontSize: "1rem" }}>→</span>
-                  {nodeById.get(selectedEdge.target)?.label ?? selectedEdge.target}
+                  {describeEdge(selectedEdge, nodeById)}
                 </p>
                 <p className="muted" style={{ fontSize: "0.76rem", marginTop: 3 }}>
-                  {COMMUNITY_DESC[nodeById.get(selectedEdge.source)?.community ?? ""] ?? ""}
-                  {" connects to "}
-                  {COMMUNITY_DESC[nodeById.get(selectedEdge.target)?.community ?? ""] ?? ""}
+                  {selectedEdge.summary ?? "This line is an observed relationship in the current attack snapshot."}
                 </p>
               </div>
 
@@ -749,6 +986,8 @@ export default function GraphExplorer({ graph, onSelectNode, onSelectEdge, onInv
                   </p>
                   <p className="muted" style={{ fontSize: "0.76rem", lineHeight: 1.4 }}>
                     {COMMUNITY_DESC[selectedNode.community] ?? selectedNode.community}
+                    {" · "}
+                    {readableNodeType(selectedNode)}
                   </p>
                 </div>
                 {liveServiceIds.has(selectedNode.id) && (
@@ -761,11 +1000,11 @@ export default function GraphExplorer({ graph, onSelectNode, onSelectEdge, onInv
               <div className="detail-grid" style={{ marginBottom: 12 }}>
                 <div>
                   <p className="label">Role</p>
-                  <p>{selectedNode.community}</p>
+                  <p>{COMMUNITY_LABEL[selectedNode.community] ?? selectedNode.community}</p>
                 </div>
                 <div>
                   <p className="label">Node type</p>
-                  <p>{selectedNode.type}</p>
+                  <p>{readableNodeType(selectedNode)}</p>
                 </div>
                 <div>
                   <p className="label">Connections</p>
@@ -911,7 +1150,7 @@ export default function GraphExplorer({ graph, onSelectNode, onSelectEdge, onInv
                           cursor: "pointer",
                         }}
                         title={COMMUNITY_DESC[node.community]}
-                        onClick={() => { setSelectedNode(node); onSelectNode(node); }}
+                        onClick={() => selectNode(node)}
                       >
                         {node.label}
                       </span>
@@ -937,7 +1176,7 @@ export default function GraphExplorer({ graph, onSelectNode, onSelectEdge, onInv
         open={nodePanel && !!selectedNode}
         title={selectedNode?.label ?? "Node"}
         subtitle={selectedNode
-          ? `${COMMUNITY_LABEL[selectedNode.community] ?? selectedNode.community} · ${selectedNode.type}`
+          ? `${COMMUNITY_LABEL[selectedNode.community] ?? selectedNode.community} · ${readableNodeType(selectedNode)}`
           : undefined}
         onClose={() => setNodePanel(false)}
       >
@@ -950,7 +1189,7 @@ export default function GraphExplorer({ graph, onSelectNode, onSelectEdge, onInv
               </div>
               <div>
                 <p className="label">Node type</p>
-                <p>{selectedNode.type}</p>
+                <p>{readableNodeType(selectedNode)}</p>
               </div>
               <div>
                 <p className="label">Connections</p>

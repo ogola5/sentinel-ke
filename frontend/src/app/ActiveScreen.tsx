@@ -190,11 +190,17 @@ export default function ActiveScreen({
         <GraphExplorer
           graph={graphData}
           onSelectNode={(node: GraphNode) => {
-            const entity = entitiesData.find((item) => item.label.toLowerCase().includes(node.label.toLowerCase()));
+            const entity = entitiesData.find(
+              (item) =>
+                item.id === node.id
+                || item.label.toLowerCase() === node.label.toLowerCase()
+                || node.id.toLowerCase().endsWith(`:${item.label.toLowerCase()}`),
+            );
             if (entity) onSelectEntity(entity);
           }}
           onSelectEdge={(edge: GraphEdge) => onOpenEvidence(`Edge: ${edge.source} → ${edge.target}`, edge.evidence)}
           onInvestigateEntity={onInvestigateEntity}
+          campaignCount={campaignsData.length}
         />
       )}
       {activeScreen === "gnn" && (
