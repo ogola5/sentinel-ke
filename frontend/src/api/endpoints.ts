@@ -38,6 +38,12 @@ export const endpoints = {
   eventsTimeline: (startIso: string, endIso: string, interval = "5m") =>
     withQuery("/v1/events/timeline", { start: startIso, end: endIso, interval }),
   campaigns: (limit = 20, offset = 0) => withQuery("/v1/campaigns", { limit, offset }),
+  campaignById: (campaignId: string) =>
+    withBase(`/v1/campaigns/${encodeURIComponent(campaignId)}`),
+  campaignEvents: (campaignId: string, limit = 50, offset = 0) =>
+    withQuery(`/v1/campaigns/${encodeURIComponent(campaignId)}/events`, { limit, offset }),
+  campaignRisk: (campaignId: string, limit = 50, offset = 0) =>
+    withQuery(`/v1/campaigns/${encodeURIComponent(campaignId)}/risk`, { limit, offset }),
   campaignEvidence: (campaignId: string, limit = 200) =>
     withQuery(`/v1/campaigns/${encodeURIComponent(campaignId)}/evidence`, { limit }),
   ddosAlerts: (limit = 20, offset = 0) => withQuery("/v1/ddos/alerts", { limit, offset }),
