@@ -167,7 +167,7 @@ class ContainmentAction(Base):
     run_id = Column(UUID(as_uuid=True), ForeignKey("incident_playbook_run.id", ondelete="CASCADE"), nullable=False)
 
     section_code = Column(String, nullable=True)
-    action_type = Column(String, nullable=False)  # isolate_host|block_ip|rollback_block_ip|revoke_user|disable_source_key|force_password_reset
+    action_type = Column(String, nullable=False)  # isolate_host|block_ip|rollback_block_ip|revoke_user|disable_source_key|force_password_reset|freeze_account|hold_cashout|suspend_sim_change
     target = Column(String, nullable=False)
     status = Column(String, nullable=False, default="queued")  # queued|executed|no_integration|failed
 

@@ -137,12 +137,26 @@ def test_build_urlhaus_records_extracts_url_and_host():
 
 
 def test_load_threatfox_rows_accepts_json_list_from_api():
-    def _fake_get(url, params=None, timeout=30):
-        del url, params, timeout
+    def _fake_get(url, params=None, timeout=30, headers=None):
+        del url, params, timeout, headers
         return _FakeResponse({"data": [{"ioc": "203.0.113.5", "ioc_type": "ip"}]})
 
     rows = load_threatfox_rows(getter=_fake_get)
     assert rows[0]["ioc"] == "203.0.113.5"
+
+
+def test_load_threatfox_rows_sends_auth_key_header(monkeypatch):
+    captured = {}
+
+    def _fake_get(url, params=None, timeout=30, headers=None):
+        del url, params, timeout
+        captured["headers"] = headers
+        return _FakeResponse({"data": [{"ioc": "203.0.113.5", "ioc_type": "ip"}]})
+
+    monkeypatch.setenv("ABUSECH_AUTH_KEY", "secret-auth")
+    rows = load_threatfox_rows(getter=_fake_get)
+    assert rows[0]["ioc"] == "203.0.113.5"
+    assert captured["headers"] == {"Auth-Key": "secret-auth"}
 
 
 def test_build_threatfox_records_maps_required_connector_fields():
@@ -165,12 +179,26 @@ def test_build_threatfox_records_maps_required_connector_fields():
 
 
 def test_load_malwarebazaar_rows_accepts_json_list_from_api():
-    def _fake_post(url, data=None, timeout=30):
-        del url, data, timeout
+    def _fake_post(url, data=None, timeout=30, headers=None):
+        del url, data, timeout, headers
         return _FakeResponse({"data": [{"sha256_hash": "ab" * 32}]})
 
     rows = load_malwarebazaar_rows(getter=_fake_post)
     assert rows[0]["sha256_hash"] == "ab" * 32
+
+
+def test_load_malwarebazaar_rows_sends_auth_key_header(monkeypatch):
+    captured = {}
+
+    def _fake_post(url, data=None, timeout=30, headers=None):
+        del url, data, timeout
+        captured["headers"] = headers
+        return _FakeResponse({"data": [{"sha256_hash": "ab" * 32}]})
+
+    monkeypatch.setenv("ABUSECH_AUTH_KEY", "secret-auth")
+    rows = load_malwarebazaar_rows(getter=_fake_post)
+    assert rows[0]["sha256_hash"] == "ab" * 32
+    assert captured["headers"] == {"Auth-Key": "secret-auth"}
 
 
 def test_build_malwarebazaar_records_maps_required_connector_fields():

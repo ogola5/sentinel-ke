@@ -42,6 +42,9 @@ rate_limit_service   → ask the partner edge/WAF to throttle abusive traffic wh
 enable_waf_challenge → ask the partner WAF/CDN to challenge suspicious traffic while keeping service up
 reroute_to_scrubber  → ask the partner or provider to move traffic into DDoS scrubbing
 quarantine_email     → ask the partner mail stack to quarantine a malicious sender or mailbox
+freeze_account       → ask the partner bank or wallet platform to place a hold on an account
+hold_cashout         → ask the partner bank or mobile-money platform to stop suspicious cash-out
+suspend_sim_change   → ask the partner telco to pause further SIM-swap or number-port actions
 """
 from __future__ import annotations
 

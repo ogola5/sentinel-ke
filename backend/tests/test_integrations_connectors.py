@@ -485,6 +485,31 @@ def test_map_vpn_gateway_session_to_login_event():
     assert ev.payload["provider"] == "OpenVPN"
 
 
+def test_map_telco_sim_swap_adds_richer_fraud_anchors():
+    ev = map_external_event(
+        connector_key="telco_sim_swap_v1",
+        payload={
+            "timestamp": "2026-03-09T12:09:00Z",
+            "phone": "+254700123456",
+            "person_id": "citizen-001",
+            "account_id": "MM-12345",
+            "device_id": "imei-001",
+            "provider": "Safaricom",
+            "reason": "subscriber_request",
+        },
+        confidence=0.9,
+    )
+
+    assert ev.event_type == "SIM_SWAP_EVENT"
+    assert ev.anchors["phone_h"]
+    assert ev.anchors["person_h"]
+    assert ev.anchors["account_h"]
+    assert ev.anchors["device_id"] == "imei-001"
+    assert ev.anchors["provider_id"] == "Safaricom"
+    assert ev.payload["provider_id"] == "Safaricom"
+    assert ev.payload["device_id"] == "imei-001"
+
+
 def test_map_otx_indicator_to_dfir_finding_event():
     ev = map_external_event(
         connector_key="otx_indicator_v1",

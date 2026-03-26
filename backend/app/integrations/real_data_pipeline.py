@@ -405,7 +405,12 @@ def load_urlhaus_rows(
                 return [row for row in rows if isinstance(row, dict)]
         raise ValueError("URLhaus file payload missing row list")
 
-    key = (auth_key or os.environ.get("URLHAUS_AUTH_KEY") or "").strip()
+        key = (
+            auth_key
+            or os.environ.get("URLHAUS_AUTH_KEY")
+            or os.environ.get("ABUSECH_AUTH_KEY")
+            or ""
+        ).strip()
     if not key:
         raise ValueError("URLhaus auth key required for live URLhaus downloads")
     text = _http_get_text(
@@ -458,6 +463,7 @@ def load_threatfox_rows(
     *,
     threatfox_file: Optional[str] = None,
     threatfox_url: str = DEFAULT_THREATFOX_URL,
+    auth_key: Optional[str] = None,
     timeout_sec: int = 30,
     getter: Callable[..., Any] = requests.get,
 ) -> List[Dict[str, Any]]:
@@ -467,7 +473,15 @@ def load_threatfox_rows(
             return list(iter_rows_from_path(str(path)))
         payload = json.loads(path.read_text(encoding="utf-8"))
     else:
-        payload = _http_get_any_json(threatfox_url, timeout_sec=timeout_sec, getter=getter)
+        key = (
+            auth_key
+            or os.environ.get("THREATFOX_AUTH_KEY")
+            or os.environ.get("ABUSECH_AUTH_KEY")
+            or os.environ.get("URLHAUS_AUTH_KEY")
+            or ""
+        ).strip()
+        headers = {"Auth-Key": key} if key else None
+        payload = _http_get_any_json(threatfox_url, timeout_sec=timeout_sec, getter=getter, headers=headers)
 
     if isinstance(payload, list):
         return [row for row in payload if isinstance(row, dict)]
@@ -514,6 +528,7 @@ def load_malwarebazaar_rows(
     *,
     malwarebazaar_file: Optional[str] = None,
     malwarebazaar_url: str = DEFAULT_MALWAREBAZAAR_URL,
+    auth_key: Optional[str] = None,
     timeout_sec: int = 30,
     getter: Callable[..., Any] = requests.post,
 ) -> List[Dict[str, Any]]:
@@ -523,11 +538,20 @@ def load_malwarebazaar_rows(
             return list(iter_rows_from_path(str(path)))
         payload = json.loads(path.read_text(encoding="utf-8"))
     else:
+        key = (
+            auth_key
+            or os.environ.get("MALWAREBAZAAR_AUTH_KEY")
+            or os.environ.get("ABUSECH_AUTH_KEY")
+            or os.environ.get("URLHAUS_AUTH_KEY")
+            or ""
+        ).strip()
+        headers = {"Auth-Key": key} if key else None
         payload = _http_post_any_json(
             malwarebazaar_url,
             timeout_sec=timeout_sec,
             data={"query": "get_recent"},
             getter=getter,
+            headers=headers,
         )
 
     if isinstance(payload, list):
@@ -1338,6 +1362,7 @@ def _run_threatfox_job(args: argparse.Namespace) -> IngestionJobStats:
     rows = load_threatfox_rows(
         threatfox_file=args.threatfox_file,
         threatfox_url=args.threatfox_url,
+        auth_key=args.auth_key,
         timeout_sec=args.timeout_sec,
     )
     records = build_threatfox_records(rows, confidence=args.confidence)
@@ -1361,6 +1386,7 @@ def _run_malwarebazaar_job(args: argparse.Namespace) -> IngestionJobStats:
     rows = load_malwarebazaar_rows(
         malwarebazaar_file=args.malwarebazaar_file,
         malwarebazaar_url=args.malwarebazaar_url,
+        auth_key=args.auth_key,
         timeout_sec=args.timeout_sec,
     )
     records = build_malwarebazaar_records(rows, confidence=args.confidence)
@@ -1498,7 +1524,7 @@ def build_cli() -> argparse.ArgumentParser:
     p_urlhaus = sub.add_parser("urlhaus", help="Import URLhaus malware URLs into DFIR events.")
     p_urlhaus.add_argument("--urlhaus-file", default=None, help="Local URLhaus CSV/JSON file. If omitted, the online CSV feed is used.")
     p_urlhaus.add_argument("--urlhaus-url", default=DEFAULT_URLHAUS_CSV_URL, help="URLhaus CSV feed URL.")
-    p_urlhaus.add_argument("--auth-key", default=None, help="URLhaus auth-key. Falls back to URLHAUS_AUTH_KEY env var.")
+    p_urlhaus.add_argument("--auth-key", default=None, help="URLhaus auth-key. Falls back to URLHAUS_AUTH_KEY or ABUSECH_AUTH_KEY.")
     p_urlhaus.add_argument("--max-records", type=int, default=400, help="Maximum URLhaus DFIR events to emit per run.")
     p_urlhaus.add_argument("--sleep-every", type=int, default=400, help="Pause after this many URLhaus DFIR events.")
     p_urlhaus.add_argument("--sleep-sec", type=float, default=65.0, help="Pause duration used to avoid per-source ingest rate limits.")
@@ -1507,6 +1533,7 @@ def build_cli() -> argparse.ArgumentParser:
     p_threatfox = sub.add_parser("threatfox", help="Import ThreatFox malware IOCs into DFIR events.")
     p_threatfox.add_argument("--threatfox-file", default=None, help="Local ThreatFox JSON/CSV export.")
     p_threatfox.add_argument("--threatfox-url", default=DEFAULT_THREATFOX_URL, help="ThreatFox export URL.")
+    p_threatfox.add_argument("--auth-key", default=None, help="abuse.ch Auth-Key. Falls back to THREATFOX_AUTH_KEY, ABUSECH_AUTH_KEY, or URLHAUS_AUTH_KEY.")
     p_threatfox.add_argument("--max-records", type=int, default=400, help="Maximum ThreatFox DFIR events to emit per run.")
     p_threatfox.add_argument("--sleep-every", type=int, default=400, help="Pause after this many ThreatFox DFIR events.")
     p_threatfox.add_argument("--sleep-sec", type=float, default=65.0, help="Pause duration used to avoid per-source ingest rate limits.")
@@ -1515,6 +1542,7 @@ def build_cli() -> argparse.ArgumentParser:
     p_mbz = sub.add_parser("malwarebazaar", help="Import MalwareBazaar sample metadata into DFIR events.")
     p_mbz.add_argument("--malwarebazaar-file", default=None, help="Local MalwareBazaar JSON/CSV export.")
     p_mbz.add_argument("--malwarebazaar-url", default=DEFAULT_MALWAREBAZAAR_URL, help="MalwareBazaar API endpoint.")
+    p_mbz.add_argument("--auth-key", default=None, help="abuse.ch Auth-Key. Falls back to MALWAREBAZAAR_AUTH_KEY, ABUSECH_AUTH_KEY, or URLHAUS_AUTH_KEY.")
     p_mbz.add_argument("--max-records", type=int, default=400, help="Maximum MalwareBazaar DFIR events to emit per run.")
     p_mbz.add_argument("--sleep-every", type=int, default=400, help="Pause after this many MalwareBazaar DFIR events.")
     p_mbz.add_argument("--sleep-sec", type=float, default=65.0, help="Pause duration used to avoid per-source ingest rate limits.")

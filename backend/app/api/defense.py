@@ -374,7 +374,7 @@ class WebhookRegisterRequest(BaseModel):
     section_code: str = Field(..., description="Organisation this webhook belongs to")
     action_type:  str = Field(
         ...,
-        description="block_ip | unblock_ip | isolate_host | rate_limit_service | enable_waf_challenge | reroute_to_scrubber | quarantine_email",
+        description="block_ip | unblock_ip | isolate_host | rate_limit_service | enable_waf_challenge | reroute_to_scrubber | quarantine_email | freeze_account | hold_cashout | suspend_sim_change",
     )
     webhook_url:  str = Field(..., description="Partner HTTPS endpoint")
     secret:       str = Field(..., min_length=16,

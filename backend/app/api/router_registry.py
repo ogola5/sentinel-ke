@@ -80,7 +80,10 @@ def build_router_mounts(*, ai_enabled: bool) -> list[RouterMount]:
         RouterMount(auth_router, ()),
         RouterMount(crypto_posture_router, ()),  # public — no auth on /posture; self-test requires section access
         RouterMount(stream_router, ()),           # SSE stream — auth handled internally via ?token= param
-        RouterMount(ingest_router, (Depends(require_api_key),)),
+        # Ingestion authenticates against source_registry via the route/service
+        # itself using source API keys, so it must not be gated by the generic
+        # frontend API key dependency here.
+        RouterMount(ingest_router, ()),
         RouterMount(events_router, (Depends(require_section_access), Depends(require_scope("events.read")))),
         RouterMount(graph_router, (Depends(require_central_access), Depends(require_scope("graph.read")))),
         RouterMount(campaigns_router, (Depends(require_section_access), Depends(require_scope("campaigns.read")))),

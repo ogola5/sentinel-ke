@@ -81,7 +81,10 @@ function suggestedActionForEntity(entityKey: string | null): string {
   }
   if (entityKey.startsWith("ip:")) return "block_ip";
   if (entityKey.startsWith("device_id:") || entityKey.startsWith("host:")) return "isolate_host";
-  if (entityKey.startsWith("account:") || entityKey.startsWith("account_h:") || entityKey.startsWith("user:")) return "revoke_user";
+  if (entityKey.startsWith("phone_h:")) return "suspend_sim_change";
+  if (entityKey.startsWith("agent_id:")) return "hold_cashout";
+  if (entityKey.startsWith("account:") || entityKey.startsWith("account_h:")) return "freeze_account";
+  if (entityKey.startsWith("user:")) return "revoke_user";
   return "block_ip";
 }
 

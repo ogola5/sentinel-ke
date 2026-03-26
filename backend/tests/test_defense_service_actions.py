@@ -169,6 +169,28 @@ def test_rate_limit_service_dispatches_remote_control(monkeypatch):
     assert details["delivery_id"] == "d-rate"
 
 
+def test_freeze_account_dispatches_remote_control(monkeypatch):
+    svc = _service()
+    monkeypatch.setattr(
+        "app.defense.service.dispatch_containment_action",
+        lambda *, db, action_type, target, section_code: (
+            "delivered",
+            {"delivery_id": "d-freeze", "action_type": action_type, "target": target, "section_code": section_code},
+        ),
+    )
+
+    status, details = svc._execute_single_action(
+        action_type="freeze_account",
+        target="account_h:abc123",
+        details={},
+        section_code="telecom",
+    )
+
+    assert status == "executed"
+    assert details["webhook_status"] == "delivered"
+    assert details["delivery_id"] == "d-freeze"
+
+
 def test_remote_action_without_webhook_maps_to_no_integration(monkeypatch):
     svc = _service()
     monkeypatch.setattr(

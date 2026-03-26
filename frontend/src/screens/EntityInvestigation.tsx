@@ -119,7 +119,10 @@ function suggestedActionType(entityKey: string): string {
   if (entityKey.startsWith("host:") || entityKey.startsWith("endpoint:") || entityKey.startsWith("device_id:")) {
     return "isolate_host";
   }
-  if (entityKey.startsWith("account_h:") || entityKey.startsWith("user:") || entityKey.startsWith("email:")) {
+  if (entityKey.startsWith("phone_h:")) return "suspend_sim_change";
+  if (entityKey.startsWith("agent_id:")) return "hold_cashout";
+  if (entityKey.startsWith("account_h:")) return "freeze_account";
+  if (entityKey.startsWith("user:") || entityKey.startsWith("email:")) {
     return entityKey.startsWith("email:") ? "quarantine_email" : "revoke_user";
   }
   return "block_ip";
@@ -127,7 +130,7 @@ function suggestedActionType(entityKey: string): string {
 
 function suggestedActionTarget(entityKey: string): string {
   const family = entityFamily(entityKey);
-  if (["ip", "host", "endpoint", "device_id", "account_h", "user", "email", "service_id", "url", "domain"].includes(family)) {
+  if (["ip", "host", "endpoint", "device_id", "phone_h", "agent_id", "account_h", "user", "email", "service_id", "url", "domain"].includes(family)) {
     return rawEntityTarget(entityKey);
   }
   return "";

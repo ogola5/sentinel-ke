@@ -58,6 +58,32 @@ def apply_schema_contract(engine: Engine) -> Dict[str, int]:
         "ALTER TABLE event_entity_index ADD COLUMN IF NOT EXISTS entity_type VARCHAR",
         "UPDATE event_entity_index SET entity_type = split_part(entity_key, ':', 1) WHERE COALESCE(entity_type, '') = '' AND position(':' in entity_key) > 0",
         "CREATE INDEX IF NOT EXISTS ix_event_entity_type ON event_entity_index (entity_type)",
+        """
+        DO $$
+        BEGIN
+            IF EXISTS (
+                SELECT 1
+                FROM pg_constraint c
+                JOIN pg_class t ON t.oid = c.conrelid
+                WHERE t.relname = 'ai_prediction'
+                  AND c.conname = 'uq_ai_prediction'
+                  AND pg_get_constraintdef(c.oid) = 'UNIQUE (entity_key, prediction_type, window_end)'
+            ) THEN
+                ALTER TABLE ai_prediction DROP CONSTRAINT uq_ai_prediction;
+            END IF;
+            IF NOT EXISTS (
+                SELECT 1
+                FROM pg_constraint c
+                JOIN pg_class t ON t.oid = c.conrelid
+                WHERE t.relname = 'ai_prediction'
+                  AND c.conname = 'uq_ai_prediction'
+                  AND pg_get_constraintdef(c.oid) = 'UNIQUE (entity_key, prediction_type, window_key, window_end)'
+            ) THEN
+                ALTER TABLE ai_prediction
+                ADD CONSTRAINT uq_ai_prediction UNIQUE (entity_key, prediction_type, window_key, window_end);
+            END IF;
+        END $$;
+        """,
         "ALTER TABLE entity_embedding ADD COLUMN IF NOT EXISTS embedding_type VARCHAR DEFAULT 'gnn'",
         "ALTER TABLE infra_cluster ADD COLUMN IF NOT EXISTS cluster_key TEXT",
         "UPDATE infra_cluster SET cluster_key = concat('legacy:', cluster_id::text) WHERE COALESCE(cluster_key, '') = ''",

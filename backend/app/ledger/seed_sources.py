@@ -25,6 +25,13 @@ def _env_key(env_var: str, fallback: str) -> str:
 # Fallback values are only used when the env var is absent (first-time dev setup).
 SOURCES = [
     {
+        "source_id": "ecitizen_edge",
+        "source_type": "gov",
+        "section_code": "ecitizen",
+        "classification_level": "INTERNAL",
+        "api_key": _env_key("ECITIZEN_SOURCE_API_KEY", "ecitizen-secret-key"),
+    },
+    {
         "source_id": "safaricom",
         "source_type": "telco",
         "section_code": "telecom",

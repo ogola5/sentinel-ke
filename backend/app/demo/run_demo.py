@@ -18,9 +18,27 @@ def _ip_pool(prefix: str, count: int) -> List[str]:
     return [f"{prefix}{i+1}" for i in range(count)]
 
 
-def _ddos_events(base_time: datetime) -> List[CanonicalEvent]:
+def _endpoint_anchor(service_id: str, endpoint_path: str, method: str = "POST") -> str:
+    normalized_service = str(service_id or "").strip() or "unknown-service"
+    normalized_path = str(endpoint_path or "").strip() or "/"
+    if not normalized_path.startswith("/"):
+        normalized_path = f"/{normalized_path}"
+    normalized_method = str(method or "POST").strip().upper() or "POST"
+    return f"{normalized_service}:{normalized_path}:{normalized_method}"
+
+
+def build_ddos_events(
+    base_time: datetime,
+    *,
+    service_id: str = "kplc",
+    endpoint_path: str = "/login",
+    method: str = "POST",
+    ip_prefix: str = "203.0.113.",
+    ip_count: int = 25,
+) -> List[CanonicalEvent]:
     events: List[CanonicalEvent] = []
-    ip_pool = _ip_pool("203.0.113.", 25)
+    ip_pool = _ip_pool(ip_prefix, ip_count)
+    endpoint_anchor = _endpoint_anchor(service_id, endpoint_path, method)
 
     # rehearsal burst (low)
     for i in range(20):
@@ -30,13 +48,13 @@ def _ddos_events(base_time: datetime) -> List[CanonicalEvent]:
                 event_type="DDOS_SIGNAL_EVENT",
                 occurred_at=ts,
                 anchors={
-                    "service_id": "kplc",
-                    "endpoint": "kplc:/login:POST",
+                    "service_id": service_id,
+                    "endpoint": endpoint_anchor,
                     "ip": ip_pool[i % len(ip_pool)],
                 },
                 payload={
-                    "service_id": "kplc",
-                    "endpoint": "/login",
+                    "service_id": service_id,
+                    "endpoint": endpoint_path,
                     "req_rate": 90,
                     "unique_ips_count": 25,
                     "error_rate": 0.01,
@@ -55,13 +73,13 @@ def _ddos_events(base_time: datetime) -> List[CanonicalEvent]:
                 event_type="DDOS_SIGNAL_EVENT",
                 occurred_at=ts,
                 anchors={
-                    "service_id": "kplc",
-                    "endpoint": "kplc:/login:POST",
+                    "service_id": service_id,
+                    "endpoint": endpoint_anchor,
                     "ip": ip_pool[i % len(ip_pool)],
                 },
                 payload={
-                    "service_id": "kplc",
-                    "endpoint": "/login",
+                    "service_id": service_id,
+                    "endpoint": endpoint_path,
                     "req_rate": 450,
                     "unique_ips_count": 40,
                     "error_rate": 0.04,
@@ -73,6 +91,10 @@ def _ddos_events(base_time: datetime) -> List[CanonicalEvent]:
         )
 
     return events
+
+
+def _ddos_events(base_time: datetime) -> List[CanonicalEvent]:
+    return build_ddos_events(base_time)
 
 
 def _vpn_events(base_time: datetime) -> List[CanonicalEvent]:

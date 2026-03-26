@@ -36,7 +36,35 @@ docker compose exec backend python -m app.integrations.real_data_pipeline \
   --classification PUBLIC \
   --confidence 0.94 \
   urlhaus \
-  --auth-key "$URLHAUS_AUTH_KEY" \
+  --auth-key "${ABUSECH_AUTH_KEY:-$URLHAUS_AUTH_KEY}" \
+  --max-records 400 \
+  --sleep-every 400 \
+  --sleep-sec 65
+```
+
+ThreatFox:
+
+```bash
+docker compose exec backend python -m app.integrations.real_data_pipeline \
+  --source-api-key osint-secret-key \
+  --classification PUBLIC \
+  --confidence 0.94 \
+  threatfox \
+  --auth-key "${ABUSECH_AUTH_KEY:-$THREATFOX_AUTH_KEY}" \
+  --max-records 400 \
+  --sleep-every 400 \
+  --sleep-sec 65
+```
+
+MalwareBazaar:
+
+```bash
+docker compose exec backend python -m app.integrations.real_data_pipeline \
+  --source-api-key osint-secret-key \
+  --classification PUBLIC \
+  --confidence 0.95 \
+  malwarebazaar \
+  --auth-key "${ABUSECH_AUTH_KEY:-$MALWAREBAZAAR_AUTH_KEY}" \
   --max-records 400 \
   --sleep-every 400 \
   --sleep-sec 65
@@ -156,16 +184,24 @@ docker compose exec -T postgres psql -U sentinel -d sentinel -c \
 
 - `feodo-ingest-worker`
 - `urlhaus-ingest-worker`
+- `threatfox-ingest-worker`
+- `malwarebazaar-ingest-worker`
 - `otx-ingest-worker`
 
 These poll on loops matching the planned cadence:
 
 - Feodo: every 5 minutes
 - URLhaus: every 15 minutes
+- ThreatFox: every 30 minutes
+- MalwareBazaar: every 30 minutes
 - OTX: every 30 minutes
 
-`urlhaus-ingest-worker` requires `URLHAUS_AUTH_KEY` and caps mirrored DFIR events
+`urlhaus-ingest-worker` requires `URLHAUS_AUTH_KEY` or `ABUSECH_AUTH_KEY` and caps mirrored DFIR events
 per run with `URLHAUS_EVENT_MAX_RECORDS`.
+ThreatFox and MalwareBazaar can use the same abuse.ch `Auth-Key`; prefer setting
+`ABUSECH_AUTH_KEY` once instead of three separate env vars unless you need per-feed keys.
+`threatfox-ingest-worker` and `malwarebazaar-ingest-worker` use `OSINT_SOURCE_API_KEY`
+for ledger source identity unless you override the compose defaults.
 `otx-ingest-worker` will no-op until `OTX_API_KEY` is set. The worker also caps
 mirrored DFIR events per run with `OTX_EVENT_MAX_RECORDS` so it stays below the
 backend per-source ingest limiter.

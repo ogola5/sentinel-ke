@@ -121,15 +121,25 @@ def fetch_threatfox_iocs(
     *,
     days: int = 7,
     api_url: str = _THREATFOX_API_URL,
+    auth_key: Optional[str] = None,
     timeout_sec: int = 30,
     poster=None,
 ) -> List[Dict[str, Any]]:
     """Call the ThreatFox API and return a flat list of IOC dicts."""
     if poster is None:
         poster = requests.post
+    key = (
+        auth_key
+        or os.environ.get("THREATFOX_AUTH_KEY")
+        or os.environ.get("ABUSECH_AUTH_KEY")
+        or os.environ.get("URLHAUS_AUTH_KEY")
+        or ""
+    ).strip()
+    headers = {"Auth-Key": key} if key else None
     resp = poster(
         api_url,
         json={"query": "get_iocs", "days": days},
+        headers=headers,
         timeout=timeout_sec,
     )
     resp.raise_for_status()
@@ -151,6 +161,7 @@ def run_ingest(
     *,
     days: int = 7,
     api_url: str = _THREATFOX_API_URL,
+    auth_key: Optional[str] = None,
     timeout_sec: int = 30,
     max_records: Optional[int] = None,
     poster=None,
@@ -171,6 +182,7 @@ def run_ingest(
             iocs = fetch_threatfox_iocs(
                 days=days,
                 api_url=api_url,
+                auth_key=auth_key,
                 timeout_sec=timeout_sec,
                 poster=poster,
             )
@@ -318,6 +330,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Ingest ThreatFox IOCs into Sentinel-KE graph tables.")
     parser.add_argument("--days", type=int, default=7, help="Number of days of IOC history to pull.")
     parser.add_argument("--api-url", default=_THREATFOX_API_URL, help="ThreatFox API endpoint.")
+    parser.add_argument("--auth-key", default=None, help="abuse.ch Auth-Key. Falls back to THREATFOX_AUTH_KEY, ABUSECH_AUTH_KEY, or URLHAUS_AUTH_KEY.")
     parser.add_argument("--timeout-sec", type=int, default=30)
     parser.add_argument("--max-records", type=int, default=None)
     args = parser.parse_args()
@@ -328,6 +341,7 @@ def main() -> None:
             db,
             days=args.days,
             api_url=args.api_url,
+            auth_key=args.auth_key,
             timeout_sec=args.timeout_sec,
             max_records=args.max_records,
         )

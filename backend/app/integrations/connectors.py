@@ -933,16 +933,38 @@ def _map_cloudflare_ddos(payload: Dict[str, Any], confidence: float, classificat
 def _map_telco_sim_swap(payload: Dict[str, Any], confidence: float, classification: Optional[str]) -> CanonicalEvent:
     occurred_at = _as_datetime(payload, ("timestamp", "time", "occurred_at", "event_time"))
     phone = _as_str(payload, ("phone", "msisdn"), required=True)
+    person_h = _as_str(payload, ("person_h",))
+    if not person_h:
+        person = _as_str(payload, ("person", "person_id", "customer_id", "subscriber_id", "subscriber"))
+        if person:
+            person_h = pseudonymize(person, salt="integration-prehash")
+    account_h = _as_str(payload, ("account_h",))
+    if not account_h:
+        account = _as_str(payload, ("account", "account_id", "mobile_money_account", "bank_account"))
+        if account:
+            account_h = pseudonymize(account, salt="integration-prehash")
+    device_id = _as_str(payload, ("device_id", "imei", "handset_id", "phone_device_id"))
+    provider_id = _as_str(payload, ("provider_id", "provider", "telco", "operator"))
 
     model_payload: Dict[str, Any] = {
         "phone": phone,
         "prev_sim_id": _as_str(payload, ("prev_sim_id", "old_sim_id")),
         "new_sim_id": _as_str(payload, ("new_sim_id", "sim_id")),
         "reason": _as_str(payload, ("reason", "change_reason")),
+        "device_id": device_id,
+        "provider_id": provider_id,
     }
     model_payload = {k: v for k, v in model_payload.items() if v is not None}
 
     anchors = {"phone_h": pseudonymize(phone, salt="integration-prehash")}
+    if person_h:
+        anchors["person_h"] = person_h
+    if account_h:
+        anchors["account_h"] = account_h
+    if device_id:
+        anchors["device_id"] = device_id
+    if provider_id:
+        anchors["provider_id"] = provider_id
 
     return CanonicalEvent(
         event_type="SIM_SWAP_EVENT",

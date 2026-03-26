@@ -114,7 +114,13 @@ def _suggested_containment_action(entity_key: str) -> str:
         return "enable_waf_challenge"
     if family in {"host", "endpoint", "device_id"}:
         return "isolate_host"
-    if family in {"account_h", "user"}:
+    if family == "phone_h":
+        return "suspend_sim_change"
+    if family == "account_h":
+        return "freeze_account"
+    if family == "agent_id":
+        return "hold_cashout"
+    if family == "user":
         return "revoke_user"
     if family == "email":
         return "quarantine_email"

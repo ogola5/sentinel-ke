@@ -763,6 +763,9 @@ class DefenseService:
             "enable_waf_challenge",
             "reroute_to_scrubber",
             "quarantine_email",
+            "freeze_account",
+            "hold_cashout",
+            "suspend_sim_change",
         }:
             status, wh_details = dispatch_containment_action(
                 db           = self.db,

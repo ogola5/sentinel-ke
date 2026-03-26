@@ -9,7 +9,8 @@
 # Optional env overrides:
 #   DATA_DIR         — where to store downloaded files   (default: /tmp/sentinel_haul)
 #   OTX_API_KEY      — AlienVault OTX key (get free at otx.alienvault.com)
-#   URLHAUS_AUTH_KEY — URLhaus key (register free at abuse.ch)
+#   URLHAUS_AUTH_KEY — URLhaus-specific abuse.ch Auth-Key
+#   ABUSECH_AUTH_KEY — shared abuse.ch Auth-Key usable for URLhaus, ThreatFox, and MalwareBazaar
 #   PAYSIM_CSV       — path to already-downloaded PaySim CSV (skip Kaggle download prompt)
 #   PPRA_CSV         — path to already-downloaded PPRA CSV   (skip curl download)
 #   UNSW_CSV         — path to already-downloaded UNSW-NB15 CSV
@@ -123,14 +124,15 @@ fi
 section "3/8  URLhaus Malware URL Feed"
 if [[ "${SKIP_URLHAUS:-0}" == "1" ]]; then
     warn "SKIP_URLHAUS=1, skipping"
-elif [[ -z "${URLHAUS_AUTH_KEY:-}" ]]; then
-    warn "URLHAUS_AUTH_KEY not set — skipping URLhaus"
-    warn "  Register free at https://urlhaus.abuse.ch/ and set URLHAUS_AUTH_KEY=<key>"
+elif [[ -z "${URLHAUS_AUTH_KEY:-}" && -z "${ABUSECH_AUTH_KEY:-}" ]]; then
+    warn "URLHAUS_AUTH_KEY / ABUSECH_AUTH_KEY not set — skipping URLhaus"
+    warn "  Register free at https://auth.abuse.ch/ and set ABUSECH_AUTH_KEY=<key>"
 else
     URLHAUS_FILE="${DATA_DIR}/urlhaus_online.csv"
     info "Downloading URLhaus online CSV…"
+    URLHAUS_AUTH="${URLHAUS_AUTH_KEY:-${ABUSECH_AUTH_KEY:-}}"
     curl -sSfL "https://urlhaus.abuse.ch/downloads/csv_online/" \
-        --data "auth-key=${URLHAUS_AUTH_KEY}" \
+        --data "auth-key=${URLHAUS_AUTH}" \
         -o "${URLHAUS_FILE}" && ok "Downloaded ${URLHAUS_FILE}"
     run_job "urlhaus" "${URLHAUS_SOURCE_API_KEY}" urlhaus --urlhaus-file "${URLHAUS_FILE}"
 fi
