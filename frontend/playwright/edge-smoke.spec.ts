@@ -5,6 +5,10 @@ const EDGE_USERNAME = process.env.E2E_EDGE_USERNAME ?? "edge_admin";
 const EDGE_PASSWORD = process.env.E2E_EDGE_PASSWORD ?? "EdgeDemo2026!";
 const EDGE_ENTITY = process.env.E2E_EDGE_ENTITY ?? "ip:203.0.113.8";
 
+test.use({
+  baseURL: process.env.E2E_EDGE_BASE_URL ?? "http://localhost:13000",
+});
+
 async function login(page: Page) {
   await page.goto("/");
   await expect(page.getByRole("button", { name: /open secure login/i })).toBeVisible();

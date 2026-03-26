@@ -12,7 +12,9 @@ Flow
 3. This module looks up the ContainmentWebhook for (section_code, action_type).
 4. It builds a signed JSON payload and POSTs it to the partner's webhook URL.
 5. A WebhookDelivery row is written for forensic audit regardless of outcome.
-6. On failure the action is marked "failed" and the analyst is notified.
+6. If no webhook is registered, the dispatcher records a `no_integration`
+   delivery receipt instead of pretending the action was delivered.
+7. On failure the action is marked "failed" and the analyst is notified.
 
 Webhook payload (JSON)
 -----------------------
@@ -142,10 +144,30 @@ def dispatch_containment_action(
             "No active webhook for section=%s action=%s — action recorded only",
             section_code, action_type,
         )
+        delivery = WebhookDelivery(
+            action_id=action_id,
+            section_code=section_code,
+            action_type=action_type,
+            target=target,
+            webhook_url="",
+            status="no_integration",
+            attempt_count=0,
+            last_attempted_at=_utcnow(),
+            error_message="no webhook registered for this section/action type",
+            response_body={
+                "note": "action recorded; no webhook registered for this section/action type",
+                "target": target,
+                "hint": "Register a webhook via POST /v1/defense/webhooks",
+            },
+        )
+        db.add(delivery)
+        db.flush()
         return "no_webhook", {
             "note": "action recorded; no webhook registered for this section/action type",
             "target": target,
             "hint": "Register a webhook via POST /v1/defense/webhooks",
+            "delivery_id": str(delivery.id),
+            "delivery_status": "no_integration",
         }
 
     payload_dict: Dict[str, Any] = {

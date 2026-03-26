@@ -746,8 +746,10 @@ _CIC_WEB_KEYWORDS = (
 
 def _classify_cic_label(label: str) -> Optional[str]:
     x = (label or "").strip().lower()
-    if not x or "benign" in x:
+    if not x:
         return None
+    if "benign" in x:
+        return "benign"
     if any(k in x for k in _CIC_DDOS_KEYWORDS):
         return "ddos"
     if any(k in x for k in _CIC_WEB_KEYWORDS):
@@ -844,6 +846,30 @@ def normalize_cic_row(
             "asn_concentration": _as_float(_pick(idx, "asn_concentration")),
             "dataset": dataset_name,
             "attack_label": label,
+            "benchmark_family": "ddos",
+            "ground_truth_label": True,
+        }
+        return NormalizedConnectorRecord(
+            connector_key="cloudflare_ddos_v1",
+            payload={k: v for k, v in payload.items() if v is not None},
+            confidence=0.9,
+        )
+    if category == "benign":
+        payload = {
+            "timestamp": ts,
+            "service_id": service_id,
+            "endpoint": endpoint,
+            "method": method,
+            "request_rate": req_rate,
+            "error_rate": _as_float(_pick(idx, "error_rate", "packet_loss_ratio", "loss_ratio")),
+            "unique_ips_count": _as_int(_pick(idx, "unique_src_ips", "src_ip_count")) or (1 if src_ip else None),
+            "latency_ms": _as_float(_pick(idx, "latency_ms", "flow_iat_mean", "flowiatmean")),
+            "endpoint_convergence": _as_float(_pick(idx, "endpoint_convergence")),
+            "asn_concentration": _as_float(_pick(idx, "asn_concentration")),
+            "dataset": dataset_name,
+            "attack_label": label,
+            "benchmark_family": "ddos",
+            "confirmed_benign": True,
         }
         return NormalizedConnectorRecord(
             connector_key="cloudflare_ddos_v1",
@@ -862,6 +888,8 @@ def normalize_cic_row(
         "req_count": packet_count,
         "dataset": dataset_name,
         "attack_label": label,
+        "benchmark_family": "web_attack",
+        "ground_truth_label": True,
     }
     return NormalizedConnectorRecord(
         connector_key="waf_api_attack_v1",
@@ -904,6 +932,8 @@ def normalize_caida_row(
         "latency_ms": _as_float(_pick(idx, "latency_ms", "rtt_ms")),
         "dataset": dataset_name,
         "attack_label": str(_pick(idx, "label", "attack_type", "class") or "ddos").strip(),
+        "benchmark_family": "ddos",
+        "ground_truth_label": True,
     }
     return NormalizedConnectorRecord(
         connector_key="cloudflare_ddos_v1",
@@ -922,14 +952,19 @@ def normalize_vpn_benchmark_row(
     label = str(_pick(idx, "label", "category", "traffic_type", "class") or "").strip().lower()
     app_label = str(_pick(idx, "app_label", "application", "app", "service") or "").strip()
     vpn_flag = str(_pick(idx, "vpn", "is_vpn", "vpn_label") or "").strip().lower()
+    label_tokens = set(label.replace("-", " ").replace("_", " ").split())
+    compact_label = label.replace("-", "").replace("_", "").replace(" ", "")
+    app_tokens = set(app_label.lower().replace("-", " ").replace("_", " ").split()) if app_label else set()
+    is_non_vpn = compact_label == "nonvpn" or "nonvpn" in label_tokens
     is_vpn = (
-        "vpn" in label
-        or "tor" in label
-        or vpn_flag in {"1", "true", "yes", "vpn"}
-        or ("vpn" in app_label.lower() if app_label else False)
+        not is_non_vpn
+        and (
+            "vpn" in label_tokens
+            or "tor" in label_tokens
+            or vpn_flag in {"1", "true", "yes", "vpn"}
+            or "vpn" in app_tokens
+        )
     )
-    if not is_vpn:
-        return None
 
     src_ip = str(_pick(idx, "src_ip", "source_ip", "ip") or "").strip() or None
     dst_ip = str(_pick(idx, "dst_ip", "destination_ip", "server_ip", "gateway_ip") or "").strip() or None
@@ -952,6 +987,9 @@ def normalize_vpn_benchmark_row(
         "request_fingerprint": _pick(idx, "flow_id", "session_id"),
         "dataset": dataset_name,
         "app_label": app_label or None,
+        "benchmark_label": label or None,
+        "vpn_detected": bool(is_vpn),
+        "confirmed_benign": True if not is_vpn else None,
     }
     return NormalizedConnectorRecord(
         connector_key="vpn_gateway_session_v1",

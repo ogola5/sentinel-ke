@@ -46,6 +46,53 @@ export interface GNNTrainingRun {
   created_at: string;
 }
 
+export interface GNNLivePredictionSummary {
+  prediction_type: string;
+  window_key?: string | null;
+  window_end?: string | null;
+  model_version?: string | null;
+  prediction_count: number;
+  flagged_count: number;
+  high_risk_count: number;
+  abstained_count: number;
+  avg_score: number;
+  max_score: number;
+  latest_created_at?: string | null;
+}
+
+export interface GNNDomainSummary {
+  prediction_type: string;
+  domain_label: string;
+  available: boolean;
+  status: "ok" | "warn" | "missing";
+  status_reasons: string[];
+  latest_run: GNNTrainingRun | null;
+  latest_live_predictions: GNNLivePredictionSummary | null;
+  run_prediction_alignment: {
+    window_matches: boolean;
+    model_version_matches: boolean;
+  };
+}
+
+export interface GNNDomainHealth {
+  prediction_type: string;
+  domain_label: string;
+  status: "ok" | "warn" | "missing";
+  status_reasons: string[];
+  latest_run_created_at?: string | null;
+  latest_run_window_end?: string | null;
+  latest_prediction_window_end?: string | null;
+  latest_prediction_count?: number | null;
+  high_risk_count?: number | null;
+  flagged_count?: number | null;
+  run_prediction_alignment: {
+    window_matches: boolean;
+    model_version_matches: boolean;
+  };
+  fairness_blocked?: boolean | null;
+  real_data_gate_passed?: boolean | null;
+}
+
 export interface AIPrediction {
   id: string;
   entity_key: string;

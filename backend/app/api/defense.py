@@ -233,6 +233,34 @@ def list_incident_runs(
         raise HTTPException(status_code=500, detail="internal_error")
 
 
+@router.get(
+    "/incidents/actions",
+    dependencies=[Depends(require_section_access), Depends(require_scope("defense.read"))],
+)
+def list_incident_actions(
+    pagination: dict = Depends(pagination_params),
+    run_id: str | None = Query(default=None),
+    status: str | None = Query(default=None, description="queued | executed | no_integration | failed"),
+    section_code: str | None = Query(default=None),
+    principal: AuthPrincipal = Depends(require_request_principal),
+    db: Session = Depends(get_db),
+):
+    try:
+        return DefenseService(db).list_containment_actions(
+            principal=principal,
+            section_code=section_code,
+            run_id=run_id,
+            status=status,
+            limit=pagination["limit"],
+            offset=pagination["offset"],
+        )
+    except ValueError as e:
+        raise _map_error(str(e))
+    except Exception:
+        log.exception("defense_list_incident_actions_failed")
+        raise HTTPException(status_code=500, detail="internal_error")
+
+
 @router.post(
     "/incidents/runs/{run_id}/actions",
     dependencies=[Depends(require_section_access), Depends(require_scope("defense.write"))],
@@ -468,7 +496,7 @@ def disable_webhook(webhook_id: str, db: Session = Depends(get_db)):
 )
 def list_webhook_deliveries(
     section_code: Optional[str] = Query(None),
-    status: Optional[str] = Query(None, description="pending | delivered | failed"),
+    status: Optional[str] = Query(None, description="pending | delivered | failed | no_integration"),
     limit: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db),
 ):

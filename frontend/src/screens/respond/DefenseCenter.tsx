@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Shield, ShieldAlert, RefreshCw, Loader, Webhook, AlertTriangle, CheckCircle, XCircle, Clock } from "lucide-react";
 import {
   DEFAULT_DEFENSE_ACTIONS,
+  fetchContainmentActions,
   fetchPlaybookRuns,
   fetchDefenseActionCatalog,
   executeContainmentAction,
@@ -33,6 +34,12 @@ function fmtTime(iso: string | null): string {
   return `${Math.floor(diff / 3600)}h ago`;
 }
 
+function deliveryStatusClass(status: string | null | undefined): string {
+  if (status === "delivered" || status === "executed") return "delivered";
+  if (status === "failed") return "failed";
+  return "pending";
+}
+
 interface ConfirmState {
   open: boolean;
   runId: string;
@@ -59,11 +66,13 @@ export default function DefenseCenter({ principal }: { principal: Principal }) {
   const load = async () => {
     setLoading(true);
     setVisibilityNote(null);
-    const [runRows, catalogRows] = await Promise.all([
+    const [runRows, actionRows, catalogRows] = await Promise.all([
       fetchPlaybookRuns(20),
+      fetchContainmentActions(100),
       fetchDefenseActionCatalog(),
     ]);
     setRuns(runRows);
+    setActions(actionRows);
     setActionCatalog(catalogRows);
     if (canInspectWebhooks) {
       try {
@@ -111,24 +120,8 @@ export default function DefenseCenter({ principal }: { principal: Principal }) {
         confirm.target,
         details,
       );
-      const mappedActions: ContainmentActionRecord[] = (result.actions ?? []).map((a, idx) => ({
-        id: `${confirm.runId}-${Date.now()}-${idx}`,
-        run_id: confirm.runId,
-        section_code: activeRun?.section_code ?? null,
-        action_type: a.action_type,
-        target: a.target,
-        status: a.status === "executed" ? "executed" : "failed",
-        executed_at: new Date().toISOString(),
-        details_json: a.details ?? {},
-      }));
-      setActions((prev) => [...mappedActions, ...prev].slice(0, 100));
-      setExecResult(`${result.status} — ${mappedActions.map((a) => `${a.action_type}:${a.status}`).join(", ")}`);
-      const refreshedRuns = await fetchPlaybookRuns(20);
-      setRuns(refreshedRuns);
-      if (canInspectWebhooks) {
-        const newDeliveries = await fetchWebhookDeliveries(40, { strict: true });
-        setDeliveries(newDeliveries);
-      }
+      setExecResult(`${result.status} — ${(result.actions ?? []).map((a) => `${a.action_type}:${a.status}`).join(", ")}`);
+      await load();
     } catch (e) {
       setExecResult(`Failed: ${e instanceof Error ? e.message : "request_failed"}`);
     } finally {
@@ -138,6 +131,7 @@ export default function DefenseCenter({ principal }: { principal: Principal }) {
   };
 
   const activeRun = runs.find((r) => r.id === selectedRun);
+  const visibleActions = actions.filter((item) => !selectedRun || item.run_id === selectedRun);
   const selectedAction = actionCatalog.find((item) => item.key === actionTypeInput) ?? actionCatalog[0] ?? DEFAULT_DEFENSE_ACTIONS[0];
 
   return (
@@ -287,14 +281,14 @@ export default function DefenseCenter({ principal }: { principal: Principal }) {
           {/* Containment actions table */}
           <div className="panel workflow-stage-panel">
             <div className="panel-header">
-              <h3>Session results</h3>
-              <span className="muted">{actions.length} actions captured</span>
+              <h3>Containment history</h3>
+              <span className="muted">{visibleActions.length} shown</span>
             </div>
-            {actions.length === 0 ? (
+            {visibleActions.length === 0 ? (
               <div className="state-box" style={{ padding: 24 }}>
-                <p>No actions executed in this session yet.</p>
+                <p>No persisted containment actions for this run yet.</p>
                 <p className="muted" style={{ fontSize: "0.8rem" }}>
-                  Use the webhook delivery log below for persistent forensic history.
+                  Action history now comes from the backend ledger, not this browser session.
                 </p>
               </div>
             ) : (
@@ -309,7 +303,7 @@ export default function DefenseCenter({ principal }: { principal: Principal }) {
                   </tr>
                 </thead>
                 <tbody>
-                  {actions.map((a) => {
+                  {visibleActions.map((a) => {
                     const wh = a.details_json as { webhook_status?: string };
                     return (
                       <tr key={a.id ?? `${a.action_type}:${a.target}:${a.executed_at ?? ""}`}>
@@ -326,7 +320,7 @@ export default function DefenseCenter({ principal }: { principal: Principal }) {
                         </td>
                         <td>
                           {wh.webhook_status ? (
-                            <span className={`status-dot ${wh.webhook_status === "delivered" ? "delivered" : wh.webhook_status === "failed" ? "failed" : "pending"}`} />
+                            <span className={`status-dot ${deliveryStatusClass(wh.webhook_status)}`} />
                           ) : (
                             <span className="muted">—</span>
                           )}
@@ -373,7 +367,7 @@ export default function DefenseCenter({ principal }: { principal: Principal }) {
                       <td className="muted" style={{ fontSize: "0.78rem" }}>{d.section_code ?? "—"}</td>
                       <td className="muted" style={{ fontSize: "0.78rem" }}>{d.http_status_code ?? "—"}</td>
                       <td>
-                        <span className={`status-dot ${d.status}`} />
+                        <span className={`status-dot ${deliveryStatusClass(d.status)}`} />
                         &nbsp;
                         <span className="muted" style={{ fontSize: "0.78rem" }}>{d.status}</span>
                       </td>

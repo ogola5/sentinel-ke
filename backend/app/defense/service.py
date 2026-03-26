@@ -149,6 +149,15 @@ def _alert_severity(score: float) -> str:
     return "low"
 
 
+def _containment_status_from_webhook_status(webhook_status: str) -> str:
+    normalized = str(webhook_status or "").strip().lower()
+    if normalized == "delivered":
+        return "executed"
+    if normalized in {"no_webhook", "no_integration"}:
+        return "no_integration"
+    return "failed"
+
+
 class DefenseService:
     def __init__(self, db: Session):
         self.db = db
@@ -529,6 +538,37 @@ class DefenseService:
         rows = q.order_by(IncidentPlaybookRun.created_at.desc()).offset(offset).limit(limit).all()
         return {"total": total, "items": [self._run_to_dict(x) for x in rows]}
 
+    def list_containment_actions(
+        self,
+        *,
+        principal: Any,
+        section_code: str | None,
+        run_id: str | None,
+        status: str | None,
+        limit: int,
+        offset: int,
+    ) -> Dict[str, Any]:
+        sec = self._effective_section(principal, section_code)
+        q = self.db.query(ContainmentAction)
+        if sec:
+            q = q.filter(ContainmentAction.section_code == sec)
+        if run_id:
+            try:
+                run_uuid = uuid.UUID(str(run_id))
+            except ValueError as exc:
+                raise ValueError("invalid_run_id") from exc
+            q = q.filter(ContainmentAction.run_id == run_uuid)
+        if status:
+            q = q.filter(ContainmentAction.status == str(status).strip().lower())
+        total = q.count()
+        rows = (
+            q.order_by(ContainmentAction.executed_at.desc(), ContainmentAction.created_at.desc())
+            .offset(offset)
+            .limit(limit)
+            .all()
+        )
+        return {"total": total, "items": [self._action_to_dict(x) for x in rows]}
+
     def execute_run_actions(
         self,
         *,
@@ -550,7 +590,9 @@ class DefenseService:
             raise ValueError("incident_run_not_found")
 
         out = []
-        failures = 0
+        executed = 0
+        no_integration = 0
+        failed = 0
         for item in payload.actions:
             status, details = self._execute_single_action(
                 action_type=item.action_type,
@@ -577,8 +619,12 @@ class DefenseService:
                     "details": details,
                 }
             )
-            if status != "executed":
-                failures += 1
+            if status == "executed":
+                executed += 1
+            elif status == "no_integration":
+                no_integration += 1
+            else:
+                failed += 1
 
             self.ledger.audit(
                 actor_type="analyst",
@@ -602,12 +648,17 @@ class DefenseService:
 
         run.updated_at = _now()
         run.completed_at = _now()
-        run.status = "completed" if failures == 0 else "failed"
+        run.status = "completed" if failed == 0 else "failed"
         self.db.commit()
 
         return {
             "run_id": str(run.id),
             "status": run.status,
+            "summary": {
+                "executed": executed,
+                "no_integration": no_integration,
+                "failed": failed,
+            },
             "actions": out,
         }
 
@@ -721,10 +772,10 @@ class DefenseService:
             )
             # Map webhook statuses to containment action statuses:
             # "delivered" → "executed" (partner confirmed receipt)
-            # "no_webhook" → "executed" (recorded; partner must poll)
+            # "no_webhook" → "no_integration" (recorded only; no partner endpoint exists)
             # "failed"    → "failed"
-            exec_status = "executed" if status in {"delivered", "no_webhook"} else "failed"
-            return exec_status, {"webhook_status": status, **wh_details}
+            exec_status = _containment_status_from_webhook_status(status)
+            return exec_status, {"webhook_status": status, "execution_status": exec_status, **wh_details}
 
         if t == "rollback_block_ip":
             original = self._latest_executed_block_ip_action(section_code=section_code, target=target)
@@ -759,9 +810,10 @@ class DefenseService:
                 target=target,
                 section_code=section_code,
             )
-            exec_status = "executed" if status in {"delivered", "no_webhook"} else "failed"
+            exec_status = _containment_status_from_webhook_status(status)
             return exec_status, {
                 "webhook_status": status,
+                "execution_status": exec_status,
                 "requested_action": "rollback_block_ip",
                 "dispatched_action": "unblock_ip",
                 "rollback_of_action_id": rollback_of_action_id,
@@ -933,6 +985,21 @@ class DefenseService:
             "started_at": row.started_at.isoformat() if row.started_at else None,
             "completed_at": row.completed_at.isoformat() if row.completed_at else None,
             "metadata": row.metadata_json or {},
+        }
+
+    @staticmethod
+    def _action_to_dict(row: ContainmentAction) -> Dict[str, Any]:
+        return {
+            "id": str(row.id),
+            "run_id": str(row.run_id),
+            "section_code": row.section_code,
+            "action_type": row.action_type,
+            "target": row.target,
+            "status": row.status,
+            "executed_by": row.executed_by,
+            "executed_at": row.executed_at.isoformat() if row.executed_at else None,
+            "details_json": row.details_json or {},
+            "created_at": row.created_at.isoformat() if row.created_at else None,
         }
 
     @staticmethod

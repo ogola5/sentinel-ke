@@ -426,6 +426,37 @@ def _auc_sampled(
     return wins / actual_pairs
 
 
+def _pr_auc(
+    labels: Sequence[int],
+    scores: Sequence[float],
+) -> float:
+    y_true = [1 if int(v) > 0 else 0 for v in labels]
+    total_positive = sum(y_true)
+    if total_positive <= 0:
+        return 0.0
+
+    ranked = sorted(
+        zip((float(s) for s in scores), y_true),
+        key=lambda item: item[0],
+        reverse=True,
+    )
+
+    tp = 0
+    fp = 0
+    prev_recall = 0.0
+    area = 0.0
+    for _, label in ranked:
+        if label == 1:
+            tp += 1
+        else:
+            fp += 1
+        recall = tp / float(total_positive)
+        precision = tp / float(max(1, tp + fp))
+        area += (recall - prev_recall) * precision
+        prev_recall = recall
+    return area
+
+
 def _binary_metrics(
     labels: Sequence[int],
     probs: Sequence[float],
@@ -470,6 +501,7 @@ def _binary_metrics(
         "brier":     round(brier, 6),
         "ece":       round(ece, 6),
         "auc":       round(_auc_sampled(y_true, probs), 6),
+        "pr_auc":    round(_pr_auc(y_true, probs), 6),
     }
 
 
@@ -919,18 +951,28 @@ def train_graphsage(
     with torch.no_grad():
         _, embeddings = model(x, edge_src, edge_dst, edge_weight)
 
-    metrics = _binary_metrics(dataset.labels, mean_probs)
     if len(val_idx) > 0:
         eval_idx = [int(i) for i in val_idx.tolist()]
     else:
         eval_idx = list(range(n_nodes))
     eval_labels = [int(dataset.labels[i]) for i in eval_idx]
     eval_probs = [float(mean_probs[i]) for i in eval_idx]
+    metrics = _binary_metrics(eval_labels, eval_probs)
+    full_dataset_metrics = _binary_metrics(dataset.labels, mean_probs)
+    metrics.update(
+        {
+            f"full_dataset_{key}": value
+            for key, value in full_dataset_metrics.items()
+        }
+    )
+    metrics["evaluation_scope"] = "holdout" if len(val_idx) > 0 else "full_dataset"
     metrics.update(_calibration_metrics(eval_labels, eval_probs, bins=10))
     metrics["train_loss"]        = round(last_train, 6)
     metrics["val_loss"]          = round(best_val if math.isfinite(best_val) else last_train, 6)
     metrics["pretrain_loss"]     = round(last_pretrain, 6)
     metrics["eval_samples"]      = int(len(eval_idx))
+    metrics["holdout_positive_count"] = int(sum(eval_labels))
+    metrics["holdout_negative_count"] = int(len(eval_labels) - sum(eval_labels))
     metrics["epoch_train_losses"] = epoch_train_losses
     metrics["epoch_val_losses"]   = epoch_val_losses
     metrics["deterministic_training"] = bool(deterministic_enabled)

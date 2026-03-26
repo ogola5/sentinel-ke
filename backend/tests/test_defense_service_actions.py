@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+from unittest.mock import MagicMock
+import uuid
 
 from app.defense.service import DefenseService
 
@@ -165,3 +167,66 @@ def test_rate_limit_service_dispatches_remote_control(monkeypatch):
     assert status == "executed"
     assert details["webhook_status"] == "delivered"
     assert details["delivery_id"] == "d-rate"
+
+
+def test_remote_action_without_webhook_maps_to_no_integration(monkeypatch):
+    svc = _service()
+    monkeypatch.setattr(
+        "app.defense.service.dispatch_containment_action",
+        lambda *, db, action_type, target, section_code: (
+            "no_webhook",
+            {
+                "delivery_id": "d-missing",
+                "delivery_status": "no_integration",
+                "hint": "Register a webhook via POST /v1/defense/webhooks",
+            },
+        ),
+    )
+
+    status, details = svc._execute_single_action(
+        action_type="block_ip",
+        target="41.90.0.6",
+        details={},
+        section_code="telecom",
+    )
+
+    assert status == "no_integration"
+    assert details["webhook_status"] == "no_webhook"
+    assert details["execution_status"] == "no_integration"
+    assert details["delivery_status"] == "no_integration"
+    assert details["delivery_id"] == "d-missing"
+
+
+def test_execute_run_actions_keeps_no_integration_out_of_failure_count(monkeypatch):
+    db = MagicMock()
+    run = SimpleNamespace(
+        id=uuid.uuid4(),
+        section_code="telecom",
+        status="running",
+        updated_at=None,
+        completed_at=None,
+    )
+    db.query.return_value.filter.return_value.first.return_value = run
+
+    svc = DefenseService(db=db)
+    svc.ledger.audit = lambda *args, **kwargs: None
+
+    def _fake_execute_single_action(self, *, action_type, target, details, section_code):
+        del action_type, target, details, section_code
+        return "no_integration", {"webhook_status": "no_webhook", "execution_status": "no_integration"}
+
+    monkeypatch.setattr(DefenseService, "_execute_single_action", _fake_execute_single_action)
+
+    out = svc.execute_run_actions(
+        run_id=str(run.id),
+        payload=SimpleNamespace(
+            actions=[SimpleNamespace(action_type="block_ip", target="41.90.0.7", details={})]
+        ),
+        principal=SimpleNamespace(actor_id="analyst-1", access_level="section", section_code="telecom"),
+    )
+
+    assert out["status"] == "completed"
+    assert out["summary"] == {"executed": 0, "no_integration": 1, "failed": 0}
+    assert out["actions"][0]["status"] == "no_integration"
+    assert out["actions"][0]["details"]["execution_status"] == "no_integration"
+    assert run.status == "completed"

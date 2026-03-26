@@ -709,6 +709,27 @@ class TestVpnBenchmarkIngest:
         finally:
             os.unlink(path)
 
+    def test_vpn_entity_requires_majority_vpn_traffic(self) -> None:
+        """A mixed IP stays negative when VPN is not the strict majority."""
+        captured, cap_patch = _make_snapshot_capturer(_vpn_mod)
+        path = _write_csv(
+            ["src_ip", "label", "Flow Duration", "Total Fwd Packets"],
+            [
+                ["192.168.100.2", "VPN", "2000", "500"],
+                ["192.168.100.2", "nonVPN", "1000", "200"],
+                ["192.168.100.2", "nonVPN", "3000", "700"],
+            ],
+        )
+        try:
+            _start(_VPN_INFRA)
+            with cap_patch:
+                vpn_run_ingest(_StubDB(), csv_path=path)
+            _stop(_VPN_INFRA)
+        finally:
+            os.unlink(path)
+        assert len(captured) == 1
+        assert captured[0]["risk_flags"] == []
+
     def test_row_missing_src_ip_skipped(self) -> None:
         """Rows with an empty src_ip are skipped silently."""
         path = _write_csv(

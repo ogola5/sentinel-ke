@@ -2,6 +2,7 @@ import { ApiError, apiFetchJson, apiPostJson } from "./client";
 import { endpoints } from "./endpoints";
 import type {
   BackupAttestationRecord,
+  ContainmentActionRecord,
   DefenseActionDefinition,
   IncidentActionExecutionResult,
   PlaybookRun,
@@ -150,6 +151,19 @@ const toPlaybookRun = (row: Record<string, unknown>): PlaybookRun => ({
   updated_at: asString(row.updated_at, ""),
 });
 
+const toContainmentAction = (row: Record<string, unknown>): ContainmentActionRecord => ({
+  id: asString(row.id),
+  run_id: (row.run_id as string | null) ?? null,
+  section_code: (row.section_code as string | null) ?? null,
+  action_type: asString(row.action_type),
+  target: asString(row.target),
+  status: (asString(row.status, "queued").toLowerCase() as ContainmentActionRecord["status"]),
+  executed_by: (row.executed_by as string | null) ?? null,
+  executed_at: (row.executed_at as string | null) ?? undefined,
+  details_json: asRecord(row.details_json),
+  created_at: (row.created_at as string | null) ?? undefined,
+});
+
 const toWebhook = (row: Record<string, unknown>): WebhookRecord => ({
   id: asString(row.id),
   section_code: asString(row.section_code),
@@ -209,6 +223,24 @@ export async function fetchPlaybookRuns(limit = 20, options: QueryOptions = {}):
     const data = await apiFetchJson<ListResponse<Record<string, unknown>>>(endpoints.defenseIncidents(limit));
     const rows = Array.isArray(data) ? data : (data.items ?? []);
     return rows.map((r) => toPlaybookRun(asRecord(r))).filter((r) => r.id !== "");
+  } catch (err) {
+    if (options.strict || !(err instanceof ApiError) || err.status >= 500 || err.status === 401 || err.status === 403) {
+      throw err;
+    }
+    return [];
+  }
+}
+
+export async function fetchContainmentActions(
+  limit = 100,
+  options: { runId?: string; sectionCode?: string; status?: string; strict?: boolean } = {},
+): Promise<ContainmentActionRecord[]> {
+  try {
+    const data = await apiFetchJson<ListResponse<Record<string, unknown>>>(
+      endpoints.defenseIncidentActions(limit, 0, options.runId, options.sectionCode, options.status),
+    );
+    const rows = Array.isArray(data) ? data : (data.items ?? []);
+    return rows.map((r) => toContainmentAction(asRecord(r))).filter((r) => r.id !== "");
   } catch (err) {
     if (options.strict || !(err instanceof ApiError) || err.status >= 500 || err.status === 401 || err.status === 403) {
       throw err;

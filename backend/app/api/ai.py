@@ -55,6 +55,12 @@ SCENARIO_LABELS: dict[str, str] = {
     "all": "Combined DDoS + VPN + SIM-swap pressure",
 }
 
+DOMAIN_PREDICTION_TYPES: tuple[str, ...] = ("risk_gnn", "corruption_risk")
+DOMAIN_LABELS: dict[str, str] = {
+    "risk_gnn": "Cyber GNN",
+    "corruption_risk": "Corruption GNN",
+}
+
 
 def _fairness_blocked(metrics_json: dict[str, Any] | None) -> bool:
     metrics = metrics_json or {}
@@ -307,6 +313,155 @@ def _top_feature(details: dict) -> str | None:
     return name or None
 
 
+def _serialize_gnn_run(row: GNNTrainingRun | None) -> dict[str, Any] | None:
+    if row is None:
+        return None
+    metrics_json = dict(row.metrics_json or {})
+    real_data_gate = dict(metrics_json.get("real_data_gate") or {})
+    return {
+        "id": str(row.id),
+        "model_version": row.model_version,
+        "prediction_type": row.prediction_type,
+        "source_backend": row.source_backend,
+        "window_key": row.window_key,
+        "window_end": row.window_end.isoformat(),
+        "node_count": row.node_count,
+        "edge_count": row.edge_count,
+        "feature_dim": row.feature_dim,
+        "positive_count": row.positive_count,
+        "epochs": row.epochs,
+        "train_loss": row.train_loss,
+        "val_loss": row.val_loss,
+        "auc": row.auc,
+        "precision": row.precision,
+        "recall": row.recall,
+        "f1": row.f1,
+        "artifact_path": row.artifact_path,
+        "params": row.params_json,
+        "metrics": metrics_json,
+        "operating_metrics": dict(metrics_json.get("operating_metrics") or {}),
+        "fairness": dict(metrics_json.get("fairness") or {}),
+        "fairness_gate": dict(metrics_json.get("fairness_gate") or {}),
+        "fairness_blocked": _fairness_blocked(metrics_json),
+        "provenance": dict(metrics_json.get("provenance") or {}),
+        "real_data_gate": real_data_gate,
+        "real_data_gate_passed": bool(real_data_gate.get("passed", False)),
+        "created_at": row.created_at.isoformat(),
+    }
+
+
+def _latest_prediction_window_summary(db: Session, prediction_type: str) -> dict[str, Any] | None:
+    latest_prediction = (
+        db.query(AIPrediction)
+        .filter(AIPrediction.prediction_type == prediction_type)
+        .order_by(AIPrediction.window_end.desc(), AIPrediction.created_at.desc())
+        .first()
+    )
+    if latest_prediction is None:
+        return None
+
+    rows = (
+        db.query(AIPrediction)
+        .filter(AIPrediction.prediction_type == prediction_type)
+        .filter(AIPrediction.window_key == latest_prediction.window_key)
+        .filter(AIPrediction.window_end == latest_prediction.window_end)
+        .order_by(AIPrediction.score.desc())
+        .all()
+    )
+    if not rows:
+        return None
+
+    def _is_above_threshold(row: AIPrediction) -> bool:
+        details = dict(row.details_json or {})
+        if "above_entity_threshold" in details:
+            return bool(details.get("above_entity_threshold"))
+        try:
+            threshold_score = float(details.get("entity_threshold_score") or 75.0)
+        except (TypeError, ValueError):
+            threshold_score = 75.0
+        return float(row.score or 0.0) >= threshold_score
+
+    scored_rows = [row for row in rows if not bool(row.abstained)]
+    latest_created_at = max(
+        (row.created_at for row in rows if isinstance(row.created_at, datetime)),
+        default=latest_prediction.created_at,
+    )
+    avg_score = (
+        round(sum(float(row.score or 0.0) for row in scored_rows) / len(scored_rows), 4)
+        if scored_rows else 0.0
+    )
+    return {
+        "prediction_type": prediction_type,
+        "window_key": latest_prediction.window_key,
+        "window_end": latest_prediction.window_end.isoformat(),
+        "model_version": latest_prediction.model_version,
+        "prediction_count": len(rows),
+        "flagged_count": len(scored_rows),
+        "high_risk_count": sum(1 for row in scored_rows if _is_above_threshold(row)),
+        "abstained_count": sum(1 for row in rows if bool(row.abstained)),
+        "avg_score": avg_score,
+        "max_score": round(max(float(row.score or 0.0) for row in rows), 4),
+        "latest_created_at": latest_created_at.isoformat() if latest_created_at else None,
+    }
+
+
+def _build_domain_summary(db: Session, prediction_type: str) -> dict[str, Any]:
+    latest_run = (
+        db.query(GNNTrainingRun)
+        .filter(GNNTrainingRun.prediction_type == prediction_type)
+        .order_by(GNNTrainingRun.created_at.desc())
+        .first()
+    )
+    latest_run_payload = _serialize_gnn_run(latest_run)
+    live_predictions = _latest_prediction_window_summary(db, prediction_type)
+    windows_match = bool(
+        latest_run_payload
+        and live_predictions
+        and latest_run_payload.get("window_end") == live_predictions.get("window_end")
+        and latest_run_payload.get("window_key") == live_predictions.get("window_key")
+    )
+    model_versions_match = bool(
+        latest_run_payload
+        and live_predictions
+        and latest_run_payload.get("model_version") == live_predictions.get("model_version")
+    )
+    available = bool(latest_run_payload or live_predictions)
+    status = "ok"
+    reasons: list[str] = []
+    if not available:
+        status = "missing"
+        reasons.append("no_training_or_predictions")
+    else:
+        if latest_run_payload is None:
+            status = "warn"
+            reasons.append("no_training_run")
+        if live_predictions is None:
+            status = "warn"
+            reasons.append("no_live_predictions")
+        if latest_run_payload and latest_run_payload.get("fairness_blocked"):
+            status = "warn"
+            reasons.append("fairness_blocked")
+        if latest_run_payload and not latest_run_payload.get("real_data_gate_passed", False):
+            status = "warn"
+            reasons.append("real_data_gate_failed")
+        if latest_run_payload and live_predictions and not windows_match:
+            status = "warn"
+            reasons.append("run_window_differs_from_live_window")
+    return {
+        "prediction_type": prediction_type,
+        "domain_label": DOMAIN_LABELS.get(prediction_type, prediction_type),
+        "available": available,
+        "status": status,
+        "status_reasons": reasons,
+        "latest_run": latest_run_payload,
+        "latest_live_predictions": live_predictions,
+        "run_prediction_alignment": {
+            "window_matches": windows_match,
+            "model_version_matches": model_versions_match,
+        },
+    }
+
+
 @router.get("/predictions")
 def list_predictions(
     pagination: dict = Depends(pagination_params),
@@ -446,41 +601,51 @@ def list_gnn_runs(
     return {
         "limit": pagination["limit"],
         "offset": pagination["offset"],
-        "items": [
-            {
-                "id": str(r.id),
-                "model_version": r.model_version,
-                "prediction_type": r.prediction_type,
-                "source_backend": r.source_backend,
-                "window_key": r.window_key,
-                "window_end": r.window_end.isoformat(),
-                "node_count": r.node_count,
-                "edge_count": r.edge_count,
-                "feature_dim": r.feature_dim,
-                "positive_count": r.positive_count,
-                "epochs": r.epochs,
-                "train_loss": r.train_loss,
-                "val_loss": r.val_loss,
-                "auc": r.auc,
-                "precision": r.precision,
-                "recall": r.recall,
-                "f1": r.f1,
-                "artifact_path": r.artifact_path,
-                "params": r.params_json,
-                "metrics": r.metrics_json,
-                "fairness": (r.metrics_json or {}).get("fairness", {}),
-                "fairness_gate": (r.metrics_json or {}).get("fairness_gate", {}),
-                "fairness_blocked": _fairness_blocked(r.metrics_json),
-                "provenance": (r.metrics_json or {}).get("provenance", {}),
-                "real_data_gate": (r.metrics_json or {}).get("real_data_gate", {}),
-                "real_data_gate_passed": bool(
-                    ((r.metrics_json or {}).get("real_data_gate") or {}).get("passed", False)
-                ),
-                "created_at": r.created_at.isoformat(),
-            }
-            for r in rows
-        ],
+        "items": [_serialize_gnn_run(r) for r in rows],
     }
+
+
+@router.get("/gnn/latest-runs")
+def latest_gnn_runs(
+    prediction_type: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+):
+    prediction_types = [prediction_type] if prediction_type else list(DOMAIN_PREDICTION_TYPES)
+    items = [_build_domain_summary(db, kind) for kind in prediction_types]
+    return {
+        "items": items,
+    }
+
+
+@router.get("/gnn/domain-health")
+def gnn_domain_health(
+    prediction_type: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+):
+    prediction_types = [prediction_type] if prediction_type else list(DOMAIN_PREDICTION_TYPES)
+    items = []
+    for kind in prediction_types:
+        summary = _build_domain_summary(db, kind)
+        latest_run = dict(summary.get("latest_run") or {})
+        latest_live = dict(summary.get("latest_live_predictions") or {})
+        items.append(
+            {
+                "prediction_type": kind,
+                "domain_label": summary.get("domain_label"),
+                "status": summary.get("status"),
+                "status_reasons": summary.get("status_reasons"),
+                "latest_run_created_at": latest_run.get("created_at"),
+                "latest_run_window_end": latest_run.get("window_end"),
+                "latest_prediction_window_end": latest_live.get("window_end"),
+                "latest_prediction_count": latest_live.get("prediction_count"),
+                "high_risk_count": latest_live.get("high_risk_count"),
+                "flagged_count": latest_live.get("flagged_count"),
+                "run_prediction_alignment": summary.get("run_prediction_alignment"),
+                "fairness_blocked": latest_run.get("fairness_blocked"),
+                "real_data_gate_passed": latest_run.get("real_data_gate_passed"),
+            }
+        )
+    return {"items": items}
 
 
 class GNNTrainRequest(BaseModel):

@@ -33,6 +33,7 @@ from typing import List
 
 from kafka import KafkaConsumer
 
+from app.analytics.layer3.graph_feature_worker import run_once as refresh_graph_features
 from app.analytics.layer3.ai_inference_worker import run_once
 from app.core.config import settings
 from app.ledger.db import SessionLocal
@@ -77,6 +78,11 @@ def _cfg_offset_reset() -> str:
     return os.getenv("INFERENCE_CONSUMER_OFFSET_RESET", "latest")
 
 
+def _cfg_refresh_features() -> bool:
+    raw = os.getenv("INFERENCE_REFRESH_FEATURES", "true").strip().lower()
+    return raw not in {"0", "false", "no"}
+
+
 # ---------------------------------------------------------------------------
 # Consumer build
 # ---------------------------------------------------------------------------
@@ -105,6 +111,17 @@ def _trigger_inference(*, window_key: str, prediction_type: str, max_entities: i
     """
     db = SessionLocal()
     try:
+        if _cfg_refresh_features():
+            refreshed = refresh_graph_features(
+                db=db,
+                window_key=window_key,
+                max_entities=max_entities,
+            )
+            log.info(
+                "feature_refresh_triggered features_upserted=%d window_key=%s",
+                refreshed,
+                window_key,
+            )
         n = run_once(
             db=db,
             window_key=window_key,

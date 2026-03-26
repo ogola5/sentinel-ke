@@ -9,6 +9,7 @@ from app.api.defense import (
     WebhookRegisterRequest,
     execute_incident_actions,
     get_action_catalog,
+    list_incident_actions,
     snapshot_crypto_posture,
     upsert_vulnerability,
 )
@@ -122,6 +123,44 @@ def test_snapshot_crypto_posture_forwards_to_service(monkeypatch):
     )
     assert out["snapshot_id"] == "snap-1"
     assert captured == {"section_code": "revenue", "actor_id": "u-2"}
+
+
+def test_list_incident_actions_forwards_to_service(monkeypatch):
+    captured = {}
+
+    class _Svc:
+        def __init__(self, db):
+            self.db = db
+
+        def list_containment_actions(self, *, principal, section_code, run_id, status, limit, offset):
+            captured["actor_id"] = principal.actor_id
+            captured["section_code"] = section_code
+            captured["run_id"] = run_id
+            captured["status"] = status
+            captured["limit"] = limit
+            captured["offset"] = offset
+            return {"total": 1, "items": [{"id": "act-1"}]}
+
+    monkeypatch.setattr("app.api.defense.DefenseService", _Svc)
+
+    out = list_incident_actions(
+        pagination={"limit": 25, "offset": 5},
+        run_id="b57a7562-5635-44ce-b1c3-c7bfd99fa5ab",
+        status="no_integration",
+        section_code="telecom",
+        principal=_central_principal(),
+        db=object(),
+    )
+
+    assert out["total"] == 1
+    assert captured == {
+        "actor_id": "u-2",
+        "section_code": "telecom",
+        "run_id": "b57a7562-5635-44ce-b1c3-c7bfd99fa5ab",
+        "status": "no_integration",
+        "limit": 25,
+        "offset": 5,
+    }
 
 
 def test_action_catalog_exposes_known_actions():

@@ -169,7 +169,7 @@ class ContainmentAction(Base):
     section_code = Column(String, nullable=True)
     action_type = Column(String, nullable=False)  # isolate_host|block_ip|rollback_block_ip|revoke_user|disable_source_key|force_password_reset
     target = Column(String, nullable=False)
-    status = Column(String, nullable=False, default="queued")  # queued|executed|failed
+    status = Column(String, nullable=False, default="queued")  # queued|executed|no_integration|failed
 
     executed_by = Column(String, nullable=False)
     executed_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
@@ -238,7 +238,7 @@ class WebhookDelivery(Base):
     action_type     = Column(String, nullable=False)
     target          = Column(String, nullable=False)
     webhook_url     = Column(String(512), nullable=False)
-    status          = Column(String, nullable=False, default="pending")  # pending|delivered|failed
+    status          = Column(String, nullable=False, default="pending")  # pending|delivered|failed|no_integration
     http_status_code = Column(Integer, nullable=True)
     attempt_count   = Column(Integer, nullable=False, default=0)
     last_attempted_at = Column(DateTime(timezone=True), nullable=True)

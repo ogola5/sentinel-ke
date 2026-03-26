@@ -33,6 +33,7 @@ from app.analytics.ai_models import (
     AIExplanation,
     AIModelRollout,
     AIPrediction,
+    AIRiskThreshold,
     GNNTrainingRun,
     GraphFeatureSnapshot,
 )
@@ -247,6 +248,7 @@ def _write_prediction(
     rollout: Dict[str, object],
     evidence_limit: int,
     prediction_type: str,
+    threshold_score: float,
 ) -> None:
     """Upsert one AIPrediction + AIExplanation row."""
     confidence   = max(0.0, min(1.0, 1.0 - uncertainty))
@@ -280,7 +282,7 @@ def _write_prediction(
 
     counterfactual   = build_counterfactual(
         probability=prob,
-        threshold_score=75.0,
+        threshold_score=threshold_score,
         top_feature_hint=feature_hint,
     )
 
@@ -299,6 +301,8 @@ def _write_prediction(
         "explanation_method": method,
         "feature_attributions": feature_attributions,
         "attribution_group_scores": group_scores,
+        "entity_threshold_score": round(float(threshold_score), 4),
+        "above_entity_threshold": bool(score >= float(threshold_score)),
     }
 
     pred = (
@@ -358,6 +362,7 @@ def _write_prediction(
         "explanation_method":  method,
         "feature_attributions": feature_attributions,
         "attribution_group_scores": group_scores,
+        "entity_threshold_score": round(float(threshold_score), 4),
     }
     expl = (
         db.query(AIExplanation)
@@ -442,6 +447,8 @@ def _load_gnn_artifact(
 def _gnn_reason_codes(
     prob: float,
     snap: GraphFeatureSnapshot,
+    *,
+    threshold_score: float,
 ) -> List[str]:
     """Generate reason codes for a GNN-scored entity."""
     reasons: List[str] = []
@@ -478,8 +485,52 @@ def _gnn_reason_codes(
         reasons.append("SIM_SWAP_SIGNAL")
     if event_types.get("PHISHING_MESSAGE_EVENT", 0) > 0:
         reasons.append("PHISHING_SIGNAL")
+    if (prob * 100.0) >= float(threshold_score):
+        reasons.append("ABOVE_ENTITY_THRESHOLD")
+    else:
+        reasons.append("BELOW_ENTITY_THRESHOLD")
     reasons.append("RISK_INDICATOR_ONLY_NOT_FINAL_PROOF")
     return sorted(set(reasons))
+
+
+def _default_threshold_score(entity_type: str) -> float:
+    et = str(entity_type or "").strip().lower()
+    if et in {"ip", "domain", "url", "endpoint", "service_id"}:
+        return 78.0
+    if et in {"account_h", "phone_h", "person_h", "device_id"}:
+        return 70.0
+    return 75.0
+
+
+def _load_thresholds(
+    db: Session,
+    *,
+    model_version: str,
+    prediction_type: str,
+    window_key: str,
+    window_end: datetime,
+) -> Dict[str, Dict[str, object]]:
+    rows = (
+        db.query(AIRiskThreshold)
+        .filter(AIRiskThreshold.model_version == model_version)
+        .filter(AIRiskThreshold.prediction_type == prediction_type)
+        .filter(AIRiskThreshold.window_key == window_key)
+        .filter(AIRiskThreshold.window_end <= window_end)
+        .order_by(AIRiskThreshold.window_end.desc(), AIRiskThreshold.created_at.desc())
+        .all()
+    )
+    out: Dict[str, Dict[str, object]] = {}
+    for row in rows:
+        entity_type = str(row.entity_type or "").strip().lower()
+        if not entity_type or entity_type in out:
+            continue
+        out[entity_type] = {
+            "threshold_score": float(row.threshold_score or _default_threshold_score(entity_type)),
+            "sample_count": int(row.sample_count or 0),
+            "method": str(row.method or ""),
+            "window_end": row.window_end.isoformat() if row.window_end else None,
+        }
+    return out
 
 
 def _run_gnn_path(
@@ -595,6 +646,13 @@ def _run_gnn_path(
     )
 
     feature_contrib_by_idx: Dict[int, List[float]] = {}
+    thresholds = _load_thresholds(
+        db,
+        model_version=model_version,
+        prediction_type=prediction_type,
+        window_key=str(snapshots[0].window_key),
+        window_end=max(s.window_end for s in snapshots),
+    )
     if bool(settings.ai_explainability_enabled):
         ranked_idx = sorted(
             range(len(mean_probs)),
@@ -621,7 +679,11 @@ def _run_gnn_path(
         prob        = float(mean_probs[i])
         uncertainty = float(uncertainties[i])
         score       = round(prob * 100.0, 4)
-        reasons     = _gnn_reason_codes(prob, snap)
+        threshold_score = float(
+            (thresholds.get(str(snap.entity_type).strip().lower()) or {}).get("threshold_score")
+            or _default_threshold_score(str(snap.entity_type))
+        )
+        reasons     = _gnn_reason_codes(prob, snap, threshold_score=threshold_score)
 
         _write_prediction(
             db,
@@ -637,6 +699,7 @@ def _run_gnn_path(
             rollout         = rollout,
             evidence_limit  = evidence_limit,
             prediction_type = prediction_type,
+            threshold_score = threshold_score,
         )
         created += 1
 
@@ -739,6 +802,7 @@ def _run_heuristic_path(
             rollout         = rollout,
             evidence_limit  = evidence_limit,
             prediction_type = prediction_type,
+            threshold_score = _default_threshold_score(str(snap.entity_type)),
         )
         created += 1
 

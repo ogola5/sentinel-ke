@@ -912,6 +912,11 @@ def _map_cloudflare_ddos(payload: Dict[str, Any], confidence: float, classificat
         "user_agent_entropy": _as_float(payload, ("user_agent_entropy",)),
         "asn_concentration": _as_float(payload, ("asn_concentration",)),
         "endpoint_convergence": _as_float(payload, ("endpoint_convergence",)),
+        "dataset": _as_str(payload, ("dataset",)),
+        "attack_label": _as_str(payload, ("attack_label",)),
+        "benchmark_family": _as_str(payload, ("benchmark_family",)),
+        "ground_truth_label": payload.get("ground_truth_label"),
+        "confirmed_benign": payload.get("confirmed_benign"),
     }
     model_payload = {k: v for k, v in model_payload.items() if v is not None}
 
@@ -1614,6 +1619,10 @@ def _map_vpn_gateway_session(payload: Dict[str, Any], confidence: float, classif
         "asn": _as_int(payload, ("asn", "src_asn")),
         "provider": _as_str(payload, ("provider", "vpn_provider", "category")),
         "request_fingerprint": _as_str(payload, ("request_fingerprint", "flow_id")),
+        "dataset": _as_str(payload, ("dataset",)),
+        "benchmark_label": _as_str(payload, ("benchmark_label", "label")),
+        "vpn_detected": payload.get("vpn_detected"),
+        "confirmed_benign": payload.get("confirmed_benign"),
     }
     model_payload = {k: v for k, v in model_payload.items() if v is not None}
 

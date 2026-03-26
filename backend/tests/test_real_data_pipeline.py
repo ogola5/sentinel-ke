@@ -206,6 +206,23 @@ def test_normalize_vpn_benchmark_row_maps_vpn_rows_to_login_connector():
     assert record.payload["provider"] == "OpenVPN"
 
 
+def test_normalize_vpn_benchmark_row_keeps_nonvpn_rows_as_benign_login_signal():
+    row = {
+        "timestamp": "2016-07-01T10:20:30Z",
+        "src_ip": "10.0.0.6",
+        "dst_ip": "198.51.100.11",
+        "label": "nonVPN",
+        "app_label": "HTTP",
+        "protocol": "tcp",
+    }
+    record = normalize_vpn_benchmark_row(row)
+    assert record is not None
+    assert record.connector_key == "vpn_gateway_session_v1"
+    assert record.payload["src_ip"] == "10.0.0.6"
+    assert record.payload["vpn_detected"] is False
+    assert record.payload["confirmed_benign"] is True
+
+
 def test_build_otx_indicator_records_and_stix_bundle():
     pulses = [
         {
@@ -244,6 +261,22 @@ def test_normalize_cic_row_ddos_maps_to_ddos_connector():
     assert record.payload["service_id"] == "safaricom:172.16.0.10"
     assert record.payload["request_rate"] == 1234.5
     assert record.payload["endpoint"] == "port:443"
+
+
+def test_normalize_cic_row_benign_keeps_negative_ddos_background():
+    row = {
+        "Label": "BENIGN",
+        "Timestamp": "2018-02-14 10:20:30",
+        "Src IP": "10.0.0.5",
+        "Dst IP": "172.16.0.10",
+        "Flow Packets/s": "22.0",
+        "Dst Port": "443",
+    }
+    record = normalize_cic_row(row, service_id_prefix="safaricom")
+    assert record is not None
+    assert record.connector_key == "cloudflare_ddos_v1"
+    assert record.payload["confirmed_benign"] is True
+    assert record.payload["benchmark_family"] == "ddos"
 
 
 def test_normalize_cic_row_web_maps_to_web_connector():

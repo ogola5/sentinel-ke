@@ -16,10 +16,12 @@ import { useEffect, useState, useCallback } from "react";
 import { RefreshCw, Loader, AlertTriangle, CheckCircle, Clock } from "lucide-react";
 import { endpoints } from "../../api/endpoints";
 import { apiFetchJson } from "../../api/client";
+import { fetchGNNLatestRuns } from "../../api/ai";
 import { fetchFederationPartners } from "../../api/federation";
 import { KENYA_AGENCIES, agencyName } from "../../types/auth";
 import type { Principal } from "../../types/auth";
 import type { FederationPartner } from "../../types/federation";
+import type { GNNDomainSummary } from "../../types/ai";
 
 interface Props {
   principal: Principal;
@@ -84,6 +86,7 @@ export default function ExecBrief({ principal }: Props) {
   const [loading, setLoading]           = useState(true);
   const [threat, setThreat]             = useState<ThreatSummary | null>(null);
   const [partners, setPartners]         = useState<FederationPartner[]>([]);
+  const [aiDomains, setAiDomains]       = useState<GNNDomainSummary[]>([]);
   const [incidentRuns, setIncidentRuns] = useState<
     { id: string; incident_key: string; severity: string; status: string; started_at: string | null; section_code: string | null }[]
   >([]);
@@ -95,20 +98,20 @@ export default function ExecBrief({ principal }: Props) {
     setLoading(true);
     setError(null);
     try {
-      const [partnersData, runsData, incidentsData] = await Promise.all([
+      const [partnersData, aiDomainRows, incidentsData] = await Promise.all([
         fetchFederationPartners({ strict: true }).catch(() => [] as FederationPartner[]),
-        apiFetchJson<{ items: { positive_count: number; node_count: number; prediction_type: string }[] }>(
-          endpoints.aiTrainingRuns(1, 0),
-          { method: "GET" },
-        ).catch(() => ({ items: [] })),
+        fetchGNNLatestRuns(undefined, { strict: true }).catch(() => [] as GNNDomainSummary[]),
         apiFetchJson<{ items: { incident_key: string; status: string; started_at: string | null; id: string; severity: string; section_code: string | null }[] }>(
           endpoints.defenseIncidents(10, 0),
           { method: "GET" },
         ).catch(() => ({ items: [] })),
       ]);
 
-      const latestRun = runsData.items?.[0] ?? null;
-      const highRiskCount = latestRun?.positive_count ?? 0;
+      const liveDomainRows = (aiDomainRows ?? []).filter((row) => row.latest_live_predictions);
+      const highRiskCount = liveDomainRows.reduce(
+        (sum, row) => sum + Number(row.latest_live_predictions?.high_risk_count ?? 0),
+        0,
+      );
       const partnerAlerts = (partnersData ?? []).filter((partner) => partner.status === "online").length;
 
       const activeRuns = (incidentsData.items ?? []).filter(
@@ -117,18 +120,26 @@ export default function ExecBrief({ principal }: Props) {
       const topRuns = (incidentsData.items ?? []).slice(0, 3);
 
       setPartners(partnersData ?? []);
+      setAiDomains(aiDomainRows ?? []);
       setIncidentRuns(topRuns);
       setThreat(computeThreatLevel(highRiskCount, partnerAlerts, activeRuns.length));
 
       // Build situation lines in plain English
       const lines: string[] = [];
-      if (latestRun) {
-        const domain = latestRun.prediction_type === "corruption_risk"
-          ? "government procurement fraud"
-          : "cyber and financial fraud";
-        lines.push(
-          `AI analysis flagged ${highRiskCount} high-risk entities across ${domain} patterns.`,
+      if (liveDomainRows.length > 0) {
+        const domainLabels = liveDomainRows.map((row) =>
+          row.prediction_type === "corruption_risk" ? "procurement corruption" : "cyber and fraud",
         );
+        const domain = Array.from(new Set(domainLabels)).join(" + ");
+        lines.push(
+          `Live AI scoring flags ${highRiskCount} entities above calibrated thresholds across ${domain} patterns.`,
+        );
+        const drifted = liveDomainRows.filter((row) => !row.run_prediction_alignment.window_matches);
+        if (drifted.length > 0) {
+          lines.push(
+            `${drifted.length} model lane${drifted.length > 1 ? "s" : ""} is scoring a newer live window than the latest benchmarked training run.`,
+          );
+        }
       }
       if (partnerAlerts >= 2) {
         lines.push(
@@ -252,6 +263,15 @@ export default function ExecBrief({ principal }: Props) {
               <li key={i} className="exec-situation-item">{line}</li>
             ))}
           </ul>
+          {aiDomains.length > 0 && (
+            <div className="muted" style={{ marginTop: 10, fontSize: "0.78rem" }}>
+              {aiDomains.map((row) => (
+                <span key={row.prediction_type} style={{ display: "inline-block", marginRight: 14 }}>
+                  {row.domain_label}: {row.status}
+                </span>
+              ))}
+            </div>
+          )}
         </section>
 
       </div>

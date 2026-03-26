@@ -195,8 +195,8 @@ def run_ingest(
         unique_dest_count = len(s["unique_dests"])
         attack_ratio = s["attack_count"] / max(1, s["event_count"])
         risk_flags: List[str] = []
-        if s["attack_count"] > 0:
-            risk_flags.append("DDOS_ALERT_SERVICE")
+        if attack_ratio > 0.5:
+            risk_flags.append("DDOS_ATTACK_SOURCE")
 
         snap_rows.append(
             {

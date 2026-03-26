@@ -114,6 +114,8 @@ export const endpoints = {
   // Defense & Containment
   defenseIncidents: (limit = 20, offset = 0) => withQuery("/v1/defense/incidents/runs", { limit, offset }),
   defenseIncidentsCreate: () => withBase("/v1/defense/incidents/runs"),
+  defenseIncidentActions: (limit = 50, offset = 0, runId?: string, sectionCode?: string, status?: string) =>
+    withQuery("/v1/defense/incidents/actions", { limit, offset, run_id: runId, section_code: sectionCode, status }),
   defenseActionCatalog: () => withBase("/v1/defense/actions/catalog"),
   defenseWebhooks: (section_code?: string) =>
     withQuery("/v1/defense/webhooks", section_code ? { section_code } : {}),
@@ -138,6 +140,8 @@ export const endpoints = {
 
   // AI / GNN
   aiTrainingRuns: (limit = 10, offset = 0) => withQuery("/v1/ai/gnn/runs", { limit, offset }),
+  aiLatestRuns: (predictionType?: string) => withQuery("/v1/ai/gnn/latest-runs", { prediction_type: predictionType }),
+  aiDomainHealth: (predictionType?: string) => withQuery("/v1/ai/gnn/domain-health", { prediction_type: predictionType }),
   aiGNNTrain: () => withBase("/v1/ai/gnn/train"),
   aiIndicatorsSummary: (days = 7) => withQuery("/v1/ai/indicators/summary", { days }),
   aiDriftReports: (limit = 20, offset = 0, predictionType?: string, status?: string) =>

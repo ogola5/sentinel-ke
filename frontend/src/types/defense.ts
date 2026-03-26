@@ -24,12 +24,12 @@ export interface DefenseActionDefinition {
 
 export interface ContainmentActionRecord {
   id?: string;
-  run_id?: string;
+  run_id?: string | null;
   section_code: string | null;
   action_type: string;
   target: string;
-  status: "queued" | "executed" | "failed";
-  executed_by?: string;
+  status: "queued" | "executed" | "no_integration" | "failed";
+  executed_by?: string | null;
   executed_at?: string;
   details_json: Record<string, unknown>;
   created_at?: string;
@@ -51,7 +51,7 @@ export interface WebhookDeliveryRecord {
   action_type: string;
   target: string;
   webhook_url: string;
-  status: "pending" | "delivered" | "failed";
+  status: "pending" | "delivered" | "no_integration" | "failed";
   http_status_code: number | null;
   attempt_count: number;
   last_attempted_at: string | null;
@@ -112,7 +112,7 @@ export interface IncidentActionExecutionResult {
   actions: Array<{
     action_type: string;
     target: string;
-    status: "executed" | "failed";
+    status: "executed" | "no_integration" | "failed";
     details: Record<string, unknown>;
   }>;
 }

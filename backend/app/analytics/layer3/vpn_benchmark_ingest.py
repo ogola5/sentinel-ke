@@ -169,9 +169,9 @@ def run_ingest(
         items = items[: max(0, int(max_records))]
 
     for entity_key, s in items:
-        # An IP is flagged VPN if the majority of its flows are VPN
+        # Keep mixed traffic conservative: VPN must be the strict majority.
         vpn_ratio = s["vpn_count"] / max(1, s["conn_count"])
-        is_vpn_entity = s["vpn_count"] > 0
+        is_vpn_entity = vpn_ratio > 0.5
         risk_flags: List[str] = ["VPN_CLUSTER_MEMBER"] if is_vpn_entity else []
 
         avg_duration = s["total_duration_ms"] / max(1, s["conn_count"])

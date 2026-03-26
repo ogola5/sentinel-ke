@@ -4,6 +4,8 @@ import type {
   AIFeedback,
   AIDriftReport,
   AIPrediction,
+  GNNDomainHealth,
+  GNNDomainSummary,
   AIScenarioForecast,
   CryptoPosture,
   EntityTrustSummary,
@@ -92,6 +94,42 @@ export async function fetchGNNTrainingRuns(limit = 10, options: QueryOptions = {
       endpoints.aiTrainingRuns(limit),
     );
     return Array.isArray(data) ? data : (data.items ?? []);
+  } catch (err) {
+    if (options.strict || !(err instanceof ApiError) || err.status >= 500 || err.status === 401 || err.status === 403) {
+      throw err;
+    }
+    return [];
+  }
+}
+
+export async function fetchGNNLatestRuns(
+  predictionType?: string,
+  options: QueryOptions = {},
+): Promise<GNNDomainSummary[]> {
+  try {
+    const data = await apiFetchJson<ListResponse<GNNDomainSummary> | { items?: GNNDomainSummary[] }>(
+      endpoints.aiLatestRuns(predictionType),
+    );
+    if (Array.isArray(data)) return data;
+    return data.items ?? [];
+  } catch (err) {
+    if (options.strict || !(err instanceof ApiError) || err.status >= 500 || err.status === 401 || err.status === 403) {
+      throw err;
+    }
+    return [];
+  }
+}
+
+export async function fetchGNNDomainHealth(
+  predictionType?: string,
+  options: QueryOptions = {},
+): Promise<GNNDomainHealth[]> {
+  try {
+    const data = await apiFetchJson<ListResponse<GNNDomainHealth> | { items?: GNNDomainHealth[] }>(
+      endpoints.aiDomainHealth(predictionType),
+    );
+    if (Array.isArray(data)) return data;
+    return data.items ?? [];
   } catch (err) {
     if (options.strict || !(err instanceof ApiError) || err.status >= 500 || err.status === 401 || err.status === 403) {
       throw err;
