@@ -19,6 +19,9 @@ Performance/SLO evidence log:
 Production deployment proof package:
 `docs/PRODUCTION_DEPLOYMENT_PROOF.md`
 
+Operational readiness proof package:
+`docs/OPERATIONAL_READINESS_PROOF.md`
+
 API examples for frontend/integration consumers:
 `docs/API_CONSUMER_GUIDE.md`
 

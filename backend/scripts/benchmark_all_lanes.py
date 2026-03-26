@@ -13,8 +13,8 @@ Expected output:
 ║ Lane         ║ Dataset  ║ AUC     ║ Nodes  ║ Edges  ║ Holdout      ║
 ╠══════════════╬══════════╬═════════╬════════╬════════╬══════════════╣
 ║ Cyber        ║ Real IOC ║ 0.8928  ║ 97     ║ 237    ║ Temporal     ║
-║ Fraud        ║ PaySim   ║ 0.97*   ║ 50k+   ║ -      ║ Temporal     ║
-║ Corruption   ║ PPRA/KL  ║ TBD     ║ 1982   ║ 4158   ║ Temporal     ║
+║ Fraud        ║ PaySim   ║ PENDING ║ --     ║ --     ║ Temporal     ║
+║ Corruption   ║ PPRA/KL  ║ TBD     ║ --     ║ --     ║ Temporal     ║
 ╚══════════════╩══════════╩═════════╩════════╩════════╩══════════════╝
 """
 from __future__ import annotations
@@ -107,13 +107,12 @@ def _collect_lane_data() -> list[dict]:
             "status":  "blocked",
         })
     else:
-        # No artifact yet — use known-good benchmark values as placeholders
         rows.append({
             "lane":    "Cyber",
             "dataset": "Real IOC",
-            "auc":     "0.8928",
-            "nodes":   "97",
-            "edges":   "237",
+            "auc":     "PENDING",
+            "nodes":   "--",
+            "edges":   "--",
             "holdout": "Temporal",
             "status":  "no_artifact",
         })
@@ -140,8 +139,8 @@ def _collect_lane_data() -> list[dict]:
         rows.append({
             "lane":    "Fraud",
             "dataset": "PaySim",
-            "auc":     "0.97*",
-            "nodes":   "50k+",
+            "auc":     "PENDING",
+            "nodes":   "--",
             "edges":   "--",
             "holdout": "Temporal",
             "status":  "no_artifact",
@@ -175,8 +174,8 @@ def _collect_lane_data() -> list[dict]:
             "lane":    "Corruption",
             "dataset": "PPRA/KL",
             "auc":     "TBD",
-            "nodes":   "1982",
-            "edges":   "4158",
+            "nodes":   "--",
+            "edges":   "--",
             "holdout": "Temporal",
             "status":  "no_artifact",
         })

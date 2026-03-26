@@ -138,7 +138,7 @@ The goal is a security and economic integrity backbone that can serve every sect
 - Early warning system with confidence signals
 - Alert explainability and evidence summaries
 - National cyber drills simulator
-- Forensic evidence export (court-ready)
+- Forensic evidence export for legal review
 - Infrastructure sabotage alerts (energy, water, transport)
 - Cross-border collaboration hub
 

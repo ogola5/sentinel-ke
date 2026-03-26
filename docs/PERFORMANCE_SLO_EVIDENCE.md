@@ -11,7 +11,7 @@ This document captures measured API latency/throughput from the running local st
 - Stack: local Docker Compose (`sentinel-backend`, `sentinel-postgres`, `sentinel-redpanda`, `sentinel-neo4j`, `sentinel-opensearch`)
 - API host: `http://localhost:8000`
 - Tool: ApacheBench (`ab`)
-- Auth header used: `X-API-Key: dev-secret-key`
+- Auth header used: `X-API-Key: <FRONTEND_API_KEY from .env>`
 
 ## Benchmarks
 
@@ -20,7 +20,7 @@ This document captures measured API latency/throughput from the running local st
 Command:
 
 ```bash
-REQUESTS=120 CONCURRENCY=10 HUB_API_KEY=dev-secret-key BASE_URL=http://localhost:8000 \
+REQUESTS=120 CONCURRENCY=10 HUB_API_KEY=<FRONTEND_API_KEY> BASE_URL=http://localhost:8000 \
 bash backend/scripts/load_test.sh
 ```
 
@@ -39,7 +39,7 @@ Observed:
 Command:
 
 ```bash
-ab -n 180 -c 20 -H "X-API-Key: dev-secret-key" http://localhost:8000/v1/metrics
+ab -n 180 -c 20 -H "X-API-Key: <FRONTEND_API_KEY>" http://localhost:8000/v1/metrics
 ```
 
 Observed:

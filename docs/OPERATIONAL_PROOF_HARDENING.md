@@ -163,6 +163,29 @@ This makes the probe useful for:
 - RBAC sanity
 - central vs section access proof
 
+## 4.1 Lightweight Operational Proof Package
+
+For a broader live snapshot that stays conservative about claims, use the
+new proof helper:
+
+```bash
+docker exec sentinel-ke-backend-1 python /app/scripts/collect_operational_proof.py \
+  --base-url http://localhost:8000 \
+  --api-key "$FRONTEND_API_KEY" \
+  --section-username cbk_analyst \
+  --section-password 'Demo@CBK2026!' \
+  --central-username ncsc_supervisor \
+  --central-password 'Demo@NCSC2026!' \
+  --out /app/artifacts/operational_proof_report.json
+```
+
+Expected coverage:
+- robustness: health, readiness, metrics, latency, schema contract, worker freshness
+- trust: live platform trust summary plus section/central auth and RBAC checks
+- integration: campaign-to-case-to-graph flow, federation signals, economy summaries
+
+The helper records skipped optional evidence as skipped, not as success.
+
 ## 5. What Is Now Safe To Claim
 
 You can now safely say:
@@ -170,6 +193,7 @@ You can now safely say:
 - PaySim benchmark runs are reproducible when `--reset-window` is used
 - benchmark artifacts record the exact CSV identity and run configuration
 - readiness probe can verify both platform health and auth/RBAC basics
+- the live proof helper summarizes observed robustness, trust, and integration evidence without overstating readiness
 
 ## 6. What Still Requires Rehearsal, Not Just Code
 

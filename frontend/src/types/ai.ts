@@ -93,6 +93,17 @@ export interface GNNDomainHealth {
   real_data_gate_passed?: boolean | null;
 }
 
+export interface OperationalHealthSnapshot {
+  gnn_loaded: boolean;
+  gnn_model_version?: string | null;
+  gnn_prediction_type?: string | null;
+  schema_contract_ok: boolean;
+  schema_missing_count: number;
+  federation_signed_requests_required: boolean;
+  legal_anchor_integrity?: string | null;
+  federation_partners?: number | null;
+}
+
 export interface AIPrediction {
   id: string;
   entity_key: string;
@@ -304,6 +315,7 @@ export interface PlatformTrustSummary {
     graph_age_hours?: number | null;
     intel_age_hours?: number | null;
     latest_prediction_at?: string | null;
+    latest_prediction_source?: string | null;
     latest_explanation_at?: string | null;
     latest_graph_snapshot_at?: string | null;
     latest_threat_intel_at?: string | null;
@@ -335,6 +347,13 @@ export interface PlatformTrustSummary {
     rollout_status?: string | null;
     label_caveat?: string | null;
     status: "pass" | "warn" | "fail";
+  }>;
+  worker_freshness?: Array<{
+    worker_name?: string;
+    freshness?: string;
+    last_status?: string | null;
+    last_heartbeat_at?: string | null;
+    age_seconds?: number | null;
   }>;
   checks: TrustCheck[];
   recommended_actions: string[];

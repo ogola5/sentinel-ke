@@ -66,6 +66,7 @@ from app.analytics.layer3.gnn_train_worker import (
     _latest_feedback_overrides,
     _mark_feedback_consumed,
     _operating_metrics_from_thresholds,
+    _persist_thresholds,
 )
 from app.analytics.layer3.post_prediction_pipeline import run_post_prediction_pipeline
 from app.analytics.layer3.worker_heartbeat import mark_worker_finished, mark_worker_started
@@ -924,6 +925,14 @@ def run_once(
         )
         db.add(run)
         db.flush()
+        threshold_upserts = _persist_thresholds(
+            db,
+            thresholds=thresholds,
+            model_version=model_version,
+            prediction_type=CORRUPTION_PREDICTION_TYPE,
+            window_key=dataset.window_key,
+            window_end=dataset.window_end,
+        )
 
         created = updated = 0
         for i in range(len(dataset.entity_keys)):
@@ -1007,6 +1016,7 @@ def run_once(
         "positive_count":  dataset.positive_count,
         "negative_count":  dataset.negative_count,
         "predictions":     created,
+        "thresholds_upserted": threshold_upserts,
         "feedback_overrides_applied": feedback_metrics["override_count"],
         "feedback_consumed": consumed_feedback,
         "benchmarkable": bool(benchmark_readiness.get("benchmarkable")),

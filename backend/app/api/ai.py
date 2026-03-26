@@ -66,7 +66,17 @@ def _fairness_blocked(metrics_json: dict[str, Any] | None) -> bool:
     metrics = metrics_json or {}
     fairness = metrics.get("fairness") or {}
     fairness_gate = metrics.get("fairness_gate") or {}
-    disparity = fairness.get("max_positive_rate_disparity")
+    if "passed" in fairness_gate:
+        return (
+            not bool(fairness_gate.get("passed"))
+            and not bool(fairness_gate.get("override_applied", False))
+        )
+    gate_metric = str(fairness.get("gate_metric") or "").strip().lower()
+    disparity = (
+        fairness.get("max_positive_rate_gap")
+        if gate_metric == "max_positive_rate_gap"
+        else fairness.get("max_positive_rate_disparity")
+    )
     try:
         disparity_value = float(disparity) if disparity is not None else 0.0
     except (TypeError, ValueError):
@@ -350,21 +360,20 @@ def _serialize_gnn_run(row: GNNTrainingRun | None) -> dict[str, Any] | None:
     }
 
 
-def _latest_prediction_window_summary(db: Session, prediction_type: str) -> dict[str, Any] | None:
-    latest_prediction = (
-        db.query(AIPrediction)
-        .filter(AIPrediction.prediction_type == prediction_type)
-        .order_by(AIPrediction.window_end.desc(), AIPrediction.created_at.desc())
-        .first()
-    )
-    if latest_prediction is None:
+def _prediction_window_summary(
+    db: Session,
+    *,
+    prediction_type: str,
+    window_key: str | None,
+    window_end: datetime | None,
+) -> dict[str, Any] | None:
+    if not window_key or window_end is None:
         return None
-
     rows = (
         db.query(AIPrediction)
         .filter(AIPrediction.prediction_type == prediction_type)
-        .filter(AIPrediction.window_key == latest_prediction.window_key)
-        .filter(AIPrediction.window_end == latest_prediction.window_end)
+        .filter(AIPrediction.window_key == window_key)
+        .filter(AIPrediction.window_end == window_end)
         .order_by(AIPrediction.score.desc())
         .all()
     )
@@ -384,7 +393,7 @@ def _latest_prediction_window_summary(db: Session, prediction_type: str) -> dict
     scored_rows = [row for row in rows if not bool(row.abstained)]
     latest_created_at = max(
         (row.created_at for row in rows if isinstance(row.created_at, datetime)),
-        default=latest_prediction.created_at,
+        default=None,
     )
     avg_score = (
         round(sum(float(row.score or 0.0) for row in scored_rows) / len(scored_rows), 4)
@@ -392,9 +401,9 @@ def _latest_prediction_window_summary(db: Session, prediction_type: str) -> dict
     )
     return {
         "prediction_type": prediction_type,
-        "window_key": latest_prediction.window_key,
-        "window_end": latest_prediction.window_end.isoformat(),
-        "model_version": latest_prediction.model_version,
+        "window_key": window_key,
+        "window_end": window_end.isoformat(),
+        "model_version": rows[0].model_version,
         "prediction_count": len(rows),
         "flagged_count": len(scored_rows),
         "high_risk_count": sum(1 for row in scored_rows if _is_above_threshold(row)),
@@ -405,6 +414,23 @@ def _latest_prediction_window_summary(db: Session, prediction_type: str) -> dict
     }
 
 
+def _latest_prediction_window_summary(db: Session, prediction_type: str) -> dict[str, Any] | None:
+    latest_prediction = (
+        db.query(AIPrediction)
+        .filter(AIPrediction.prediction_type == prediction_type)
+        .order_by(AIPrediction.window_end.desc(), AIPrediction.created_at.desc())
+        .first()
+    )
+    if latest_prediction is None:
+        return None
+    return _prediction_window_summary(
+        db,
+        prediction_type=prediction_type,
+        window_key=latest_prediction.window_key,
+        window_end=latest_prediction.window_end,
+    )
+
+
 def _build_domain_summary(db: Session, prediction_type: str) -> dict[str, Any]:
     latest_run = (
         db.query(GNNTrainingRun)
@@ -413,7 +439,14 @@ def _build_domain_summary(db: Session, prediction_type: str) -> dict[str, Any]:
         .first()
     )
     latest_run_payload = _serialize_gnn_run(latest_run)
-    live_predictions = _latest_prediction_window_summary(db, prediction_type)
+    latest_available_live_predictions = _latest_prediction_window_summary(db, prediction_type)
+    matched_live_predictions = _prediction_window_summary(
+        db,
+        prediction_type=prediction_type,
+        window_key=str(latest_run_payload.get("window_key") or "") or None,
+        window_end=latest_run.window_end if latest_run is not None else None,
+    )
+    live_predictions = matched_live_predictions or latest_available_live_predictions
     windows_match = bool(
         latest_run_payload
         and live_predictions
@@ -458,7 +491,295 @@ def _build_domain_summary(db: Session, prediction_type: str) -> dict[str, Any]:
         "run_prediction_alignment": {
             "window_matches": windows_match,
             "model_version_matches": model_versions_match,
+            "matched_run_window_predictions": bool(matched_live_predictions),
+            "latest_available_window_key": latest_available_live_predictions.get("window_key") if latest_available_live_predictions else None,
+            "latest_available_window_end": latest_available_live_predictions.get("window_end") if latest_available_live_predictions else None,
+            "newer_prediction_window_available": bool(
+                latest_available_live_predictions
+                and live_predictions
+                and (
+                    latest_available_live_predictions.get("window_key") != live_predictions.get("window_key")
+                    or latest_available_live_predictions.get("window_end") != live_predictions.get("window_end")
+                )
+            ),
         },
+    }
+
+
+def _latest_drift_summary(
+    db: Session,
+    *,
+    prediction_type: str,
+    model_version: str | None,
+) -> dict[str, Any] | None:
+    q = db.query(AIDriftReport).filter(AIDriftReport.prediction_type == prediction_type)
+    if model_version:
+        q = q.filter(AIDriftReport.model_version == model_version)
+    row = q.order_by(AIDriftReport.window_end.desc(), AIDriftReport.created_at.desc()).first()
+    if row is None:
+        return None
+    return {
+        "model_version": row.model_version,
+        "window_key": row.window_key,
+        "window_end": row.window_end.isoformat(),
+        "status": row.status,
+        "drift_score": float(row.drift_score or 0.0),
+        "created_at": row.created_at.isoformat(),
+    }
+
+
+def _latest_rollout_summary(db: Session, *, prediction_type: str) -> dict[str, Any] | None:
+    row = (
+        db.query(AIModelRollout)
+        .filter(AIModelRollout.prediction_type == prediction_type)
+        .order_by(AIModelRollout.updated_at.desc(), AIModelRollout.created_at.desc())
+        .first()
+    )
+    if row is None:
+        return None
+    return {
+        "rollout_id": row.rollout_id,
+        "active_model_version": row.active_model_version,
+        "shadow_model_version": row.shadow_model_version,
+        "rollout_mode": row.rollout_mode,
+        "status": row.status,
+        "canary_ratio": float(row.canary_ratio or 0.0),
+        "updated_at": row.updated_at.isoformat(),
+    }
+
+
+def _threshold_pointer_summary(
+    db: Session,
+    *,
+    prediction_type: str,
+    model_version: str | None,
+    window_key: str | None = None,
+    window_end: str | None = None,
+) -> dict[str, Any]:
+    q = db.query(AIRiskThreshold).filter(AIRiskThreshold.prediction_type == prediction_type)
+    if model_version:
+        q = q.filter(AIRiskThreshold.model_version == model_version)
+    rows = q.order_by(AIRiskThreshold.window_end.desc(), AIRiskThreshold.entity_type.asc()).all()
+    path = f"/v1/ai/thresholds?prediction_type={prediction_type}"
+    if model_version:
+        path = f"{path}&model_version={model_version}"
+    if not rows:
+        return {
+            "path": path,
+            "available": False,
+            "window_key": None,
+            "window_end": None,
+            "entity_type_count": 0,
+            "items": [],
+        }
+
+    latest = rows[0]
+    target_rows = latest
+    if window_key and window_end:
+        matching_rows = [
+            row
+            for row in rows
+            if row.window_key == window_key and row.window_end.isoformat() == window_end
+        ]
+        if matching_rows:
+            target_rows = matching_rows[0]
+    latest_rows = [
+        row
+        for row in rows
+        if row.window_key == target_rows.window_key
+        and row.window_end == target_rows.window_end
+        and row.model_version == target_rows.model_version
+    ]
+    return {
+        "path": path,
+        "available": True,
+        "window_key": target_rows.window_key,
+        "window_end": target_rows.window_end.isoformat(),
+        "entity_type_count": len(latest_rows),
+        "items": [
+            {
+                "entity_type": row.entity_type,
+                "threshold_score": float(row.threshold_score or 0.0),
+                "method": row.method,
+                "sample_count": int(row.sample_count or 0),
+                "positive_count": int(row.positive_count or 0),
+            }
+            for row in latest_rows[:5]
+        ],
+    }
+
+
+def _baseline_pointer_summary(db: Session, *, window_key: str | None) -> dict[str, Any]:
+    path = "/v1/ai/baselines"
+    if not window_key:
+        return {
+            "path": path,
+            "available": False,
+            "window_key": None,
+            "coverage_count": 0,
+            "latest_updated_at": None,
+        }
+    path = f"{path}?window_key={window_key}"
+    rows = (
+        db.query(EntityRiskBaseline)
+        .filter(EntityRiskBaseline.window_key == window_key)
+        .order_by(EntityRiskBaseline.updated_at.desc())
+        .all()
+    )
+    latest = rows[0] if rows else None
+    return {
+        "path": path,
+        "available": bool(rows),
+        "window_key": window_key,
+        "coverage_count": len(rows),
+        "latest_updated_at": latest.updated_at.isoformat() if latest else None,
+    }
+
+
+def _judge_lane_caveats(
+    *,
+    latest_run: dict[str, Any] | None,
+    live_predictions: dict[str, Any] | None,
+    alignment: dict[str, Any],
+    thresholds: dict[str, Any],
+    baselines: dict[str, Any],
+    drift: dict[str, Any] | None,
+) -> list[str]:
+    caveats: list[str] = []
+    if latest_run is None:
+        caveats.append("No training run is recorded for this lane yet.")
+    if live_predictions is None:
+        caveats.append("No live predictions are recorded for this lane yet.")
+    if latest_run and live_predictions and not bool(alignment.get("window_matches")):
+        caveats.append(
+            "Live predictions and the latest recorded run are from different windows."
+        )
+    if latest_run and live_predictions and not bool(alignment.get("model_version_matches")):
+        caveats.append(
+            "Live predictions are not aligned to the latest recorded model version."
+        )
+    if bool(alignment.get("newer_prediction_window_available")):
+        caveats.append(
+            "A newer live prediction window exists, but this readiness view is anchored to the latest benchmarked run window for like-for-like comparison."
+        )
+    if latest_run and latest_run.get("fairness_blocked"):
+        caveats.append("The latest run is currently blocked by the fairness guard.")
+    if latest_run and not latest_run.get("real_data_gate_passed", False):
+        caveats.append("The latest run did not pass the real-data gate.")
+    evaluation_protocol = dict((latest_run or {}).get("metrics", {}).get("evaluation_protocol") or {})
+    if evaluation_protocol and not bool(evaluation_protocol.get("benchmarkable", False)):
+        reasons = list(evaluation_protocol.get("benchmark_reasons") or [])
+        if reasons:
+            caveats.append(
+                "Benchmark readiness is not yet met: " + ", ".join(str(reason) for reason in reasons[:3]) + "."
+            )
+        else:
+            caveats.append("Benchmark readiness is not yet met for the latest run.")
+    label_caveat = str((latest_run or {}).get("metrics", {}).get("label_strategy", {}).get("eval_caveat") or "").strip()
+    if label_caveat:
+        caveats.append(label_caveat)
+    if drift and str(drift.get("status") or "").lower() not in {"ok", "stable", "unknown"}:
+        caveats.append(f"Latest drift status is {drift['status']}.")
+    if not thresholds.get("available"):
+        caveats.append("No threshold snapshot is recorded for this lane and model yet.")
+    if latest_run and not baselines.get("available"):
+        caveats.append(f"No entity baselines are recorded for window {latest_run.get('window_key')}.")
+    return list(dict.fromkeys(caveats))
+
+
+def _build_judge_lane_summary(db: Session, prediction_type: str) -> dict[str, Any]:
+    summary = _build_domain_summary(db, prediction_type)
+    latest_run = dict(summary.get("latest_run") or {})
+    live_predictions = dict(summary.get("latest_live_predictions") or {})
+    latest_run_payload = latest_run or None
+    live_predictions_payload = live_predictions or None
+    drift = _latest_drift_summary(
+        db,
+        prediction_type=prediction_type,
+        model_version=str(latest_run.get("model_version") or "") or None,
+    )
+    rollout = _latest_rollout_summary(db, prediction_type=prediction_type)
+    thresholds = _threshold_pointer_summary(
+        db,
+        prediction_type=prediction_type,
+        model_version=str(latest_run.get("model_version") or "") or None,
+        window_key=str(latest_run.get("window_key") or "") or None,
+        window_end=str(latest_run.get("window_end") or "") or None,
+    )
+    baselines = _baseline_pointer_summary(
+        db,
+        window_key=str(latest_run.get("window_key") or live_predictions.get("window_key") or "") or None,
+    )
+    fairness = dict(latest_run.get("fairness") or {})
+    operating_metrics = dict(latest_run.get("operating_metrics") or {})
+    evaluation_protocol = dict(latest_run.get("metrics", {}).get("evaluation_protocol") or {})
+    caveats = _judge_lane_caveats(
+        latest_run=latest_run_payload,
+        live_predictions=live_predictions_payload,
+        alignment=dict(summary.get("run_prediction_alignment") or {}),
+        thresholds=thresholds,
+        baselines=baselines,
+        drift=drift,
+    )
+    return {
+        "prediction_type": prediction_type,
+        "domain_label": summary.get("domain_label"),
+        "status": summary.get("status"),
+        "status_reasons": list(summary.get("status_reasons") or []),
+        "latest_run": (
+            {
+                "id": latest_run.get("id"),
+                "model_version": latest_run.get("model_version"),
+                "source_backend": latest_run.get("source_backend"),
+                "window_key": latest_run.get("window_key"),
+                "window_end": latest_run.get("window_end"),
+                "created_at": latest_run.get("created_at"),
+                "node_count": latest_run.get("node_count"),
+                "edge_count": latest_run.get("edge_count"),
+                "positive_count": latest_run.get("positive_count"),
+                "auc": latest_run.get("auc"),
+                "precision": latest_run.get("precision"),
+                "recall": latest_run.get("recall"),
+                "f1": latest_run.get("f1"),
+            }
+            if latest_run_payload else None
+        ),
+        "live_prediction_alignment": {
+            "window_matches": bool((summary.get("run_prediction_alignment") or {}).get("window_matches")),
+            "model_version_matches": bool((summary.get("run_prediction_alignment") or {}).get("model_version_matches")),
+            "latest_window_key": live_predictions.get("window_key"),
+            "latest_window_end": live_predictions.get("window_end"),
+            "prediction_count": live_predictions.get("prediction_count"),
+            "flagged_count": live_predictions.get("flagged_count"),
+            "high_risk_count": live_predictions.get("high_risk_count"),
+            "abstained_count": live_predictions.get("abstained_count"),
+            "avg_score": live_predictions.get("avg_score"),
+            "max_score": live_predictions.get("max_score"),
+        },
+        "kpi_evidence": {
+            "training_metrics": {
+                "auc": latest_run.get("auc"),
+                "precision": latest_run.get("precision"),
+                "recall": latest_run.get("recall"),
+                "f1": latest_run.get("f1"),
+            },
+            "operating_metrics": operating_metrics,
+            "thresholds": thresholds,
+            "baselines": baselines,
+        },
+        "robustness_trust_signals": {
+            "fairness_blocked": bool(latest_run.get("fairness_blocked", False)),
+            "fairness_flag": fairness.get("fairness_flag"),
+            "max_positive_rate_disparity": fairness.get("max_positive_rate_disparity"),
+            "real_data_gate_passed": bool(latest_run.get("real_data_gate_passed", False)),
+            "benchmarkable": bool(evaluation_protocol.get("benchmarkable", False)) if evaluation_protocol else None,
+            "benchmark_reasons": list(evaluation_protocol.get("benchmark_reasons") or []) if evaluation_protocol else [],
+            "drift_status": drift.get("status") if drift else None,
+            "drift_score": drift.get("drift_score") if drift else None,
+            "rollout_mode": rollout.get("rollout_mode") if rollout else None,
+            "rollout_status": rollout.get("status") if rollout else None,
+        },
+        "honest_caveats": caveats,
     }
 
 
@@ -646,6 +967,49 @@ def gnn_domain_health(
             }
         )
     return {"items": items}
+
+
+@router.get("/judge-readiness")
+def judge_readiness_summary(
+    prediction_type: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+):
+    prediction_types = [prediction_type] if prediction_type else list(DOMAIN_PREDICTION_TYPES)
+    lanes = [_build_judge_lane_summary(db, kind) for kind in prediction_types]
+    statuses = [str(item.get("status") or "missing") for item in lanes]
+    overall_status = "ok"
+    if not lanes or all(status == "missing" for status in statuses):
+        overall_status = "missing"
+    elif any(status in {"warn", "missing"} for status in statuses):
+        overall_status = "warn"
+    aggregated_caveats = [
+        "This summary shows operational readiness evidence and caveats; it is not a substitute for legal findings or analyst verification.",
+    ]
+    for lane in lanes:
+        for caveat in list(lane.get("honest_caveats") or []):
+            aggregated_caveats.append(f"{lane.get('domain_label')}: {caveat}")
+    return {
+        "status": overall_status,
+        "headline": (
+            "Judge-facing readiness evidence is available."
+            if overall_status == "ok"
+            else (
+                "Judge-facing readiness evidence is available with caveats."
+                if overall_status == "warn"
+                else "Judge-facing readiness evidence is not available yet."
+            )
+        ),
+        "lanes": lanes,
+        "honest_caveats": list(dict.fromkeys(aggregated_caveats)),
+        "evidence_endpoints": {
+            "latest_runs": "/v1/ai/gnn/latest-runs",
+            "domain_health": "/v1/ai/gnn/domain-health",
+            "thresholds": "/v1/ai/thresholds",
+            "baselines": "/v1/ai/baselines",
+            "trust_summary": "/v1/ai/trust/summary",
+        },
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
 
 
 class GNNTrainRequest(BaseModel):

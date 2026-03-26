@@ -23,24 +23,24 @@ Result:
 ```json
 {
   "status": "ok",
-  "gnn_run_id": "98d56b10-f97b-4a8f-b07b-fece9403e905",
+  "gnn_run_id": "f635f4f9-bdea-43ec-a262-028fc7332c73",
   "window_key": "Wmid",
   "window_end": "2026-03-24T20:39:28.757381+00:00",
   "nodes": 97,
   "edges": 237,
   "positive_count": 44,
   "negative_count": 53,
-  "artifact_path": "/app/artifacts/gnn/98d56b10-f97b-4a8f-b07b-fece9403e905.pt",
+  "artifact_path": "/app/artifacts/gnn/f635f4f9-bdea-43ec-a262-028fc7332c73.pt",
   "metrics": {
-    "accuracy": 0.56701,
-    "precision": 1.0,
-    "recall": 0.045455,
-    "f1": 0.086957,
-    "auc": 0.790309,
-    "brier": 0.239416,
-    "ece": 0.035558,
-    "calibration_ece": 0.510546,
-    "calibration_mce": 0.511958
+    "accuracy": 0.546392,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "auc": 0.892796,
+    "brier": 0.2407,
+    "ece": 0.00808,
+    "calibration_ece": 0.536086,
+    "calibration_mce": 0.536086
   }
 }
 ```
@@ -48,8 +48,9 @@ Result:
 Assessment:
 
 - Usable as a live cyber demo path.
-- Not yet strong enough to present as a headline benchmark.
-- The slice is still small and recall is low even though AUC is meaningfully above chance.
+- Strong enough to present as the current cyber benchmark, but only as a ranking benchmark with a small real graph.
+- The fixed 0.5-threshold precision/recall are weak; judges should hear the AUC story and the threshold caveat together.
+- The slice is still small even though the ranking separation is meaningfully above chance.
 
 ## Corruption: `Wcorruption`
 

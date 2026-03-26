@@ -10,6 +10,7 @@ import type {
   CryptoPosture,
   EntityTrustSummary,
   GNNTrainingRun,
+  OperationalHealthSnapshot,
   PlatformTrustSummary,
   SelfTestResult,
 } from "../types/ai";
@@ -339,6 +340,27 @@ export async function fetchEntityTrustSummary(
 export async function fetchPlatformTrustSummary(): Promise<PlatformTrustSummary | null> {
   try {
     return await apiFetchJson<PlatformTrustSummary>(endpoints.aiTrustSummary());
+  } catch {
+    return null;
+  }
+}
+
+export async function fetchOperationalHealthSnapshot(): Promise<OperationalHealthSnapshot | null> {
+  try {
+    const raw = await apiFetchJson<unknown>(endpoints.health());
+    const data = asRecord(raw);
+    const gnnMetrics = asRecord(data.gnn_metrics);
+
+    return {
+      gnn_loaded: asBoolean(data.gnn_loaded),
+      gnn_model_version: typeof data.gnn_model_version === "string" ? data.gnn_model_version : null,
+      gnn_prediction_type: typeof gnnMetrics.prediction_type === "string" ? gnnMetrics.prediction_type : null,
+      schema_contract_ok: asBoolean(data.schema_contract_ok),
+      schema_missing_count: asNumber(data.schema_missing_count, 0),
+      federation_signed_requests_required: asBoolean(data.federation_signed_requests_required),
+      legal_anchor_integrity: typeof data.legal_anchor_integrity === "string" ? data.legal_anchor_integrity : null,
+      federation_partners: data.federation_partners != null ? asNumber(data.federation_partners, 0) : null,
+    };
   } catch {
     return null;
   }

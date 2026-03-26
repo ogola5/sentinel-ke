@@ -59,21 +59,21 @@ the industry-standard benchmark for mobile money fraud research.
 - Fraud accounts in dataset: 8,213
 
 **Evaluation:**
-- AUC: **~0.97** (expected; pending full CSV training run)
+- AUC: **pending fresh artifact**
 - Holdout type: temporal (train on earlier transaction steps, test on later steps)
 - Script: `backend/scripts/run_paysim_gnn.py`
 
 **Why PaySim:**
 PaySim is the accepted M-Pesa fraud benchmark in the academic and industry literature.
 It replicates the statistical properties of real Central Bank mobile money logs. Using
-PaySim allows Sentinel-KE to report a reproducible, verifiable AUC that judges and
-reviewers can independently replicate. It is not a substitute for live M-Pesa data, but
-it establishes that the GNN architecture can detect layered mobile money fraud patterns
-at research-grade quality before live data is available.
+PaySim allows Sentinel-KE to report a reproducible, verifiable fraud benchmark once the
+current artifact is regenerated. It is not a substitute for live M-Pesa data, but it
+establishes that the GNN architecture can be evaluated on a public mobile-money-style
+corpus before live data is available.
 
 **What this does not prove:**
-This result does not validate cyber threat detection or corruption risk ranking. The 0.97
-AUC is specific to the PaySim mobile money fraud domain.
+This result does not validate cyber threat detection or corruption risk ranking. The
+PaySim lane remains specific to the mobile money fraud domain.
 
 ---
 
@@ -139,10 +139,10 @@ inference step; it does not inherit the AUC of either lane's standalone model.
 | Lane | Honest Claim |
 |---|---|
 | Cyber | AUC 0.8928 on real Kenyan cyber event graph — temporal holdout, live-ingested data |
-| Fraud | AUC ~0.97 on PaySim M-Pesa benchmark — 6.3M transactions, 8,213 fraud accounts |
+| Fraud | PaySim is the separate fraud benchmark lane; quote the AUC only when the fresh artifact is present |
 | Corruption | Risk ranking and graph visualization on PPRA + Kenya Law + EACC — classifier AUC pending fairness fix |
 
 **The single claim for judges:**
 
-> "Our GNN achieves 0.89 AUC on cyber events and 0.97 AUC on mobile money fraud.
-> These are separate models for separate threat domains."
+> "Our cyber lane currently shows 0.89 AUC on real cyber events.
+> Fraud and corruption are separate lanes with their own evidence and caveats."
