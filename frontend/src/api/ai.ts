@@ -6,10 +6,12 @@ import type {
   AIPrediction,
   GNNDomainHealth,
   GNNDomainSummary,
+  GNNScientificSummary,
   AIScenarioForecast,
   CryptoPosture,
   EntityTrustSummary,
   GNNTrainingRun,
+  JudgeReadinessPayload,
   OperationalHealthSnapshot,
   PlatformTrustSummary,
   SelfTestResult,
@@ -136,6 +138,33 @@ export async function fetchGNNDomainHealth(
       throw err;
     }
     return [];
+  }
+}
+
+export async function fetchGNNScientificSummary(
+  predictionType?: string,
+  limit = 5,
+  options: QueryOptions = {},
+): Promise<GNNScientificSummary[]> {
+  try {
+    const data = await apiFetchJson<ListResponse<GNNScientificSummary> | { items?: GNNScientificSummary[] }>(
+      endpoints.aiScientificSummary(predictionType, limit),
+    );
+    if (Array.isArray(data)) return data;
+    return data.items ?? [];
+  } catch (err) {
+    if (options.strict || !(err instanceof ApiError) || err.status >= 500 || err.status === 401 || err.status === 403) {
+      throw err;
+    }
+    return [];
+  }
+}
+
+export async function fetchJudgeReadiness(): Promise<JudgeReadinessPayload | null> {
+  try {
+    return await apiFetchJson<JudgeReadinessPayload>("/v1/ai/judge-readiness");
+  } catch {
+    return null;
   }
 }
 

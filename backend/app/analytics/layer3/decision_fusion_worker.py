@@ -57,6 +57,15 @@ def run_once(
     )
     if not preds:
         return 0
+    deduped_preds = []
+    seen_entities: set[str] = set()
+    for pred in preds:
+        entity_key = str(pred.entity_key)
+        if entity_key in seen_entities:
+            continue
+        seen_entities.add(entity_key)
+        deduped_preds.append(pred)
+    preds = deduped_preds
 
     path_rows = (
         db.query(AIAttackPathScore)

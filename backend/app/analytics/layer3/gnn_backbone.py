@@ -172,6 +172,8 @@ def assess_benchmark_readiness(
         "positive_count": positives,
         "negative_count": negatives,
         "negative_ratio": round(negative_ratio, 6),
+        "positive_ratio": round(float(positives / total), 6) if total > 0 else 0.0,
+        "balance_ratio": round(float(min(positives, negatives) / total), 6) if total > 0 else 0.0,
         "minimum_negative_count": min_negatives,
         "minimum_negative_ratio": min_ratio,
         "reasons": reasons,
@@ -712,6 +714,39 @@ def _recent_window_ends(
     return [row[0] for row in rows if row and row[0] is not None]
 
 
+def _window_scientific_score(dataset: GNNDataset) -> float:
+    total = max(1, int(len(dataset.entity_keys)))
+    positives = max(0, int(dataset.positive_count))
+    negatives = max(0, int(dataset.negative_count))
+    benign_negatives = max(0, int(dataset.benign_negative_count))
+    edges = max(0, int(len(dataset.edges)))
+    real_ratio = 0.0
+    values: list[float] = []
+    for meta in dataset.node_meta or []:
+        try:
+            values.append(float((meta or {}).get("real_signal_ratio") or 0.0))
+        except Exception:  # noqa: BLE001
+            continue
+    if values:
+        real_ratio = sum(values) / float(len(values))
+    balance = min(positives, negatives) / float(total)
+    support = math.log1p(total)
+    edge_support = math.log1p(edges)
+    imbalance = abs(positives - negatives) / float(total)
+    return round(
+        (
+            18.0 * balance
+            + 4.5 * support
+            + 1.8 * edge_support
+            + 1.2 * math.log1p(negatives)
+            + 0.8 * math.log1p(benign_negatives)
+            + 7.5 * max(0.0, min(1.0, real_ratio))
+            - 10.0 * imbalance
+        ),
+        6,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Dataset loader
 # ---------------------------------------------------------------------------
@@ -969,29 +1004,55 @@ def load_dataset(
             },
         )
 
-    fallback_dataset: Optional[GNNDataset] = None
+    ranked_candidates: List[Tuple[float, int, GNNDataset]] = []
     for index, candidate in enumerate(candidate_windows):
         dataset = _materialize(candidate)
         if dataset is None:
             continue
         selection_metadata = dict(dataset.selection_metadata)
+        scientific_score = _window_scientific_score(dataset)
+        readiness = dict(selection_metadata.get("benchmark_readiness") or {})
+        benchmarkable = bool(readiness.get("benchmarkable"))
         selection_metadata.update({
             "window_rank": index,
             "candidate_window_count": len(candidate_windows),
+            "scientific_score": scientific_score,
+            "benchmarkable": benchmarkable,
         })
         dataset = replace(dataset, selection_metadata=selection_metadata)
-        if fallback_dataset is None:
-            fallback_dataset = dataset
-        if explicit_window or bool((selection_metadata.get("benchmark_readiness") or {}).get("benchmarkable")):
-            return dataset
+        ranked_candidates.append(
+            (
+                scientific_score + (1000.0 if benchmarkable else -1000.0),
+                index,
+                dataset,
+            )
+        )
 
-    if fallback_dataset is None:
+    if not ranked_candidates:
         return None
 
-    selection_metadata = dict(fallback_dataset.selection_metadata)
+    ranked_candidates.sort(
+        key=lambda item: (
+            item[0],
+            item[2].positive_count,
+            item[2].negative_count,
+            item[2].benign_negative_count,
+            len(item[2].edges),
+            item[2].window_end,
+        ),
+        reverse=True,
+    )
+    chosen = ranked_candidates[0][2]
+    selection_metadata = dict(chosen.selection_metadata)
     readiness = dict(selection_metadata.get("benchmark_readiness") or {})
-    selection_metadata["selection_strategy"] = "latest_available_window_fallback"
-    selection_metadata["fallback_to_latest_window"] = True
-    readiness["fallback_used"] = True
+    if explicit_window:
+        selection_metadata["selection_strategy"] = "explicit_window"
+    elif bool(readiness.get("benchmarkable")):
+        selection_metadata["selection_strategy"] = "best_benchmarkable_window"
+    else:
+        selection_metadata["selection_strategy"] = "best_available_window_fallback"
+        selection_metadata["fallback_to_latest_window"] = True
+        readiness["fallback_used"] = True
     selection_metadata["benchmark_readiness"] = readiness
-    return replace(fallback_dataset, selection_metadata=selection_metadata)
+    selection_metadata["selected_scientific_score"] = ranked_candidates[0][0]
+    return replace(chosen, selection_metadata=selection_metadata)

@@ -11,6 +11,10 @@ The helper is intentionally conservative:
 - `degraded` means a required live check failed.
 - no output here should be treated as a claim about unrehearsed production readiness.
 
+The browser smoke suite now includes a preflight check. If the local sandbox blocks browser
+launch, the Playwright smoke tests skip with an explicit reason instead of failing deep inside
+Chrome startup.
+
 ## Command
 
 ```bash

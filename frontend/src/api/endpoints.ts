@@ -142,6 +142,8 @@ export const endpoints = {
   aiTrainingRuns: (limit = 10, offset = 0) => withQuery("/v1/ai/gnn/runs", { limit, offset }),
   aiLatestRuns: (predictionType?: string) => withQuery("/v1/ai/gnn/latest-runs", { prediction_type: predictionType }),
   aiDomainHealth: (predictionType?: string) => withQuery("/v1/ai/gnn/domain-health", { prediction_type: predictionType }),
+  aiScientificSummary: (predictionType?: string, limit = 5) =>
+    withQuery("/v1/ai/gnn/scientific-summary", { prediction_type: predictionType, limit }),
   aiGNNTrain: () => withBase("/v1/ai/gnn/train"),
   aiIndicatorsSummary: (days = 7) => withQuery("/v1/ai/indicators/summary", { days }),
   aiDriftReports: (limit = 20, offset = 0, predictionType?: string, status?: string) =>

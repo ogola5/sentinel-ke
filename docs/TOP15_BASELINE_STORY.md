@@ -49,9 +49,9 @@ That is the point of the baseline API. It is a reference frame, not a competitor
 
 | Lane | Judge-safe claim | What it is not |
 |---|---|---|
-| Cyber | `0.8928` AUC on a real Kenyan cyber event graph, with a temporal holdout and a small observed graph of `97` nodes / `237` edges. | It is not fraud performance and not corruption proof. |
+| Cyber | Strong thresholded operating metrics on a real Kenyan cyber event graph, with a temporal holdout and a small observed graph of `97` nodes / `237` edges. | It is not a strong ranking-AUC claim on the current live holdout, and it is not fraud performance or corruption proof. |
 | Fraud | PaySim is the fraud benchmark lane; the repo keeps it separate and requires a fresh artifact before quoting a judge-safe AUC. | It is not cyber performance and not corruption proof. |
-| Corruption | The corruption lane is a risk-ranking and graph-visualization lane over PPRA, Kenya Law, and EACC sources; classifier AUC is not yet judge-safe because fairness hardening is still in progress. | It is not legal adjudication and not a finished classifier claim. |
+| Corruption | The corruption lane is a risk-ranking and graph-visualization lane over PPRA, Kenya Law, and EACC sources, with live holdout AUC `0.9135` and fairness passed on the active window. | It is not legal adjudication and not fully adjudicated national ground truth. |
 
 ## Why The Separation Matters
 
@@ -68,10 +68,10 @@ The platform should therefore say:
 Use:
 
 - "Sentinel-KE evaluates separate AI lanes."
-- "The cyber lane has a measured AUC of 0.8928."
+- "The cyber lane has strong live operating metrics, but its current holdout AUC is scientifically weak because the holdout is class-thin."
 - "The fraud lane is benchmarked separately and requires a fresh artifact before quoting its AUC."
 - "The fraud lane uses PaySim as its benchmark corpus."
-- "The corruption lane currently provides risk ranking, not legal proof."
+- "The corruption lane currently provides strong risk ranking, not legal proof."
 - "The baseline is a rolling statistical reference."
 
 Avoid:
@@ -87,3 +87,5 @@ Avoid:
 If you need one sentence, use this:
 
 "Sentinel-KE has separate benchmark stories for cyber, fraud, and corruption; the baseline is a reference layer, not the model, and the repo keeps the claims separated by lane."
+
+For the live presentation order, use `docs/JUDGE_TOP15_SCRIPT.md` first, then this baseline story to answer follow-up questions.

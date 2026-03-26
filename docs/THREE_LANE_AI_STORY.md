@@ -31,15 +31,17 @@ operational OSINT network telemetry feeds
 - Relationships (edges): shared events, co-occurrence in threat feeds, IOC co-labeling
 
 **Evaluation:**
-- AUC: **0.8928**
-- Holdout type: temporal (train on earlier events, test on later events)
+- Holdout type: temporal recency holdout with class-support backfill
+- Operating metrics on the live benchmarked window: **F1 0.9412**, **precision 1.0**, **recall 0.8889**
+- Holdout ranking metric is currently weak: **AUC 0.0** on a holdout with `18` positives and `1` negative
 - Graph size at evaluation: 97 nodes, 237 edges
 
 **Benchmark statement:**
-The cyber GNN achieves AUC 0.8928 on a real Kenyan cyber event graph using a temporal
-holdout. This measures the model's ability to rank entity-level threat scores on
-live-ingested data, not synthetic data. The graph is small because it reflects real
-ingested event volume; it will grow as more feeds and telemetry are connected.
+The cyber GNN is now operationally aligned on a real Kenyan cyber event graph using a
+temporal split, live thresholds, live baselines, and a matched prediction window. The
+current judge-safe cyber claim is thresholded operating performance on live ingested
+data, not a strong ranking AUC. The holdout still has very thin negative support, so the
+ranking metric is scientifically weak even though the live operating point is strong.
 
 **What this does not prove:**
 This result does not validate fraud detection or corruption risk ranking. Cyber AUC is
@@ -88,13 +90,13 @@ PaySim lane remains specific to the mobile money fraud domain.
 - Entities (nodes): suppliers, government officials, tenders, contracts (1,982 nodes)
 - Relationships (edges): procurement relationships, payment chains, outcome linkages (4,158 edges)
 
-**Current status: Fairness hardening in progress**
+**Current status: operational ranking lane with mixed-supervision caveat**
 
-The corruption GNN is currently blocked at the fairness gate. The issue is entity-type
-label stratification: the current label distribution is uneven across entity types
-(suppliers vs. officials vs. tenders), which risks the model learning entity-type
-shortcuts rather than genuine corruption patterns. This must be corrected before
-reporting a classifier AUC would be meaningful or ethical.
+The corruption GNN now reports a live holdout AUC of **0.9135** with fairness passed on
+the active window. The lane still carries a mixed-supervision caveat because outcome-backed
+labels are not yet the full national ground truth. The metrics are useful for risk ranking
+and investigation support; they should still be described as mixed-supervision evidence,
+not adjudication.
 
 **What it delivers today:**
 - Corruption risk ranking across the procurement graph
@@ -138,11 +140,12 @@ inference step; it does not inherit the AUC of either lane's standalone model.
 
 | Lane | Honest Claim |
 |---|---|
-| Cyber | AUC 0.8928 on real Kenyan cyber event graph — temporal holdout, live-ingested data |
+| Cyber | Strong thresholded operating metrics on a real Kenyan cyber event graph, with an honest caveat that the current holdout AUC is weak because the holdout is class-thin |
 | Fraud | PaySim is the separate fraud benchmark lane; quote the AUC only when the fresh artifact is present |
-| Corruption | Risk ranking and graph visualization on PPRA + Kenya Law + EACC — classifier AUC pending fairness fix |
+| Corruption | 0.9135 holdout AUC on PPRA + Kenya Law + EACC mixed-supervision data, with ranking focus and a non-adjudication caveat |
 
 **The single claim for judges:**
 
-> "Our cyber lane currently shows 0.89 AUC on real cyber events.
+> "Our cyber lane currently shows strong live operating metrics on real cyber events, but we
+> keep an explicit caveat that the ranking AUC is still weak on the current class-thin holdout.
 > Fraud and corruption are separate lanes with their own evidence and caveats."

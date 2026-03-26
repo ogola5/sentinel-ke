@@ -96,6 +96,24 @@ def test_fairness_metrics_accepts_threshold_parameter():
     assert "threshold" in sig.parameters, "_compute_fairness_metrics must accept a threshold parameter"
 
 
+def test_fairness_metrics_can_scope_to_holdout_indices():
+    entity_types = ["ip", "ip", "ip", "ip", "phone_h", "phone_h", "phone_h", "phone_h"]
+    labels = [1, 1, 0, 0, 1, 1, 0, 0]
+    probs = [0.8, 0.7, 0.2, 0.1, 0.9, 0.8, 0.3, 0.2]
+
+    result = _compute_fairness_metrics(
+        entity_types=entity_types,
+        labels=labels,
+        probabilities=probs,
+        threshold=0.5,
+        node_indices=[0, 1, 2, 3],
+    )
+
+    assert result["evaluation_scope"] == "holdout"
+    assert "ip" in result["per_type"]
+    assert "phone_h" not in result["per_type"]
+
+
 # ---------------------------------------------------------------------------
 # 2. Negative floor blocks training when negatives < minimum
 # ---------------------------------------------------------------------------

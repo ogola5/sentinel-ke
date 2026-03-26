@@ -1,6 +1,36 @@
+import { spawnSync } from "node:child_process";
+
 import { expect, test, type Page } from "@playwright/test";
 
 const OUTPUT_DIR = "test-artifacts";
+const BROWSER_PATH =
+  process.env.PLAYWRIGHT_CHROME_PATH ??
+  process.env.PLAYWRIGHT_BROWSER_PATH ??
+  "/usr/bin/google-chrome";
+
+function browserLaunchProbe(): { ok: boolean; detail: string } {
+  const probe = spawnSync(
+    BROWSER_PATH,
+    ["--headless", "--no-sandbox", "--disable-gpu", "--dump-dom", "about:blank"],
+    {
+      timeout: 5000,
+      encoding: "utf8",
+      stdio: "pipe",
+    },
+  );
+  if (probe.status === 0 && !probe.error) {
+    return { ok: true, detail: "browser launch probe passed" };
+  }
+  const stderr = String(probe.stderr || probe.error?.message || "").trim();
+  const reason = stderr || `status=${String(probe.status)} signal=${String(probe.signal)}`;
+  return { ok: false, detail: reason.slice(0, 240) };
+}
+
+const browserProbe = browserLaunchProbe();
+test.skip(
+  !browserProbe.ok,
+  `Browser automation is unavailable in this environment. Probe failed for ${BROWSER_PATH}: ${browserProbe.detail}`,
+);
 
 async function login(page: Page) {
   await page.goto("/");

@@ -31,6 +31,7 @@ import {
   fetchAIForecast,
   fetchAIScenarioForecast,
   fetchAIPredictions,
+  fetchJudgeReadiness,
   fetchGNNTrainingRuns,
   startDemoScenario,
   submitAIFeedback,
@@ -42,6 +43,7 @@ import type {
   AIScenarioForecast,
   FairnessMetrics,
   GNNTrainingRun,
+  JudgeReadinessPayload,
 } from "../../types/ai";
 import { clampRiskPercent, formatRiskScore, isHighRisk, riskColor, riskSeverityLabel } from "../../utils/risk";
 
@@ -305,6 +307,7 @@ export default function GNNIntelligence({
   const [scenarioForecast, setScenarioForecast] = useState<AIScenarioForecast | null>(null);
   const [scenarioForecastLoading, setScenarioForecastLoading] = useState(false);
   const [scenarioBusy, setScenarioBusy] = useState(false);
+  const [judgeReadiness, setJudgeReadiness] = useState<JudgeReadinessPayload | null>(null);
 
   const analystId = useMemo(() => loadAnalystId(), []);
   const activeWindowKey = DOMAIN_OPTIONS.find((option) => option.domain === activeDomain)?.windowKey ?? "Wmid";
@@ -314,10 +317,11 @@ export default function GNNIntelligence({
     setFeedbackError("");
     setLoadError("");
     try {
-      const [runRows, predictionRows, feedbackRows] = await Promise.all([
+      const [runRows, predictionRows, feedbackRows, readinessPayload] = await Promise.all([
         fetchGNNTrainingRuns(24, { strict: true }),
         fetchAIPredictions(50, activeWindowKey, { strict: true }),
         fetchAIFeedback(analystId, 200),
+        fetchJudgeReadiness(),
       ]);
       setRuns(runRows);
       setPredictions(predictionRows);
@@ -327,10 +331,12 @@ export default function GNNIntelligence({
           return acc;
         }, {}),
       );
+      setJudgeReadiness(readinessPayload);
     } catch (err) {
       setRuns([]);
       setPredictions([]);
       setFeedbackByPrediction({});
+      setJudgeReadiness(null);
       setLoadError(err instanceof Error ? err.message : "gnn_data_load_failed");
     } finally {
       setLoading(false);
@@ -539,6 +545,9 @@ export default function GNNIntelligence({
   const modelMeaningStatement = describeModelMeaning(activeDomain);
   const uncertaintyMeaningStatement = describeUncertaintyMeaning();
   const selectedScenarioOption = CYBER_SCENARIO_OPTIONS.find((option) => option.id === selectedScenario) ?? CYBER_SCENARIO_OPTIONS[0];
+  const activePredictionType = activeDomain === "cyber" ? "risk_gnn" : "corruption_risk";
+  const activeJudgeLane = (judgeReadiness?.lanes ?? []).find((lane) => lane.prediction_type === activePredictionType) ?? null;
+  const scientificEvidence = activeJudgeLane?.scientific_evidence ?? null;
 
   return (
     <div className="screen">
@@ -611,6 +620,56 @@ export default function GNNIntelligence({
           <span className="muted">Latest run written to the platform</span>
         </div>
       </div>
+
+      {activeJudgeLane && (
+        <div className="panel workflow-stage-panel" style={{ marginTop: 14 }}>
+          <div className="panel-header">
+            <h3>Operational truth vs scientific truth</h3>
+            <span className="muted">{activeJudgeLane.domain_label}</span>
+          </div>
+          <div className="metric-grid" style={{ marginBottom: 12 }}>
+            <div className="metric-card accent">
+              <div className="metric-label">Operating F1</div>
+              <div className="metric-value">{activeJudgeLane.kpi_evidence.operating_metrics?.f1 != null ? activeJudgeLane.kpi_evidence.operating_metrics.f1.toFixed(3) : "—"}</div>
+              <div className="metric-sub">
+                {activeJudgeLane.kpi_evidence.operating_metrics?.sample_count ?? 0} scored holdout samples at the calibrated threshold
+              </div>
+            </div>
+            <div className={`metric-card ${scientificEvidence?.status === "strong" || scientificEvidence?.status === "moderate" ? "accent" : scientificEvidence?.status === "limited" ? "warn" : "danger"}`}>
+              <div className="metric-label">Scientific evidence</div>
+              <div className="metric-value">{String(scientificEvidence?.status ?? "missing").toUpperCase()}</div>
+              <div className="metric-sub">
+                {scientificEvidence
+                  ? `${scientificEvidence.eligible_window_count}/${scientificEvidence.window_count} recent windows are eligible`
+                  : "No multi-window evidence loaded"}
+              </div>
+            </div>
+            <div className="metric-card info">
+              <div className="metric-label">Mean multi-window AUC</div>
+              <div className="metric-value">
+                {scientificEvidence?.aggregates?.mean_auc != null ? scientificEvidence.aggregates.mean_auc.toFixed(3) : "—"}
+              </div>
+              <div className="metric-sub">
+                PR-AUC {scientificEvidence?.aggregates?.mean_pr_auc != null ? scientificEvidence.aggregates.mean_pr_auc.toFixed(3) : "—"}
+              </div>
+            </div>
+          </div>
+          <div className="list">
+            <div className="list-item">
+              <strong>What to say</strong>
+              <p className="muted" style={{ marginTop: 4 }}>
+                {scientificEvidence?.headline ?? activeJudgeLane.honest_caveats[0] ?? "The lane is operating, but scientific support still needs to be stated carefully."}
+              </p>
+            </div>
+            {activeJudgeLane.honest_caveats[0] && (
+              <div className="list-item">
+                <strong>Current caveat</strong>
+                <p className="muted" style={{ marginTop: 4 }}>{activeJudgeLane.honest_caveats[0]}</p>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {loadError && (
         <div className="panel" style={{ borderColor: "rgba(255,77,90,.35)" }}>

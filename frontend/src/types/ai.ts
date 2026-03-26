@@ -93,6 +93,157 @@ export interface GNNDomainHealth {
   real_data_gate_passed?: boolean | null;
 }
 
+export interface JudgeLaneKPIEvidence {
+  training_metrics?: {
+    auc?: number | null;
+    precision?: number | null;
+    recall?: number | null;
+    f1?: number | null;
+  };
+  operating_metrics?: {
+    f1?: number | null;
+    recall?: number | null;
+    accuracy?: number | null;
+    precision?: number | null;
+    sample_count?: number | null;
+    threshold_mode?: string | null;
+  };
+  thresholds?: {
+    path?: string | null;
+    available?: boolean;
+    window_key?: string | null;
+    window_end?: string | null;
+    entity_type_count?: number | null;
+    items?: Array<{
+      entity_type?: string | null;
+      threshold_score?: number | null;
+      method?: string | null;
+      sample_count?: number | null;
+      positive_count?: number | null;
+    }>;
+  };
+  baselines?: {
+    path?: string | null;
+    available?: boolean;
+    window_key?: string | null;
+    coverage_count?: number | null;
+    latest_updated_at?: string | null;
+  };
+}
+
+export interface GNNScientificWindowSummary {
+  run_id?: string | null;
+  model_version?: string | null;
+  window_key?: string | null;
+  window_end?: string | null;
+  created_at?: string | null;
+  node_count?: number | null;
+  edge_count?: number | null;
+  positive_count?: number | null;
+  benchmarkable?: boolean;
+  eligible?: boolean;
+  fairness_blocked?: boolean;
+  real_data_gate_passed?: boolean;
+  dual_class_holdout?: boolean;
+  class_thin_holdout?: boolean;
+  holdout_positive_count?: number | null;
+  holdout_negative_count?: number | null;
+  eval_samples?: number | null;
+  auc?: number | null;
+  pr_auc?: number | null;
+  operating_f1?: number | null;
+  operating_precision?: number | null;
+  operating_recall?: number | null;
+  scientific_score?: number | null;
+}
+
+export interface GNNScientificSummary {
+  prediction_type: string;
+  domain_label: string;
+  status: "strong" | "moderate" | "limited" | "weak" | "missing" | string;
+  headline: string;
+  window_count: number;
+  eligible_window_count: number;
+  benchmarkable_window_count: number;
+  dual_class_holdout_count: number;
+  class_thin_holdout_count: number;
+  aggregates?: {
+    mean_auc?: number | null;
+    median_auc?: number | null;
+    mean_pr_auc?: number | null;
+    mean_operating_f1?: number | null;
+    mean_operating_precision?: number | null;
+    mean_operating_recall?: number | null;
+    mean_scientific_score?: number | null;
+  };
+  windows: GNNScientificWindowSummary[];
+}
+
+export interface JudgeLaneSummary {
+  prediction_type: string;
+  domain_label: string;
+  status: "ok" | "warn" | "missing" | string;
+  status_reasons: string[];
+  latest_run: {
+    id?: string | null;
+    model_version?: string | null;
+    source_backend?: string | null;
+    window_key?: string | null;
+    window_end?: string | null;
+    created_at?: string | null;
+    node_count?: number | null;
+    edge_count?: number | null;
+    positive_count?: number | null;
+    auc?: number | null;
+    precision?: number | null;
+    recall?: number | null;
+    f1?: number | null;
+  } | null;
+  live_prediction_alignment: {
+    window_matches?: boolean;
+    model_version_matches?: boolean;
+    latest_window_key?: string | null;
+    latest_window_end?: string | null;
+    prediction_count?: number | null;
+    flagged_count?: number | null;
+    high_risk_count?: number | null;
+    abstained_count?: number | null;
+    avg_score?: number | null;
+    max_score?: number | null;
+  };
+  kpi_evidence: JudgeLaneKPIEvidence;
+  scientific_evidence?: GNNScientificSummary;
+  robustness_trust_signals: {
+    fairness_blocked?: boolean | null;
+    fairness_flag?: string | null;
+    max_positive_rate_disparity?: number | null;
+    real_data_gate_passed?: boolean | null;
+    benchmarkable?: boolean | null;
+    benchmark_reasons?: string[];
+    drift_status?: string | null;
+    drift_score?: number | null;
+    rollout_mode?: string | null;
+    rollout_status?: string | null;
+  };
+  honest_caveats: string[];
+}
+
+export interface JudgeReadinessPayload {
+  status: "ok" | "warn" | "missing" | string;
+  headline: string;
+  lanes: JudgeLaneSummary[];
+  honest_caveats: string[];
+  evidence_endpoints: {
+    latest_runs?: string;
+    domain_health?: string;
+    scientific_summary?: string;
+    thresholds?: string;
+    baselines?: string;
+    trust_summary?: string;
+  };
+  generated_at: string;
+}
+
 export interface OperationalHealthSnapshot {
   gnn_loaded: boolean;
   gnn_model_version?: string | null;

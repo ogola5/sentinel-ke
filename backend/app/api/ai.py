@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import uuid
 from datetime import datetime, timedelta, timezone
+from statistics import mean, median
 from typing import Any, Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
@@ -60,6 +61,24 @@ DOMAIN_LABELS: dict[str, str] = {
     "risk_gnn": "Cyber GNN",
     "corruption_risk": "Corruption GNN",
 }
+
+
+def _safe_float(value: Any) -> float | None:
+    try:
+        if value is None:
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _safe_int(value: Any) -> int | None:
+    try:
+        if value is None:
+            return None
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _fairness_blocked(metrics_json: dict[str, Any] | None) -> bool:
@@ -360,6 +379,195 @@ def _serialize_gnn_run(row: GNNTrainingRun | None) -> dict[str, Any] | None:
     }
 
 
+def _recent_distinct_window_runs(
+    db: Session,
+    *,
+    prediction_type: str,
+    limit: int,
+    scan_limit: int | None = None,
+) -> list[GNNTrainingRun]:
+    scan_count = max(limit * 4, scan_limit or (limit * 4))
+    rows = (
+        db.query(GNNTrainingRun)
+        .filter(GNNTrainingRun.prediction_type == prediction_type)
+        .order_by(GNNTrainingRun.created_at.desc())
+        .limit(scan_count)
+        .all()
+    )
+    seen: set[tuple[str, datetime]] = set()
+    distinct: list[GNNTrainingRun] = []
+    for row in rows:
+        key = (str(row.window_key), row.window_end)
+        if key in seen:
+            continue
+        seen.add(key)
+        distinct.append(row)
+        if len(distinct) >= limit:
+            break
+    return distinct
+
+
+def _build_scientific_evidence(
+    db: Session,
+    *,
+    prediction_type: str,
+    limit: int = 5,
+) -> dict[str, Any]:
+    rows = _recent_distinct_window_runs(db, prediction_type=prediction_type, limit=max(1, limit))
+    if not rows:
+        return {
+            "prediction_type": prediction_type,
+            "domain_label": DOMAIN_LABELS.get(prediction_type, prediction_type),
+            "status": "missing",
+            "headline": "No multi-window scientific evidence is recorded yet.",
+            "window_count": 0,
+            "eligible_window_count": 0,
+            "benchmarkable_window_count": 0,
+            "dual_class_holdout_count": 0,
+            "class_thin_holdout_count": 0,
+            "aggregates": {},
+            "windows": [],
+        }
+
+    windows: list[dict[str, Any]] = []
+    aucs: list[float] = []
+    pr_aucs: list[float] = []
+    op_f1s: list[float] = []
+    op_precisions: list[float] = []
+    op_recalls: list[float] = []
+    scientific_scores: list[float] = []
+    eligible_count = 0
+    benchmarkable_count = 0
+    dual_class_count = 0
+    class_thin_count = 0
+    seen_signatures: set[tuple[Any, ...]] = set()
+
+    for row in rows:
+        payload = _serialize_gnn_run(row) or {}
+        metrics = dict(payload.get("metrics") or {})
+        operating = dict(payload.get("operating_metrics") or {})
+        evaluation_protocol = dict(metrics.get("evaluation_protocol") or {})
+        dataset_selection = dict(metrics.get("dataset_selection") or {})
+        holdout_summary = dict(metrics.get("evaluation_summary", {}).get("holdout") or {})
+
+        holdout_positive_count = _safe_int(metrics.get("holdout_manifest_positive_count"))
+        holdout_negative_count = _safe_int(metrics.get("holdout_manifest_negative_count"))
+        dual_class_holdout = bool(
+            (holdout_positive_count or 0) > 0 and (holdout_negative_count or 0) > 0
+        )
+        class_thin_holdout = bool(
+            (holdout_positive_count or 0) < 3 or (holdout_negative_count or 0) < 3
+        )
+        benchmarkable = bool(evaluation_protocol.get("benchmarkable"))
+        fairness_blocked = bool(payload.get("fairness_blocked"))
+        real_data_gate_passed = bool(payload.get("real_data_gate_passed"))
+        eligible = benchmarkable and not fairness_blocked and real_data_gate_passed
+
+        auc = _safe_float(payload.get("auc"))
+        pr_auc = _safe_float(holdout_summary.get("pr_auc") or metrics.get("pr_auc"))
+        operating_f1 = _safe_float(operating.get("f1") or payload.get("f1"))
+        operating_precision = _safe_float(operating.get("precision") or payload.get("precision"))
+        operating_recall = _safe_float(operating.get("recall") or payload.get("recall"))
+        scientific_score = _safe_float(dataset_selection.get("selected_scientific_score")) or 0.0
+        eval_samples = _safe_int(holdout_summary.get("sample_count") or operating.get("sample_count") or metrics.get("eval_samples"))
+        signature = (
+            _safe_int(payload.get("node_count")) or 0,
+            _safe_int(payload.get("edge_count")) or 0,
+            _safe_int(payload.get("positive_count")) or 0,
+            holdout_positive_count or 0,
+            holdout_negative_count or 0,
+            round(scientific_score, 3),
+        )
+        if signature in seen_signatures:
+            continue
+        seen_signatures.add(signature)
+
+        benchmarkable_count += int(benchmarkable)
+        dual_class_count += int(dual_class_holdout)
+        class_thin_count += int(class_thin_holdout)
+        eligible_count += int(eligible)
+
+        if dual_class_holdout and auc is not None:
+            aucs.append(auc)
+        if dual_class_holdout and pr_auc is not None:
+            pr_aucs.append(pr_auc)
+        if operating_f1 is not None:
+            op_f1s.append(operating_f1)
+        if operating_precision is not None:
+            op_precisions.append(operating_precision)
+        if operating_recall is not None:
+            op_recalls.append(operating_recall)
+        scientific_scores.append(scientific_score)
+
+        windows.append(
+            {
+                "run_id": payload.get("id"),
+                "model_version": payload.get("model_version"),
+                "window_key": payload.get("window_key"),
+                "window_end": payload.get("window_end"),
+                "created_at": payload.get("created_at"),
+                "node_count": payload.get("node_count"),
+                "edge_count": payload.get("edge_count"),
+                "positive_count": payload.get("positive_count"),
+                "benchmarkable": benchmarkable,
+                "eligible": eligible,
+                "fairness_blocked": fairness_blocked,
+                "real_data_gate_passed": real_data_gate_passed,
+                "dual_class_holdout": dual_class_holdout,
+                "class_thin_holdout": class_thin_holdout,
+                "holdout_positive_count": holdout_positive_count,
+                "holdout_negative_count": holdout_negative_count,
+                "eval_samples": eval_samples,
+                "auc": auc,
+                "pr_auc": pr_auc,
+                "operating_f1": operating_f1,
+                "operating_precision": operating_precision,
+                "operating_recall": operating_recall,
+                "scientific_score": round(scientific_score, 3),
+            }
+        )
+
+    mean_auc = mean(aucs) if aucs else None
+    mean_pr_auc = mean(pr_aucs) if pr_aucs else None
+    mean_f1 = mean(op_f1s) if op_f1s else None
+    mean_precision = mean(op_precisions) if op_precisions else None
+    mean_recall = mean(op_recalls) if op_recalls else None
+
+    status = "limited"
+    headline = "Recent windows show usable operational evidence, but scientific support is still limited."
+    if eligible_count >= 3 and dual_class_count >= 3 and mean_auc is not None and mean_auc >= 0.75:
+        status = "strong"
+        headline = "Recent benchmarkable windows show consistent scientific support."
+    elif eligible_count >= 2 and dual_class_count >= 2 and mean_f1 is not None and mean_f1 >= 0.8:
+        status = "moderate"
+        headline = "Recent benchmarkable windows show repeatable scientific evidence with some caveats."
+    elif dual_class_count == 0 or class_thin_count == len(windows):
+        status = "weak"
+        headline = "Recent windows remain class-thin, so scientific claims should stay conservative."
+
+    return {
+        "prediction_type": prediction_type,
+        "domain_label": DOMAIN_LABELS.get(prediction_type, prediction_type),
+        "status": status,
+        "headline": headline,
+        "window_count": len(windows),
+        "eligible_window_count": eligible_count,
+        "benchmarkable_window_count": benchmarkable_count,
+        "dual_class_holdout_count": dual_class_count,
+        "class_thin_holdout_count": class_thin_count,
+        "aggregates": {
+            "mean_auc": round(mean_auc, 6) if mean_auc is not None else None,
+            "median_auc": round(median(aucs), 6) if aucs else None,
+            "mean_pr_auc": round(mean_pr_auc, 6) if mean_pr_auc is not None else None,
+            "mean_operating_f1": round(mean_f1, 6) if mean_f1 is not None else None,
+            "mean_operating_precision": round(mean_precision, 6) if mean_precision is not None else None,
+            "mean_operating_recall": round(mean_recall, 6) if mean_recall is not None else None,
+            "mean_scientific_score": round(mean(scientific_scores), 6) if scientific_scores else None,
+        },
+        "windows": windows,
+    }
+
+
 def _prediction_window_summary(
     db: Session,
     *,
@@ -379,6 +587,15 @@ def _prediction_window_summary(
     )
     if not rows:
         return None
+    deduped_rows: list[AIPrediction] = []
+    seen_entities: set[str] = set()
+    for row in rows:
+        entity_key = str(row.entity_key)
+        if entity_key in seen_entities:
+            continue
+        seen_entities.add(entity_key)
+        deduped_rows.append(row)
+    rows = deduped_rows
 
     def _is_above_threshold(row: AIPrediction) -> bool:
         details = dict(row.details_json or {})
@@ -644,6 +861,7 @@ def _judge_lane_caveats(
     thresholds: dict[str, Any],
     baselines: dict[str, Any],
     drift: dict[str, Any] | None,
+    scientific_evidence: dict[str, Any] | None = None,
 ) -> list[str]:
     caveats: list[str] = []
     if latest_run is None:
@@ -684,6 +902,10 @@ def _judge_lane_caveats(
         caveats.append("No threshold snapshot is recorded for this lane and model yet.")
     if latest_run and not baselines.get("available"):
         caveats.append(f"No entity baselines are recorded for window {latest_run.get('window_key')}.")
+    if scientific_evidence:
+        scientific_status = str(scientific_evidence.get("status") or "").lower()
+        if scientific_status in {"weak", "limited"}:
+            caveats.append(str(scientific_evidence.get("headline") or "Scientific support is still limited across recent windows."))
     return list(dict.fromkeys(caveats))
 
 
@@ -713,6 +935,7 @@ def _build_judge_lane_summary(db: Session, prediction_type: str) -> dict[str, An
     fairness = dict(latest_run.get("fairness") or {})
     operating_metrics = dict(latest_run.get("operating_metrics") or {})
     evaluation_protocol = dict(latest_run.get("metrics", {}).get("evaluation_protocol") or {})
+    scientific_evidence = _build_scientific_evidence(db, prediction_type=prediction_type, limit=5)
     caveats = _judge_lane_caveats(
         latest_run=latest_run_payload,
         live_predictions=live_predictions_payload,
@@ -720,6 +943,7 @@ def _build_judge_lane_summary(db: Session, prediction_type: str) -> dict[str, An
         thresholds=thresholds,
         baselines=baselines,
         drift=drift,
+        scientific_evidence=scientific_evidence,
     )
     return {
         "prediction_type": prediction_type,
@@ -767,6 +991,7 @@ def _build_judge_lane_summary(db: Session, prediction_type: str) -> dict[str, An
             "thresholds": thresholds,
             "baselines": baselines,
         },
+        "scientific_evidence": scientific_evidence,
         "robustness_trust_signals": {
             "fairness_blocked": bool(latest_run.get("fairness_blocked", False)),
             "fairness_flag": fairness.get("fairness_flag"),
@@ -969,6 +1194,20 @@ def gnn_domain_health(
     return {"items": items}
 
 
+@router.get("/gnn/scientific-summary")
+def gnn_scientific_summary(
+    prediction_type: str | None = Query(default=None),
+    limit: int = Query(default=5, ge=1, le=12),
+    db: Session = Depends(get_db),
+):
+    prediction_types = [prediction_type] if prediction_type else list(DOMAIN_PREDICTION_TYPES)
+    items = [
+        _build_scientific_evidence(db, prediction_type=kind, limit=limit)
+        for kind in prediction_types
+    ]
+    return {"items": items}
+
+
 @router.get("/judge-readiness")
 def judge_readiness_summary(
     prediction_type: str | None = Query(default=None),
@@ -1004,6 +1243,7 @@ def judge_readiness_summary(
         "evidence_endpoints": {
             "latest_runs": "/v1/ai/gnn/latest-runs",
             "domain_health": "/v1/ai/gnn/domain-health",
+            "scientific_summary": "/v1/ai/gnn/scientific-summary",
             "thresholds": "/v1/ai/thresholds",
             "baselines": "/v1/ai/baselines",
             "trust_summary": "/v1/ai/trust/summary",

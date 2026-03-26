@@ -6,13 +6,13 @@ This sheet is intentionally narrow: each row ties a metric or evidence artifact 
 
 | # | KPI or evidence item | Current repo fact | Source(s) |
 |---|---|---|---|
-| 1 | Cyber AUC | `0.8928` | `docs/BENCHMARK_SUMMARY.md`, `docs/THREE_LANE_AI_STORY.md` |
+| 1 | Cyber operating F1 | `0.941176` on the live benchmarked window | `docs/BENCHMARK_SUMMARY.md`, `docs/THREE_LANE_AI_STORY.md`, `docs/JUDGE_TOP15_SCRIPT.md` |
 | 2 | Cyber graph size | `97` nodes, `237` edges | `docs/BENCHMARK_SUMMARY.md`, `docs/THREE_LANE_AI_STORY.md` |
 | 3 | Cyber holdout | Temporal holdout on `Wmid` | `docs/BENCHMARK_SUMMARY.md`, `docs/THREE_LANE_AI_STORY.md`, `backend/scripts/train_cyber_gnn.py` |
 | 4 | Fraud benchmark identity | PaySim, 6.3M M-Pesa-style transactions, 8,213 fraud accounts | `docs/BENCHMARK_SUMMARY.md`, `docs/THREE_LANE_AI_STORY.md`, `docs/FRAUD_BENCHMARK_POSITIONING.md` |
 | 5 | Fraud benchmark status | Fresh PaySim artifact still required before quoting a judge-safe AUC | `docs/BENCHMARK_SUMMARY.md`, `docs/THREE_LANE_AI_STORY.md`, `backend/scripts/run_paysim_gnn.py` |
-| 6 | Corruption graph size | `1,982` nodes, `4,158` edges | `docs/THREE_LANE_AI_STORY.md`, `docs/BENCHMARK_SUMMARY.md` |
-| 7 | Corruption model status | Fairness hardening in progress; classifier AUC is not yet judge-safe | `docs/THREE_LANE_AI_STORY.md`, `docs/BENCHMARK_SUMMARY.md`, `backend/app/analytics/corruption/train_worker.py` |
+| 6 | Corruption graph size | `2,026` nodes, `3,900` edges | `docs/THREE_LANE_AI_STORY.md`, `docs/BENCHMARK_SUMMARY.md`, `docs/JUDGE_TOP15_SCRIPT.md` |
+| 7 | Corruption model status | Holdout `AUC 0.9135`, fairness passed on the active window, mixed-supervision caveat remains | `docs/THREE_LANE_AI_STORY.md`, `docs/BENCHMARK_SUMMARY.md`, `backend/app/analytics/corruption/train_worker.py` |
 | 8 | `/health` benchmark | `120` complete, `0` failed, p50 `98 ms`, p95 `193 ms`, p99 `203 ms`, `86.05` req/s | `docs/PERFORMANCE_SLO_EVIDENCE.md` |
 | 9 | `/v1/metrics` benchmark | `180` complete, `178` length mismatches reported by the tool, p50 `187 ms`, p95 `245 ms`, p99 `268 ms`, `101.14` req/s | `docs/PERFORMANCE_SLO_EVIDENCE.md` |
 | 10 | Controlled replay benchmark | `200` loaded, `72` schema-valid, `72` accepted, `0` failures, effective replay RPS `49.75`, latency p50/p95/p99 `35.39 / 67.9 / 108.51 ms` | `docs/PERFORMANCE_SLO_EVIDENCE.md` |
@@ -30,6 +30,7 @@ This sheet is intentionally narrow: each row ties a metric or evidence artifact 
 
 ## Notes
 
+- The live judge-readiness API currently reports `status: ok` with lane-specific caveats. Cyber is anchored to the latest benchmarked run window for like-for-like comparison, but the current live holdout is still class-thin and should be described via operating metrics rather than AUC.
 - Fraud AUC is intentionally not quoted here because the repo still needs a fresh PaySim artifact.
-- Corruption AUC is not claimed because the repo explicitly says fairness hardening is still in progress.
+- Corruption AUC is judge-safe only as a live risk-ranking result with fairness passed and weak-supervision caveats.
 - The `/v1/metrics` benchmark row keeps the original tool caveat: the failure count is a body-length mismatch, not a transport or status-code failure.

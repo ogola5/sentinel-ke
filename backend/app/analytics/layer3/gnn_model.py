@@ -637,13 +637,49 @@ def _select_train_val_indices(
             recency = float(row[15]) if len(row) > 15 else 0.0
             scored.append((recency, i))
         scored.sort(key=lambda x: x[0], reverse=True)
-        val_ids = {i for _, i in scored[:target_val]}
+        val_order = [i for _, i in scored[:target_val]]
+        train_order = [i for _, i in scored[target_val:]]
+        support_backfilled = False
+
+        label_values = [int(v) for v in dataset.labels]
+        dataset_has_both_classes = len(set(label_values)) > 1
+        if dataset_has_both_classes and val_order:
+            val_pos = sum(label_values[i] for i in val_order)
+            val_neg = len(val_order) - val_pos
+            missing_labels: List[int] = []
+            if val_pos == 0:
+                missing_labels.append(1)
+            if val_neg == 0:
+                missing_labels.append(0)
+
+            for missing_label in missing_labels:
+                replacement_idx = next((i for i in train_order if label_values[i] == missing_label), None)
+                if replacement_idx is None:
+                    continue
+                swap_out = next(
+                    (
+                        i
+                        for i in reversed(val_order)
+                        if label_values[i] != missing_label
+                    ),
+                    None,
+                )
+                if swap_out is None:
+                    continue
+                train_order.remove(replacement_idx)
+                train_order.append(swap_out)
+                val_order.remove(swap_out)
+                val_order.append(replacement_idx)
+                support_backfilled = True
+
+        val_ids = set(val_order)
         train_ids = [i for i in range(n_nodes) if i not in val_ids]
         if not train_ids:
             train_ids = [scored[-1][1]]
             val_ids.discard(scored[-1][1])
         train_idx = torch.tensor(train_ids, dtype=torch.long)
         val_idx = torch.tensor(sorted(val_ids), dtype=torch.long)
+        val_label_sum = sum(label_values[i] for i in val_ids)
     else:
         # Deterministic entity holdout: stable across runs and machines.
         val_ids: List[int] = []
@@ -681,6 +717,9 @@ def _select_train_val_indices(
         "val_count": int(len(val_idx)),
         "val_ratio_target": float(val_ratio),
         "val_ratio_actual": round(float(len(val_idx) / max(1, n_nodes)), 6),
+        "holdout_support_backfilled": bool(support_backfilled) if policy == "temporal_recency_holdout" else False,
+        "holdout_manifest_positive_count": int(val_label_sum) if policy == "temporal_recency_holdout" else int(sum(int(dataset.labels[i]) for i in val_idx.tolist())),
+        "holdout_manifest_negative_count": int(len(val_idx) - val_label_sum) if policy == "temporal_recency_holdout" else int(len(val_idx) - sum(int(dataset.labels[i]) for i in val_idx.tolist())),
     }
 
 

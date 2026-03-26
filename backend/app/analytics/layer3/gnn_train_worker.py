@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 import logging
 import math
 from pathlib import Path
+import uuid
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
 from sqlalchemy import text
@@ -619,6 +620,7 @@ def _compute_fairness_metrics(
     probabilities: Sequence[float],
     threshold: float = 0.5,
     thresholds_by_type: Optional[Mapping[str, Mapping[str, object]]] = None,
+    node_indices: Optional[Sequence[int]] = None,
     min_group_size: int = 3,
 ) -> Dict[str, object]:
     """
@@ -643,15 +645,28 @@ def _compute_fairness_metrics(
       fairness_flag                 PASS/WARN/FAIL using calibration-aware positive-rate gap
     """
     groups: Dict[str, Dict[str, List]] = {}
-    for etype, y, prob in zip(entity_types, labels, probabilities):
+    indices = [int(i) for i in (node_indices or range(len(labels)))]
+    for idx in indices:
+        if idx < 0 or idx >= len(labels) or idx >= len(probabilities) or idx >= len(entity_types):
+            continue
+        etype = entity_types[idx]
+        y = labels[idx]
+        prob = probabilities[idx]
         g = groups.setdefault(str(etype), {"y": [], "prob": []})
         g["y"].append(int(y))
         g["prob"].append(float(prob))
 
     per_type: Dict[str, Dict[str, object]] = {}
-    positive_rates: List[float] = []
-    positive_rate_gaps: List[float] = []
-    recalls: List[float] = []
+    observed_positive_rates: List[float] = []
+    observed_positive_rate_gaps: List[float] = []
+    observed_recalls: List[float] = []
+    gate_positive_rates: List[float] = []
+    gate_positive_rate_gaps: List[float] = []
+    gate_recalls: List[float] = []
+    gate_eligible_types: List[str] = []
+    gate_min_group_size = max(5, int(min_group_size))
+    gate_min_class_count = 2
+    min_gate_groups = 2
 
     for etype, g in groups.items():
         n = len(g["y"])
@@ -685,6 +700,11 @@ def _compute_fairness_metrics(
         pos_rate_gap    = abs(pos_rate - actual_pos_rate)
         precision       = tp / (tp + fp) if (tp + fp) > 0 else 0.0
         recall          = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+        eligible_for_gate = (
+            n >= gate_min_group_size
+            and positive_count >= gate_min_class_count
+            and (n - positive_count) >= gate_min_class_count
+        )
 
         per_type[etype] = {
             "count":               n,
@@ -695,22 +715,40 @@ def _compute_fairness_metrics(
             "precision":           round(precision, 4),
             "recall":              round(recall, 4),
             "threshold_probability": round(threshold_prob, 4),
+            "gate_eligible":       bool(eligible_for_gate),
+            "gate_reason":         None if eligible_for_gate else (
+                "insufficient_support"
+                if positive_count >= 1 and (n - positive_count) >= 1
+                else "single_class_group"
+            ),
         }
-        positive_rates.append(pos_rate)
-        positive_rate_gaps.append(pos_rate_gap)
-        recalls.append(recall)
 
-    if len(positive_rates) >= 2:
-        max_pr_disp = round(max(positive_rates) - min(positive_rates), 4)
-        max_pr_gap = round(max(positive_rate_gaps), 4) if positive_rate_gaps else None
-        max_rc_disp = round(max(recalls) - min(recalls), 4) if len(recalls) >= 2 else None
+        observed_positive_rates.append(pos_rate)
+        observed_positive_rate_gaps.append(pos_rate_gap)
+        observed_recalls.append(recall)
+        if eligible_for_gate:
+            gate_positive_rates.append(pos_rate)
+            gate_positive_rate_gaps.append(pos_rate_gap)
+            gate_recalls.append(recall)
+            gate_eligible_types.append(etype)
+
+    if len(gate_positive_rates) >= 2:
+        max_pr_disp = round(max(gate_positive_rates) - min(gate_positive_rates), 4)
+        max_pr_gap = round(max(gate_positive_rate_gaps), 4) if gate_positive_rate_gaps else None
+        max_rc_disp = round(max(gate_recalls) - min(gate_recalls), 4) if len(gate_recalls) >= 2 else None
+    elif len(observed_positive_rates) >= 2:
+        max_pr_disp = round(max(observed_positive_rates) - min(observed_positive_rates), 4)
+        max_pr_gap = round(max(observed_positive_rate_gaps), 4) if observed_positive_rate_gaps else None
+        max_rc_disp = round(max(observed_recalls) - min(observed_recalls), 4) if len(observed_recalls) >= 2 else None
     else:
         max_pr_disp = None
-        max_pr_gap = round(max(positive_rate_gaps), 4) if positive_rate_gaps else None
+        max_pr_gap = round(max(observed_positive_rate_gaps), 4) if observed_positive_rate_gaps else None
         max_rc_disp = None
 
     gate_value = max_pr_gap if max_pr_gap is not None else max_pr_disp
-    if gate_value is None:
+    if len(gate_eligible_types) < min_gate_groups:
+        flag = "INSUFFICIENT_DATA"
+    elif gate_value is None:
         flag = "INSUFFICIENT_DATA"
     elif gate_value < 0.25:
         flag = "PASS"
@@ -724,7 +762,27 @@ def _compute_fairness_metrics(
         "max_positive_rate_disparity": max_pr_disp,
         "max_positive_rate_gap":       max_pr_gap,
         "max_recall_disparity":        max_rc_disp,
-        "types_evaluated":             len(positive_rates),
+        "evaluation_scope":            "holdout" if node_indices is not None else "full_dataset",
+        "types_evaluated":             len(observed_positive_rates),
+        "gate_eligible_types":         len(gate_eligible_types),
+        "gate_eligible_type_list":     gate_eligible_types,
+        "observed_max_positive_rate_disparity": (
+            round(max(observed_positive_rates) - min(observed_positive_rates), 4)
+            if len(observed_positive_rates) >= 2
+            else None
+        ),
+        "observed_max_positive_rate_gap": (
+            round(max(observed_positive_rate_gaps), 4)
+            if observed_positive_rate_gaps
+            else None
+        ),
+        "insufficient_gate_support":    len(gate_eligible_types) < min_gate_groups,
+        "support_policy": {
+            "min_group_size": min_group_size,
+            "gate_min_group_size": gate_min_group_size,
+            "gate_min_class_count": gate_min_class_count,
+            "min_gate_groups": min_gate_groups,
+        },
         "fairness_flag":               flag,
         "gate_metric":                 "max_positive_rate_gap" if max_pr_gap is not None else "max_positive_rate_disparity",
         "threshold_used":              "entity_type_calibrated" if thresholds_by_type is not None else threshold,
@@ -1565,23 +1623,32 @@ def run_once(
             labels=dataset.labels,
             probabilities=train_result.probabilities,
             thresholds_by_type=thresholds,
+            node_indices=val_indices or None,
         )
         fairness_gate_override_applied = False
         if fairness.get("fairness_flag") == "FAIL":
-            disparity = float(fairness.get("max_positive_rate_disparity") or 0.0)
+            gate_metric = str(fairness.get("gate_metric") or "max_positive_rate_disparity")
+            disparity = float(
+                fairness.get("max_positive_rate_gap")
+                if gate_metric == "max_positive_rate_gap"
+                else fairness.get("max_positive_rate_disparity")
+                or 0.0
+            )
             threshold = float(settings.fairness_disparity_threshold)
             if allow_demo_fairness_override:
                 fairness_gate_override_applied = True
                 log.warning(
-                    "fairness_gate_OVERRIDE_APPLIED model_version=%s max_positive_rate_disparity=%.3f threshold=%.3f",
+                    "fairness_gate_OVERRIDE_APPLIED model_version=%s %s=%.3f threshold=%.3f",
                     model_version,
+                    gate_metric,
                     disparity,
                     threshold,
                 )
             else:
                 log.error(
-                    "fairness_gate_BLOCKED model_version=%s max_positive_rate_disparity=%.3f threshold=%.3f",
+                    "fairness_gate_BLOCKED model_version=%s %s=%.3f threshold=%.3f",
                     model_version,
+                    gate_metric,
                     disparity,
                     threshold,
                 )
@@ -1591,11 +1658,11 @@ def run_once(
                     "status": "blocked",
                     "gate": "fairness",
                     "model_version": model_version,
-                    "max_positive_rate_disparity": disparity,
+                    gate_metric: disparity,
                     "threshold": threshold,
                     "detail": (
                         "Training run blocked by fairness governance gate. "
-                        "max_positive_rate_disparity exceeds FAIRNESS_DISPARITY_THRESHOLD. "
+                        f"{gate_metric} exceeds FAIRNESS_DISPARITY_THRESHOLD. "
                         "Investigate entity-type label imbalance before retraining."
                     ),
                 }
@@ -1775,6 +1842,40 @@ def run_once(
                     },
                 },
                 "dataset_selection": dict(dataset.selection_metadata or {}),
+                "evaluation_summary": {
+                    "claim_scope": "holdout_rank_and_thresholded_operation",
+                    "scientific_claim": (
+                        "Holdout metrics are the primary evidence for model quality. "
+                        "Full-dataset metrics are retained for ranking stability and drift context, not as the headline claim."
+                    ),
+                    "holdout": {
+                        "split_policy": effective_split_policy,
+                        "train_count": int(train_result.metrics.get("train_count") or 0),
+                        "val_count": int(train_result.metrics.get("val_count") or 0),
+                        "val_ratio_actual": float(train_result.metrics.get("val_ratio_actual") or 0.0),
+                        "val_ratio_target": float(train_result.metrics.get("val_ratio_target") or val_ratio),
+                        "evaluation_scope": str(train_result.metrics.get("evaluation_scope") or "holdout"),
+                        "auc": float(train_result.metrics.get("auc") or 0.0),
+                        "precision": float(train_result.metrics.get("precision") or 0.0),
+                        "recall": float(train_result.metrics.get("recall") or 0.0),
+                        "f1": float(train_result.metrics.get("f1") or 0.0),
+                        "pr_auc": float(train_result.metrics.get("pr_auc") or 0.0),
+                        "calibration_ece": float(train_result.metrics.get("calibration_ece") or 0.0),
+                    },
+                    "full_dataset": {
+                        "available": any(
+                            key in train_result.metrics
+                            for key in ("full_dataset_auc", "full_dataset_pr_auc", "full_dataset_f1")
+                        ),
+                        "auc": float(train_result.metrics.get("full_dataset_auc") or 0.0),
+                        "precision": float(train_result.metrics.get("full_dataset_precision") or 0.0),
+                        "recall": float(train_result.metrics.get("full_dataset_recall") or 0.0),
+                        "f1": float(train_result.metrics.get("full_dataset_f1") or 0.0),
+                        "pr_auc": float(train_result.metrics.get("full_dataset_pr_auc") or 0.0),
+                        "ece": float(train_result.metrics.get("full_dataset_ece") or 0.0),
+                        "brier": float(train_result.metrics.get("full_dataset_brier") or 0.0),
+                    },
+                },
                 "explainability": {
                     "method": attribution_method,
                     "top_k": int(settings.ai_explainability_top_k),
@@ -1911,47 +2012,48 @@ def run_once(
                 "legal_notice": LEGAL_RISK_NOTICE,
             }
 
-            pred = (
-                db.query(AIPrediction)
-                .filter(AIPrediction.entity_key == entity_key)
-                .filter(AIPrediction.prediction_type == prediction_type)
-                .filter(AIPrediction.window_key == dataset.window_key)
-                .filter(AIPrediction.window_end == dataset.window_end)
-                .first()
-            )
-
-            if pred:
-                pred.created_at = now
-                pred.score = score
-                pred.model_version = model_version
-                pred.confidence = confidence
-                pred.uncertainty = uncertainty
-                pred.abstained = bool(abstained)
-                pred.kill_chain_stage = kill_chain_stage
-                pred.decision_source = "gnn"
-                pred.reason_codes = reasons
-                pred.details_json = details
-                updated += 1
-            else:
-                pred = AIPrediction(
-                    entity_key=entity_key,
-                    entity_type=entity_type,
-                    prediction_type=prediction_type,
-                    window_key=dataset.window_key,
-                    window_end=dataset.window_end,
-                    model_version=model_version,
-                    score=score,
-                    confidence=confidence,
-                    uncertainty=uncertainty,
-                    abstained=bool(abstained),
-                    kill_chain_stage=kill_chain_stage,
-                    decision_source="gnn",
-                    reason_codes=reasons,
-                    details_json=details,
-                )
-                db.add(pred)
-                db.flush()
+            pred_values = {
+                "id": uuid.uuid4(),
+                "entity_key": entity_key,
+                "entity_type": entity_type,
+                "prediction_type": prediction_type,
+                "window_key": dataset.window_key,
+                "window_end": dataset.window_end,
+                "model_version": model_version,
+                "score": score,
+                "confidence": confidence,
+                "uncertainty": uncertainty,
+                "abstained": bool(abstained),
+                "kill_chain_stage": kill_chain_stage,
+                "decision_source": "gnn",
+                "reason_codes": reasons,
+                "details_json": details,
+                "created_at": now,
+            }
+            pred_stmt = insert(AIPrediction).values(pred_values)
+            pred_stmt = pred_stmt.on_conflict_do_update(
+                constraint="uq_ai_prediction",
+                set_={
+                    "entity_type": pred_stmt.excluded.entity_type,
+                    "model_version": pred_stmt.excluded.model_version,
+                    "score": pred_stmt.excluded.score,
+                    "confidence": pred_stmt.excluded.confidence,
+                    "uncertainty": pred_stmt.excluded.uncertainty,
+                    "abstained": pred_stmt.excluded.abstained,
+                    "kill_chain_stage": pred_stmt.excluded.kill_chain_stage,
+                    "decision_source": pred_stmt.excluded.decision_source,
+                    "reason_codes": pred_stmt.excluded.reason_codes,
+                    "details_json": pred_stmt.excluded.details_json,
+                    "created_at": pred_stmt.excluded.created_at,
+                },
+            ).returning(AIPrediction.id, text("xmax = 0 AS inserted"))
+            pred_row = db.execute(pred_stmt).first()
+            pred_id = pred_row[0] if pred_row else None
+            inserted = bool(pred_row[1]) if pred_row and len(pred_row) > 1 else False
+            if inserted:
                 created += 1
+            else:
+                updated += 1
 
             indicators_by_entity[entity_key] = {
                 "entity_type": entity_type,
@@ -1973,7 +2075,7 @@ def run_once(
                 window_end=dataset.window_end,
             )
 
-            expl = db.query(AIExplanation).filter(AIExplanation.prediction_id == pred.id).first()
+            expl = db.query(AIExplanation).filter(AIExplanation.prediction_id == pred_id).first()
             expl_payload = {
                 "window_start": dataset.window_start.isoformat(),
                 "window_end": dataset.window_end.isoformat(),
@@ -2002,7 +2104,7 @@ def run_once(
             else:
                 db.add(
                     AIExplanation(
-                        prediction_id=pred.id,
+                    prediction_id=pred_id,
                         reason_codes=reasons,
                         evidence_hashes=evidence_hashes,
                         evidence_paths=evidence_paths,

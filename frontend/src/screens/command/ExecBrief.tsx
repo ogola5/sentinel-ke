@@ -20,6 +20,7 @@ import {
 import {
   fetchGNNDomainHealth,
   fetchGNNLatestRuns,
+  fetchJudgeReadiness,
   fetchOperationalHealthSnapshot,
   fetchPlatformTrustSummary,
 } from "../../api/ai";
@@ -30,6 +31,7 @@ import type { Principal } from "../../types/auth";
 import type {
   GNNDomainHealth,
   GNNDomainSummary,
+  JudgeReadinessPayload,
   OperationalHealthSnapshot,
   PlatformTrustSummary,
   TrustCheck,
@@ -172,6 +174,33 @@ function summarizeChecks(checks: TrustCheck[]): { pass: number; warn: number; fa
   );
 }
 
+function readinessLabel(status: string): string {
+  if (status === "ok") return "READY";
+  if (status === "warn") return "CAUTION";
+  return "REMEDIATE";
+}
+
+function toneForJudgeStatus(status: string): "ok" | "warn" | "missing" {
+  if (status === "ok") return "ok";
+  if (status === "warn") return "warn";
+  return "missing";
+}
+
+function strongestLane(lanes: JudgeReadinessPayload["lanes"]): JudgeReadinessPayload["lanes"][number] | null {
+  if (lanes.length === 0) return null;
+  return [...lanes].sort((left, right) => {
+    const leftScore = Number(left.kpi_evidence?.operating_metrics?.f1 ?? left.kpi_evidence?.training_metrics?.auc ?? 0);
+    const rightScore = Number(right.kpi_evidence?.operating_metrics?.f1 ?? right.kpi_evidence?.training_metrics?.auc ?? 0);
+    return rightScore - leftScore;
+  })[0] ?? null;
+}
+
+function scientificTone(status: string | undefined): "ok" | "warn" | "missing" {
+  if (status === "strong" || status === "moderate") return "ok";
+  if (status === "limited") return "warn";
+  return "missing";
+}
+
 export default function ExecBrief({ principal }: Props) {
   void principal;
 
@@ -179,6 +208,7 @@ export default function ExecBrief({ principal }: Props) {
   const [partners, setPartners] = useState<FederationPartner[]>([]);
   const [domainSummaries, setDomainSummaries] = useState<GNNDomainSummary[]>([]);
   const [domainHealthRows, setDomainHealthRows] = useState<GNNDomainHealth[]>([]);
+  const [judgeReadiness, setJudgeReadiness] = useState<JudgeReadinessPayload | null>(null);
   const [trustSummary, setTrustSummary] = useState<PlatformTrustSummary | null>(null);
   const [platformHealth, setPlatformHealth] = useState<OperationalHealthSnapshot | null>(null);
   const [incidentRuns, setIncidentRuns] = useState<IncidentRunRow[]>([]);
@@ -190,10 +220,11 @@ export default function ExecBrief({ principal }: Props) {
     setError(null);
 
     try {
-      const [partnersData, latestRuns, domainHealth, trust, health, incidentsData] = await Promise.all([
+      const [partnersData, latestRuns, domainHealth, judgeReady, trust, health, incidentsData] = await Promise.all([
         fetchFederationPartners({ strict: true }).catch(() => [] as FederationPartner[]),
         fetchGNNLatestRuns(undefined, { strict: true }).catch(() => [] as GNNDomainSummary[]),
         fetchGNNDomainHealth(undefined, { strict: true }).catch(() => [] as GNNDomainHealth[]),
+        fetchJudgeReadiness(),
         fetchPlatformTrustSummary(),
         fetchOperationalHealthSnapshot(),
         apiFetchJson<{ items: IncidentRunRow[] }>(endpoints.defenseIncidents(10, 0), { method: "GET" }).catch(
@@ -204,6 +235,7 @@ export default function ExecBrief({ principal }: Props) {
       setPartners(partnersData ?? []);
       setDomainSummaries(latestRuns ?? []);
       setDomainHealthRows(domainHealth ?? []);
+      setJudgeReadiness(judgeReady ?? null);
       setTrustSummary(trust);
       setPlatformHealth(health);
       setIncidentRuns((incidentsData.items ?? []).slice(0, 4));
@@ -212,6 +244,7 @@ export default function ExecBrief({ principal }: Props) {
       const missingFeeds = [
         latestRuns.length === 0 ? "benchmark metrics" : null,
         domainHealth.length === 0 ? "domain health" : null,
+        judgeReady == null ? "judge readiness" : null,
         trust == null ? "trust summary" : null,
         health == null ? "operational health" : null,
       ].filter(Boolean);
@@ -235,10 +268,21 @@ export default function ExecBrief({ principal }: Props) {
     return () => window.clearInterval(timer);
   }, [load]);
 
-  const readiness = useMemo(
-    () => computeReadinessSummary(trustSummary, domainHealthRows, platformHealth),
-    [trustSummary, domainHealthRows, platformHealth],
-  );
+  const readiness = useMemo(() => {
+    if (judgeReadiness) {
+      return {
+        level: readinessLabel(judgeReadiness.status) as ReadinessLevel,
+        headline: judgeReadiness.headline,
+        detail:
+          judgeReadiness.lanes.length > 0
+            ? `Judge readiness is anchored to ${judgeReadiness.lanes.length} live lanes and their latest benchmarked evidence.`
+            : "Judge readiness evidence is loaded, but no lane summaries are available.",
+        color:
+          judgeReadiness.status === "ok" ? "#30d158" : judgeReadiness.status === "warn" ? "#ff9f0a" : "#ff2d55",
+      } satisfies ReadinessSummary;
+    }
+    return computeReadinessSummary(trustSummary, domainHealthRows, platformHealth);
+  }, [judgeReadiness, trustSummary, domainHealthRows, platformHealth]);
 
   const activeIncidentRuns = incidentRuns.filter((run) => run.status === "running" || run.status === "failed");
   const onlinePartners = partners.filter((partner) => partner.status === "online");
@@ -260,6 +304,29 @@ export default function ExecBrief({ principal }: Props) {
   const domainTypes = Array.from(
     new Set([...domainSummaries.map((row) => row.prediction_type), ...domainHealthRows.map((row) => row.prediction_type)]),
   ).sort((left, right) => DOMAIN_ORDER.indexOf(left) - DOMAIN_ORDER.indexOf(right));
+  const strongestProofLane = strongestLane(judgeReadiness?.lanes ?? []);
+  const strongestScientificLane = useMemo(() => {
+    const lanes = judgeReadiness?.lanes ?? [];
+    if (lanes.length === 0) return null;
+    return [...lanes].sort((left, right) => {
+      const leftStatus = left.scientific_evidence?.status ?? "missing";
+      const rightStatus = right.scientific_evidence?.status ?? "missing";
+      const rank = (value: string): number => {
+        if (value === "strong") return 4;
+        if (value === "moderate") return 3;
+        if (value === "limited") return 2;
+        if (value === "weak") return 1;
+        return 0;
+      };
+      const statusDelta = rank(rightStatus) - rank(leftStatus);
+      if (statusDelta !== 0) return statusDelta;
+      const leftScore = Number(left.scientific_evidence?.aggregates?.mean_auc ?? left.scientific_evidence?.aggregates?.mean_operating_f1 ?? 0);
+      const rightScore = Number(right.scientific_evidence?.aggregates?.mean_auc ?? right.scientific_evidence?.aggregates?.mean_operating_f1 ?? 0);
+      return rightScore - leftScore;
+    })[0] ?? null;
+  }, [judgeReadiness?.lanes]);
+  const judgeCaveats = judgeReadiness?.honest_caveats?.slice(0, 3) ?? [];
+  const readinessTone = toneForJudgeStatus(judgeReadiness?.status ?? (readiness.level === "READY" ? "ok" : readiness.level === "CAUTION" ? "warn" : "missing"));
 
   const presenterLines = useMemo(() => {
     const lines: string[] = [];
@@ -310,7 +377,7 @@ export default function ExecBrief({ principal }: Props) {
         <div className="exec-threat-icon">
           {readiness.level === "READY" ? <CheckCircle size={36} color="#fff" /> : <AlertTriangle size={36} color="#fff" />}
         </div>
-        <div className="exec-threat-text">
+        <div className="exec-threat-text" style={{ flex: 1 }}>
           <div className="exec-threat-headline">{readiness.headline}</div>
           <div className="exec-threat-detail">{readiness.detail}</div>
         </div>
@@ -324,6 +391,104 @@ export default function ExecBrief({ principal }: Props) {
           <RefreshCw size={18} className={loading ? "spin" : ""} />
         </button>
       </div>
+
+      <section className="exec-section" style={{ marginTop: 12 }}>
+        <h2 className="exec-section-title">Judge Panel</h2>
+        <div className="priority-card" style={{ marginTop: 0 }}>
+          <div className="priority-card-head">
+            <div>
+              <h3 className="priority-card-title">
+                {judgeReadiness?.status === "ok" ? "Ready for judge review" : judgeReadiness?.status === "warn" ? "Ready with caveats" : "Remediate before presenting"}
+              </h3>
+              <p className="priority-card-copy">
+                {judgeReadiness?.headline ?? readiness.detail}
+              </p>
+            </div>
+            <span
+              className="chip"
+              style={{
+                color: toneColor(readinessTone),
+                borderColor: `${toneColor(readinessTone)}55`,
+              }}
+            >
+              {readiness.level}
+            </span>
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "1.1fr 0.9fr 0.9fr 0.9fr", gap: 8, marginTop: 10 }}>
+            <div className="metric-card accent" style={{ padding: "10px 12px" }}>
+              <div className="metric-label">Strongest lane</div>
+              <div className="metric-value">{strongestProofLane?.domain_label ?? "—"}</div>
+              <div className="metric-sub">
+                {strongestProofLane
+                  ? `F1 ${formatPercent(strongestProofLane.kpi_evidence.operating_metrics?.f1)} · AUC ${formatPercent(strongestProofLane.kpi_evidence.training_metrics?.auc)}`
+                  : "No lane evidence loaded"}
+              </div>
+            </div>
+            <div className="metric-card" style={{ padding: "10px 12px" }}>
+              <div className="metric-label">Readiness state</div>
+              <div className="metric-value">{readiness.level}</div>
+              <div className="metric-sub">
+                {judgeReadiness?.lanes.length ?? domainHealthRows.length} lanes with evidence
+              </div>
+            </div>
+            <div className={`metric-card ${metricToneClass(scientificTone(strongestScientificLane?.scientific_evidence?.status))}`} style={{ padding: "10px 12px" }}>
+              <div className="metric-label">Scientific evidence</div>
+              <div className="metric-value">{String(strongestScientificLane?.scientific_evidence?.status ?? "missing").toUpperCase()}</div>
+              <div className="metric-sub">
+                {strongestScientificLane?.scientific_evidence
+                  ? `${strongestScientificLane.scientific_evidence.eligible_window_count}/${strongestScientificLane.scientific_evidence.window_count} eligible windows`
+                  : "No multi-window evidence yet"}
+              </div>
+            </div>
+            <div className="metric-card" style={{ padding: "10px 12px" }}>
+              <div className="metric-label">Caveats</div>
+              <div className="metric-value">{judgeCaveats.length}</div>
+              <div className="metric-sub">Visible, controlled, and explicit</div>
+            </div>
+          </div>
+
+          {strongestProofLane && (
+            <div className="exec-situation-item" style={{ marginTop: 12, borderLeftColor: toneColor(toneForJudgeStatus(strongestProofLane.status)), padding: "10px 12px" }}>
+              <strong>{strongestProofLane.domain_label}</strong> shows {strongestProofLane.kpi_evidence.operating_metrics?.sample_count ?? 0} operating samples, threshold mode {strongestProofLane.kpi_evidence.operating_metrics?.threshold_mode ?? "unknown"}, and baseline coverage {strongestProofLane.kpi_evidence.baselines?.coverage_count ?? 0}.
+            </div>
+          )}
+
+          <div style={{ display: "grid", gap: 8, marginTop: 10 }}>
+            {(judgeReadiness?.lanes ?? []).map((lane) => (
+              <div key={lane.prediction_type} className="exec-situation-item" style={{ borderLeftColor: toneColor(toneForJudgeStatus(lane.status)), padding: "10px 12px" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
+                  <strong>{lane.domain_label}</strong>
+                  <span className="chip" style={{ color: toneColor(toneForJudgeStatus(lane.status)) }}>
+                    {lane.status.toUpperCase()}
+                  </span>
+                </div>
+                <div className="muted" style={{ marginTop: 4 }}>
+                  {lane.honest_caveats[0] ?? "Evidence loaded"}
+                </div>
+                <div className="muted" style={{ marginTop: 4 }}>
+                  Live {lane.live_prediction_alignment.prediction_count ?? 0} | Benchmarked {lane.kpi_evidence.operating_metrics?.sample_count ?? 0} | Baselines {lane.kpi_evidence.baselines?.coverage_count ?? 0}
+                </div>
+                {lane.scientific_evidence && (
+                  <div className="muted" style={{ marginTop: 4 }}>
+                    Scientific {lane.scientific_evidence.status.toUpperCase()} | Windows {lane.scientific_evidence.eligible_window_count}/{lane.scientific_evidence.window_count} | Mean AUC {formatPercent(lane.scientific_evidence.aggregates?.mean_auc)}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+
+          {judgeCaveats.length > 0 && (
+            <div style={{ display: "grid", gap: 8, marginTop: 12 }}>
+              {judgeCaveats.map((caveat) => (
+                <div key={caveat} className="exec-situation-item" style={{ borderLeftColor: "var(--warning)", padding: "10px 12px" }}>
+                  {caveat}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </section>
 
       {error && <div className="exec-error">{error}</div>}
 

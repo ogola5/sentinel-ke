@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import math
 import sys
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -46,8 +47,11 @@ class WindowCandidate:
     negatives: int
     benign_negatives: int
     real_ratio: float
+    positive_ratio: float
+    balance_ratio: float
     label_source_mix: dict[str, int]
     score: float
+    scientific_score: float
     eligible: bool
     demo_worthy: bool
     reason: str
@@ -104,6 +108,8 @@ def _score_dataset(
     benign_negatives = int(dataset.benign_negative_count)
     real_ratio = _real_ratio(dataset)
     label_mix = _label_source_mix(dataset)
+    positive_ratio = round(float(positives / max(1, nodes)), 6)
+    balance_ratio = round(float(min(positives, negatives) / max(1, nodes)), 6)
 
     eligible = (
         nodes >= min_nodes
@@ -111,14 +117,22 @@ def _score_dataset(
         and real_ratio >= min_real_ratio
     )
 
-    balance = min(positives, negatives) / float(max(1, positives + negatives))
+    balance = balance_ratio
+    scientific_score = (
+        (18.0 * balance)
+        + (4.5 * math.log1p(max(1, nodes)))
+        + (1.8 * math.log1p(max(0, edges)))
+        + (1.2 * math.log1p(max(1, negatives)))
+        + (0.8 * math.log1p(max(1, benign_negatives)))
+        + (7.5 * real_ratio)
+        - (10.0 * abs(positives - negatives) / float(max(1, nodes)))
+    )
     score = (
-        nodes
-        + (2.5 * negatives)
-        + (1.0 * benign_negatives)
-        + (0.15 * edges)
-        + (12.0 * balance)
-        + (8.0 * real_ratio)
+        scientific_score
+        + (2.0 * nodes)
+        + (1.0 * negatives)
+        + (0.5 * benign_negatives)
+        + (0.1 * edges)
     )
 
     reason = "eligible" if eligible else "below_floor"
@@ -142,8 +156,11 @@ def _score_dataset(
         negatives=negatives,
         benign_negatives=benign_negatives,
         real_ratio=round(real_ratio, 6),
+        positive_ratio=positive_ratio,
+        balance_ratio=balance_ratio,
         label_source_mix=label_mix,
         score=round(score, 3),
+        scientific_score=round(scientific_score, 3),
         eligible=eligible,
         demo_worthy=demo_worthy,
         reason=reason,
@@ -245,7 +262,16 @@ def _evaluate_domain(
         candidate.window_end = window_end.isoformat()
         candidates.append(candidate)
 
-    candidates.sort(key=lambda c: (c.score, c.nodes, c.negatives, c.real_ratio), reverse=True)
+    candidates.sort(
+        key=lambda c: (
+            c.score,
+            c.scientific_score,
+            c.nodes,
+            c.negatives,
+            c.real_ratio,
+        ),
+        reverse=True,
+    )
     selected = candidates[0] if candidates else None
     return {
         "domain": domain,

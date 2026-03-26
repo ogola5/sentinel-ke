@@ -1158,7 +1158,7 @@ def _run_kev_epss_job(args: argparse.Namespace) -> IngestionJobStats:
         db.close()
 
 
-def normalize_paysim_row(
+def normalize_paysim_benchmark_row(
     row: Mapping[str, Any],
     *,
     dataset_name: str = "paysim_ke",
@@ -1184,7 +1184,7 @@ def normalize_paysim_row(
     step = max(1, int(float(row.get("step", 1) or 1)))
     ts_dt = datetime(2024, 1, 1, tzinfo=timezone.utc) + timedelta(hours=(step - 1) % 744)
 
-    amount = _as_float({"v": row.get("amount", 0)}, ("v",)) or 0.0
+    amount = _as_float(row.get("amount", 0)) or 0.0
     name_orig = str(row.get("nameOrig", "") or "").strip() or None
     name_dest = str(row.get("nameDest", "") or "").strip() or None
 
@@ -1218,7 +1218,7 @@ def _iter_paysim_records(
     dataset_name: str,
 ) -> Iterator[NormalizedConnectorRecord]:
     for row in rows:
-        record = normalize_paysim_row(row, dataset_name=dataset_name)
+        record = normalize_paysim_benchmark_row(row, dataset_name=dataset_name)
         if record is not None:
             yield record
 

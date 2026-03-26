@@ -133,6 +133,36 @@ def test_train_graphsage_primary_metrics_are_holdout_scoped():
     assert out.metrics["holdout_positive_count"] + out.metrics["holdout_negative_count"] == out.metrics["eval_samples"]
 
 
+def test_temporal_holdout_backfills_missing_class_support():
+    pytest.importorskip("torch")
+
+    now = datetime.now(timezone.utc)
+    feature_rows = []
+    labels = []
+    for i in range(12):
+        recency = float(120 - i)
+        row = [float(i), float(12 - i), 0.05 * i] + [0.0] * 12 + [recency]
+        feature_rows.append(row)
+        labels.append(1 if i < 8 else 0)
+
+    dataset = GNNDataset(
+        window_key="Wmid",
+        window_start=now,
+        window_end=now,
+        entity_keys=[f"node:{i}" for i in range(12)],
+        entity_types=["ip"] * 12,
+        feature_matrix=feature_rows,
+        labels=labels,
+        edges=[(i, (i + 1) % 12, 1.0) for i in range(12)],
+        node_meta=[{} for _ in range(12)],
+        source_backend_used="synthetic",
+    )
+
+    out = train_graphsage(dataset, epochs=4, hidden_dim=8, embed_dim=4, seed=23)
+    assert out.metrics["holdout_positive_count"] > 0
+    assert out.metrics["holdout_negative_count"] > 0
+    assert out.metrics["holdout_support_backfilled"] is True
+
 
 def test_integrated_gradients_returns_feature_vectors():
     torch = pytest.importorskip("torch")
