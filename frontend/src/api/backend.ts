@@ -82,19 +82,35 @@ type InfraClusterDetailResponse = {
 
 type CasePacketApiResponse = {
   case_id?: string;
+  generated_at?: string;
   campaign?: {
     id?: string;
+    type?: string;
+    primary_key?: string;
+    status?: string;
     score?: number;
   };
   summary?: {
     stage?: string | null;
+    event_count?: number;
+    distinct_entities?: number;
   };
   entities?: Array<{
     entity_key?: string;
+    type?: string;
+    role?: string;
   }>;
   evidence?: Array<{
     event_hash?: string;
+    occurred_at?: string;
   }>;
+  graph?: {
+    nodes?: unknown[];
+    edges?: unknown[];
+  };
+  integrity?: {
+    hash?: string;
+  };
 };
 
 export type BackendSnapshot = {
@@ -868,16 +884,63 @@ export async function createCasePacketFromCampaign(campaignId: string): Promise<
   const res = await apiFetchJson<CasePacketApiResponse>(endpoints.caseFromCampaign(campaignId), { method: "POST" });
   const affected = (res.entities ?? []).map((e) => asString(e.entity_key, "")).filter((x) => x !== "");
   const evidencePaths = (res.evidence ?? []).map((e) => asString(e.event_hash, "")).filter((x) => x !== "");
+  const entityDetails = (res.entities ?? []).flatMap((entity) => {
+    const entityKey = asString(entity.entity_key, "");
+    if (!entityKey) return [];
+    const type = asString(entity.type, "");
+    const role = asString(entity.role, "");
+    return [
+      {
+        entity_key: entityKey,
+        ...(type ? { type } : {}),
+        ...(role ? { role } : {}),
+      },
+    ];
+  });
+  const evidenceTimeline = (res.evidence ?? []).flatMap((item) => {
+    const eventHash = asString(item.event_hash, "");
+    if (!eventHash) return [];
+    const occurredAt = asString(item.occurred_at, "");
+    return [
+      {
+        event_hash: eventHash,
+        ...(occurredAt ? { occurred_at: occurredAt } : {}),
+      },
+    ];
+  });
   const score = clamp(asNumber(res.campaign?.score, 0));
   const confidence = Math.round(score * 100);
   const severity = severityFromScore(score);
+  const campaignType = asString(res.campaign?.type, "campaign");
+  const eventCount = asNumber(res.summary?.event_count, evidencePaths.length);
+  const entityCount = asNumber(res.summary?.distinct_entities, affected.length);
+  const stage = asString(res.summary?.stage, "");
+  const stageLabel = stage || "unclassified";
+  const evidenceState = evidencePaths.length > 0 ? `${evidencePaths.length} evidence references attached` : "evidence detail still thin";
+  const structuralState = Array.isArray(res.graph?.nodes) && res.graph.nodes.length > 0
+    ? `${res.graph.nodes.length} graph nodes included`
+    : "graph structure is minimal";
 
   return {
     id: asString(res.case_id, `CASE-${campaignId}`),
     campaignId: asString(res.campaign?.id, campaignId),
-    summary: `Case generated from campaign ${campaignId}`,
+    summary: `${campaignType} case touching ${entityCount} entities across ${eventCount} events; stage ${stageLabel}; ${evidenceState}; ${structuralState}.`,
     confidence,
     severity,
+    generated_at: asString(res.generated_at, ""),
+    campaign_type: campaignType,
+    campaign_primary_key: asString(res.campaign?.primary_key, ""),
+    campaign_status: asString(res.campaign?.status, ""),
+    event_count: eventCount,
+    distinct_entities: entityCount,
+    stage: (res.summary?.stage as string | null) ?? null,
+    integrity_hash: asString(res.integrity?.hash, ""),
+    graph_summary: {
+      node_count: Array.isArray(res.graph?.nodes) ? res.graph?.nodes.length : 0,
+      edge_count: Array.isArray(res.graph?.edges) ? res.graph?.edges.length : 0,
+    },
+    entity_details: entityDetails,
+    evidence_timeline: evidenceTimeline,
     affected_entities: affected,
     evidence_paths: evidencePaths,
     recommended_actions: [

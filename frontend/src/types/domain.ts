@@ -173,6 +173,27 @@ export type CasePacket = {
   summary: string;
   confidence: number;
   severity: string;
+  generated_at?: string;
+  campaign_type?: string;
+  campaign_primary_key?: string;
+  campaign_status?: string;
+  event_count?: number;
+  distinct_entities?: number;
+  stage?: string | null;
+  integrity_hash?: string;
+  graph_summary?: {
+    node_count: number;
+    edge_count: number;
+  };
+  entity_details?: {
+    entity_key: string;
+    type?: string;
+    role?: string;
+  }[];
+  evidence_timeline?: {
+    event_hash: string;
+    occurred_at?: string;
+  }[];
   affected_entities: string[];
   evidence_paths: string[];
   recommended_actions: {

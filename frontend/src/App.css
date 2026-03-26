@@ -1476,6 +1476,189 @@
   background: rgba(var(--warning-rgb), 0.08);
 }
 
+.case-console-grid,
+.defense-console-grid,
+.defense-lower-grid {
+  align-items: start;
+}
+
+.case-top-grid,
+.defense-top-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.case-kpi-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.case-kpi-value {
+  font-size: 1.35rem;
+  line-height: 1;
+}
+
+.case-readiness-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.case-readiness-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(var(--surface-rgb), 0.35);
+}
+
+.case-readiness-item strong {
+  display: block;
+  margin-bottom: 3px;
+}
+
+.case-readiness-item p {
+  margin: 0;
+}
+
+.case-recent-list,
+.defense-run-list,
+.defense-history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.case-recent-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: rgba(var(--surface-rgb), 0.32);
+}
+
+.case-recent-row p {
+  margin: 4px 0 0;
+}
+
+.case-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.case-state-banner,
+.defense-state-banner,
+.defense-note-panel {
+  border: 1px dashed var(--line);
+  border-radius: 12px;
+  padding: 12px 14px;
+  background: rgba(var(--surface-rgb), 0.22);
+}
+
+.case-state-banner strong,
+.defense-state-banner strong {
+  display: block;
+  margin-bottom: 6px;
+}
+
+.case-state-banner p,
+.defense-state-banner p,
+.defense-note-panel p {
+  margin: 0;
+}
+
+.defense-note-panel {
+  margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+}
+
+.defense-run-card {
+  width: 100%;
+  text-align: left;
+}
+
+.defense-brief-callout {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(var(--accent-rgb), 0.24);
+  background: rgba(var(--accent-rgb), 0.08);
+}
+
+.defense-brief-callout strong {
+  display: block;
+  margin-bottom: 6px;
+}
+
+.defense-brief-callout p {
+  margin: 0;
+  color: var(--ink-muted);
+  line-height: 1.55;
+}
+
+.defense-compose-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 12px;
+}
+
+.defense-delivery-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.defense-delivery-summary > div {
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: rgba(var(--surface-rgb), 0.3);
+}
+
+.btn-danger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(var(--danger-rgb), 0.45);
+  background: rgba(var(--danger-rgb), 0.16);
+  color: var(--danger);
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.btn-danger:hover {
+  background: rgba(var(--danger-rgb), 0.22);
+}
+
+.btn-danger:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.spin {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
 .detail-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1495,19 +1678,25 @@
 }
 
 @media (max-width: 1100px) {
-  .campaign-metric-grid {
+  .campaign-metric-grid,
+  .case-top-grid,
+  .defense-top-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
 @media (max-width: 720px) {
   .campaign-metric-grid,
-  .detail-grid {
+  .detail-grid,
+  .case-top-grid,
+  .defense-top-grid,
+  .defense-delivery-summary {
     grid-template-columns: 1fr;
   }
 
   .campaign-card,
-  .campaign-inline-row {
+  .campaign-inline-row,
+  .case-recent-row {
     align-items: flex-start;
     flex-direction: column;
   }
@@ -1516,6 +1705,10 @@
   .campaign-risk-side {
     align-items: flex-start;
     text-align: left;
+  }
+
+  .defense-compose-actions {
+    justify-content: flex-start;
   }
 }
 
