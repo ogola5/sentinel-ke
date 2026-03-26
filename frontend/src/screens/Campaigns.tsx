@@ -134,10 +134,13 @@ function topEntity(entries: Array<{ type?: string; key?: string; last_seen?: str
 }
 
 function buildCampaignStory(
-  selected: Campaign,
+  selected: Campaign | null,
   detail: CampaignDetailResponse | null,
   materialized: boolean,
 ): string {
+  if (!selected) {
+    return "Select a campaign to see its footprint, evidence state, and operational meaning.";
+  }
   const entityCounts = detail?.entity_counts ?? {};
   const entities = detail?.entities ?? [];
   const service = topEntity(entities, "service_id");
@@ -193,17 +196,18 @@ export default function Campaigns({
   });
 
   const selected = campaigns.find((campaign) => campaign.id === selectedId) ?? campaigns[0];
+  const activeCampaign = selected ?? null;
 
   const loadCampaignDetail = useCallback(async () => {
-    if (!selected?.id) return;
+    if (!activeCampaign?.id) return;
     setLoading(true);
     setError(null);
     try {
       const [detailRes, riskRes, eventsRes, evidenceRes] = await Promise.all([
-        apiFetchJson<CampaignDetailResponse>(endpoints.campaignById(selected.id), { method: "GET" }),
-        apiFetchJson<CampaignRiskResponse>(endpoints.campaignRisk(selected.id, 12, 0), { method: "GET" }),
-        apiFetchJson<CampaignEventsResponse>(endpoints.campaignEvents(selected.id, 12, 0), { method: "GET" }),
-        apiFetchJson<CampaignEvidenceResponse>(endpoints.campaignEvidence(selected.id, 12), { method: "GET" }),
+        apiFetchJson<CampaignDetailResponse>(endpoints.campaignById(activeCampaign.id), { method: "GET" }),
+        apiFetchJson<CampaignRiskResponse>(endpoints.campaignRisk(activeCampaign.id, 12, 0), { method: "GET" }),
+        apiFetchJson<CampaignEventsResponse>(endpoints.campaignEvents(activeCampaign.id, 12, 0), { method: "GET" }),
+        apiFetchJson<CampaignEvidenceResponse>(endpoints.campaignEvidence(activeCampaign.id, 12), { method: "GET" }),
       ]);
 
       setDetailState({
@@ -236,7 +240,7 @@ export default function Campaigns({
     } finally {
       setLoading(false);
     }
-  }, [selected?.id]);
+  }, [activeCampaign?.id]);
 
   useEffect(() => {
     void loadCampaignDetail();
@@ -256,7 +260,7 @@ export default function Campaigns({
   const infraCount = (entityCounts.ip ?? 0) + (entityCounts.provider_id ?? 0) + (entityCounts.domain ?? 0) + (entityCounts.url ?? 0);
   const targetCount = (entityCounts.service_id ?? 0) + (entityCounts.endpoint ?? 0);
   const materialized = detailState.events.length > 0 || detailState.evidenceCount > 0 || detailState.riskItems.length > 0;
-  const story = buildCampaignStory(selected, detailState.detail, materialized);
+  const story = buildCampaignStory(activeCampaign, detailState.detail, materialized);
   const legalNotice = asString(detailState.detail?.stats?.legal_notice, "");
   const windowKey = asString(detailState.detail?.stats?.window_key, "");
   const componentSize = asNumber(detailState.detail?.stats?.component_size, totalEntities);
@@ -313,7 +317,7 @@ export default function Campaigns({
             {campaigns.map((campaign) => (
               <button
                 key={campaign.id}
-                className={campaign.id === selected.id ? "campaign-card active" : "campaign-card"}
+                className={campaign.id === activeCampaign?.id ? "campaign-card active" : "campaign-card"}
                 type="button"
                 onClick={() => onSelect(campaign.id)}
               >
@@ -337,13 +341,13 @@ export default function Campaigns({
         <div className="panel campaign-detail-panel">
           <div className="panel-header">
             <div>
-              <h3>{selected.name}</h3>
+              <h3>{activeCampaign?.name ?? "Campaign detail"}</h3>
               <p className="muted">
-                {selected.type} · {selected.status}
+                {activeCampaign?.type ?? "Campaign"} · {activeCampaign?.status ?? "unknown"}
                 {windowKey ? ` · ${windowKey}` : ""}
               </p>
             </div>
-            <span className={`risk-badge ${severityTone(selected.severity)}`}>{selected.severity}</span>
+            <span className={`risk-badge ${severityTone(activeCampaign?.severity ?? "low")}`}>{activeCampaign?.severity ?? "low"}</span>
           </div>
 
           {error && (
@@ -356,7 +360,7 @@ export default function Campaigns({
           <div className="campaign-metric-grid">
             <article className="campaign-metric-card">
               <p className="workflow-stage-kicker">Confidence</p>
-              <strong>{formatConfidence(selected.confidence)}</strong>
+              <strong>{formatConfidence(activeCampaign?.confidence ?? 0)}</strong>
               <span className="muted">campaign-level confidence</span>
             </article>
             <article className="campaign-metric-card">
@@ -386,7 +390,7 @@ export default function Campaigns({
             <div>
               <p className="label">Window</p>
               <p className="stat">
-                {formatTs(detailState.detail?.first_seen || selected.first_seen)} - {formatTs(detailState.detail?.last_seen || selected.last_seen)}
+                {formatTs(detailState.detail?.first_seen || activeCampaign?.first_seen)} - {formatTs(detailState.detail?.last_seen || activeCampaign?.last_seen)}
               </p>
             </div>
             <div>
@@ -395,7 +399,7 @@ export default function Campaigns({
             </div>
             <div>
               <p className="label">Primary key</p>
-              <p className="mono">{detailState.detail?.primary_key ?? selected.primaryKey ?? "—"}</p>
+              <p className="mono">{detailState.detail?.primary_key ?? activeCampaign?.primaryKey ?? "—"}</p>
             </div>
             <div>
               <p className="label">Materialized evidence</p>
@@ -530,7 +534,7 @@ export default function Campaigns({
               <span>Confidence history</span>
               <span className="muted">Open trend</span>
             </summary>
-            <Sparkline data={selected.confidence_history} stroke="var(--accent)" />
+            <Sparkline data={activeCampaign?.confidence_history ?? [0]} stroke="var(--accent)" />
           </details>
         </div>
       </div>
