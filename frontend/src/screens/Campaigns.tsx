@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Loader, RefreshCw } from "lucide-react";
+import { Loader, Play, RefreshCw } from "lucide-react";
 
 import { Sparkline } from "../components/Charts";
 import { apiFetchJson } from "../api/client";
 import { endpoints } from "../api/endpoints";
+import { startDemoScenario } from "../api/ai";
 import type { Campaign } from "../types/domain";
 import { formatConfidence } from "../utils/formatters";
 import { displayEntityLabel, isCanonicalEntityKey } from "../utils/entityKeys";
@@ -187,6 +188,19 @@ export default function Campaigns({
 }: CampaignsProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [fraudTrigger, setFraudTrigger] = useState<"idle" | "running" | "done" | "error">("idle");
+
+  const triggerFraudScenario = useCallback(async () => {
+    setFraudTrigger("running");
+    try {
+      await startDemoScenario("fraud");
+      setFraudTrigger("done");
+      setTimeout(() => setFraudTrigger("idle"), 4000);
+    } catch {
+      setFraudTrigger("error");
+      setTimeout(() => setFraudTrigger("idle"), 4000);
+    }
+  }, []);
   const [detailState, setDetailState] = useState<CampaignDetailState>({
     detail: null,
     riskItems: [],
@@ -300,6 +314,23 @@ export default function Campaigns({
           </button>
           <button className="ghost" type="button" onClick={onOpenGraph}>
             Open in Graph
+          </button>
+          <button
+            className="ghost"
+            type="button"
+            onClick={() => void triggerFraudScenario()}
+            disabled={fraudTrigger === "running"}
+            title="Inject SIM swap → mule ring scenario and run fraud detection"
+          >
+            {fraudTrigger === "running" ? (
+              <><Loader size={14} className="spin" />&nbsp;Running…</>
+            ) : fraudTrigger === "done" ? (
+              <>✓ Injected — refresh in 30s</>
+            ) : fraudTrigger === "error" ? (
+              <>✗ Failed — check demo mode</>
+            ) : (
+              <><Play size={14} />&nbsp;Run Mule Ring Demo</>
+            )}
           </button>
         </div>
       </div>
