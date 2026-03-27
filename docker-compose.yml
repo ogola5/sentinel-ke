@@ -193,6 +193,18 @@ services:
     volumes: *backend-volumes
     restart: unless-stopped
 
+  # ── Live OSINT feeder: CISA KEV + EPSS ────────────────────────────────────
+  cisa-kev-ingest-worker:
+    build: *backend-build
+    <<: *backend-env
+    command: >
+      /bin/sh -c "while true; do python -m app.integrations.real_data_pipeline --source-api-key ${CISA_KEV_SOURCE_API_KEY:-cisa-kev-secret-key} --classification PUBLIC --confidence 0.95 kev-epss --asset-id ${CISA_KEV_ASSET_ID:-ke-gov-infra} --kev-url ${CISA_KEV_FEED_URL:-https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json} --timeout-sec ${CISA_KEV_TIMEOUT_SEC:-30} --sleep-every 450 --sleep-sec 65 || true; sleep ${CISA_KEV_POLL_SEC:-21600}; done"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes: *backend-volumes
+    restart: unless-stopped
+
   # ── AI inference consumer (Kafka → GNN scoring) ────────────────────────────
   inference-consumer:
     build: *backend-build
@@ -427,6 +439,62 @@ services:
     depends_on:
       opensearch:
         condition: service_healthy
+      postgres:
+        condition: service_healthy
+    volumes: *backend-volumes
+    restart: unless-stopped
+
+  # ── Embedding worker (GNN embeddings → EntityEmbedding table) ───────────────
+  embedding-worker:
+    build: *backend-build
+    <<: *backend-env
+    environment:
+      PYTHONPATH: /app
+    command: >
+      /bin/sh -c "while true; do
+        python -m app.analytics.layer3.embedding_worker --window-key Wmid;
+        sleep 600;
+      done"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes: *backend-volumes
+    restart: unless-stopped
+
+  # ── Link prediction worker (cosine similarity on GNN embeddings) ───────────
+  link-prediction-worker:
+    build: *backend-build
+    <<: *backend-env
+    environment:
+      PYTHONPATH: /app
+    command: >
+      /bin/sh -c "while true; do
+        python -m app.analytics.layer3.link_prediction_worker
+          --window-key Wmid
+          --risk-threshold 0.65
+          --top-k 20;
+        sleep 900;
+      done"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes: *backend-volumes
+    restart: unless-stopped
+
+  # ── Feedback worker (validates analyst labels + triggers retraining) ────────
+  feedback-worker:
+    build: *backend-build
+    <<: *backend-env
+    environment:
+      PYTHONPATH: /app
+    command: >
+      /bin/sh -c "while true; do
+        python -m app.analytics.layer3.feedback_worker
+          --retrain-threshold 50
+          --window-key Wmid;
+        sleep 300;
+      done"
+    depends_on:
       postgres:
         condition: service_healthy
     volumes: *backend-volumes

@@ -115,6 +115,13 @@ SOURCES = [
         "classification_level": "INTERNAL",
         "api_key": _env_key("LOCAL_NET_PROBE_SOURCE_API_KEY", "local-net-probe-secret-key"),
     },
+    {
+        "source_id": "cisa_kev",
+        "source_type": "osint",
+        "section_code": "soc",
+        "classification_level": "PUBLIC",
+        "api_key": _env_key("CISA_KEV_SOURCE_API_KEY", "cisa-kev-secret-key"),
+    },
 ]
 
 

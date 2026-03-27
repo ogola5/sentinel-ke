@@ -393,6 +393,10 @@ class AIInputAnomalyAlert(Base):
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
 
     __table_args__ = (
+        UniqueConstraint(
+            "entity_key", "window_key", "window_end", "anomaly_type",
+            name="uq_ai_input_anomaly_alert",
+        ),
         Index("ix_ai_input_anomaly_entity", "entity_key"),
         Index("ix_ai_input_anomaly_window_end", "window_end"),
     )
