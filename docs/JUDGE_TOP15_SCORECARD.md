@@ -1,6 +1,6 @@
 # Sentinel-KE Top-15 Judge Scorecard
 
-Last updated: 2026-03-26
+Last updated: 2026-03-27
 
 This scorecard is a judge-facing evidence pack, not a marketing summary. It fixes three gaps directly:
 
@@ -16,9 +16,9 @@ Only repo facts are used here. Anything pending is labeled as such.
 |---|---|---|---|
 | 1 | Sentinel-KE evaluates three separate AI lanes, not one mixed benchmark. | `docs/THREE_LANE_AI_STORY.md`, `docs/AI_BENCHMARK_STRATEGY.md`, `docs/BENCHMARK_SUMMARY.md` | Ready |
 | 2 | The cyber lane has a real live graph window with matched thresholds, baselines, and operating metrics on Kenyan cyber data. | `docs/BENCHMARK_SUMMARY.md`, `docs/THREE_LANE_AI_STORY.md`, `docs/JUDGE_TOP15_SCRIPT.md` | Ready |
-| 3 | The cyber benchmark is temporal and uses a small observed graph of 97 nodes and 237 edges. | `docs/BENCHMARK_SUMMARY.md`, `docs/THREE_LANE_AI_STORY.md` | Ready |
+| 3 | The cyber benchmark is temporal, uses matched live thresholds and baselines, and now has strong recent scientific evidence across multiple windows. | `docs/BENCHMARK_SUMMARY.md`, `docs/THREE_LANE_AI_STORY.md`, `/v1/ai/judge-readiness` | Ready |
 | 4 | The fraud lane uses PaySim as a separate benchmark and is not used to claim cyber or corruption performance. | `docs/FRAUD_BENCHMARK_POSITIONING.md`, `docs/AI_BENCHMARK_STRATEGY.md`, `docs/BENCHMARK_SUMMARY.md` | Ready |
-| 5 | The fraud lane is a separate benchmark lane, but the repo does not quote a fresh AUC until the PaySim artifact is regenerated. | `docs/BENCHMARK_SUMMARY.md`, `docs/THREE_LANE_AI_STORY.md`, `docs/FRAUD_BENCHMARK_POSITIONING.md` | Ready with caveat |
+| 5 | The fraud lane is a separate benchmark lane and now has a fresh PaySim artifact with explicit ranking metrics and caveats. | `docs/BENCHMARK_SUMMARY.md`, `docs/THREE_LANE_AI_STORY.md`, `docs/FRAUD_BENCHMARK_POSITIONING.md`, `/v1/ai/benchmarks` | Ready |
 | 6 | The corruption lane is not presented as a legal finding engine. It is presented as a risk-ranking and graph-visualization lane. | `docs/THREE_LANE_AI_STORY.md`, `backend/app/analytics/corruption/train_worker.py` | Ready |
 | 7 | The corruption lane now has a live holdout AUC with fairness passed, but it still carries a mixed-supervision caveat. | `docs/THREE_LANE_AI_STORY.md`, `docs/BENCHMARK_SUMMARY.md`, `backend/app/analytics/corruption/train_worker.py` | Ready |
 | 8 | The repo has an explicit baseline API, separate from model inference. | `backend/app/api/ai.py` (`GET /v1/ai/baselines`) | Ready |

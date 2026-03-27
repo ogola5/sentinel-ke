@@ -52,6 +52,7 @@ from app.analytics.layer3.post_prediction_pipeline import run_post_prediction_pi
 from app.analytics.layer3.worker_heartbeat import mark_worker_finished, mark_worker_started
 from app.campaign.models import Campaign, CampaignEntity
 from app.core.config import settings
+from app.core.schema_contract import apply_schema_contract
 from app.core.security import compute_event_hash, sha256_hex, stable_json_dumps
 from app.db.base import Base
 from app.ledger.db import SessionLocal, engine
@@ -129,6 +130,7 @@ def _ensure_ai_tables() -> None:
             AIModelLineage.__table__,
         ],
     )
+    apply_schema_contract(engine)
 
 
 def _event_hashes(

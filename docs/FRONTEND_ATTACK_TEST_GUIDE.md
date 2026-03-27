@@ -5,6 +5,14 @@
 **Frontend**: http://localhost:3000
 **Tested**: 2026-03-27
 
+See also:
+
+- [CYBER_SCREEN_REALITY_AUDIT.md](/home/ogola/personal/sentinel-ke/docs/CYBER_SCREEN_REALITY_AUDIT.md) for the screen-by-screen realism review, backend route dependencies, and the honest demo boundary for cyber / VPN / DDoS / malware.
+- [TOP3_HARDENING_PACK.md](/home/ogola/personal/sentinel-ke/docs/TOP3_HARDENING_PACK.md) for the final judge-safe claims, public backend access path, containment claim boundary, and strict 5-minute demo order.
+- [JUDGE_15MIN_MASTER_PACK.md](/home/ogola/personal/sentinel-ke/docs/JUDGE_15MIN_MASTER_PACK.md) for the complete 5-minute slides + 10-minute demo + Q&A presentation flow.
+- [EXTERNAL_CONTAINMENT_DEMO.md](/home/ogola/personal/sentinel-ke/docs/EXTERNAL_CONTAINMENT_DEMO.md) for the external partner webhook demo path and containment escalation ladder.
+- [LEGACY_CONNECTOR_BLUEPRINT.md](/home/ogola/personal/sentinel-ke/docs/LEGACY_CONNECTOR_BLUEPRINT.md) for how agency legacy systems stream into Sentinel-KE without bypassing the connector API.
+
 ---
 
 ## Credentials

@@ -708,10 +708,70 @@ def _recent_window_ends(
         .filter(GraphFeatureSnapshot.window_key == window_key)
         .distinct()
         .order_by(GraphFeatureSnapshot.window_end.desc())
-        .limit(max(1, int(limit)))
+        .limit(max(1, int(limit)) * 20)
         .all()
     )
-    return [row[0] for row in rows if row and row[0] is not None]
+    values = [row[0] for row in rows if row and row[0] is not None]
+    if len(values) <= max(1, int(limit)):
+        return values
+
+    # Feature snapshots can land every minute, which makes the latest candidate
+    # list overly sensitive to tiny label-mix shifts. Keep recent windows, but
+    # spread them out so the selector can still see the last stable benchmarkable
+    # run instead of only near-duplicate slices from the same burst.
+    min_spacing = timedelta(minutes=5)
+    selected: List[datetime] = []
+    overflow: List[datetime] = []
+    for value in values:
+        if not selected or (selected[-1] - value) >= min_spacing:
+            selected.append(value)
+        else:
+            overflow.append(value)
+        if len(selected) >= max(1, int(limit)):
+            return selected
+
+    if len(selected) >= max(3, int(limit) // 2):
+        return selected[: max(1, int(limit))]
+
+    # Fall back to the skipped near-duplicates only when spacing leaves too few
+    # candidates to make a meaningful choice.
+    combined = selected + [value for value in overflow if value not in selected]
+    return combined[: max(1, int(limit))]
+
+
+def _window_label_support_profile(dataset: GNNDataset) -> Dict[str, float]:
+    total = max(1, int(len(dataset.entity_keys)))
+    groups: Dict[str, Dict[str, int]] = {}
+    for entity_type, label in zip(dataset.entity_types, dataset.labels):
+        group = groups.setdefault(str(entity_type), {"count": 0, "positive": 0, "negative": 0})
+        group["count"] += 1
+        if int(label) == 1:
+            group["positive"] += 1
+        else:
+            group["negative"] += 1
+
+    eligible_types = 0
+    balanced_types = 0
+    single_class_mass = 0.0
+    for stats in groups.values():
+        count = int(stats["count"])
+        positive = int(stats["positive"])
+        negative = int(stats["negative"])
+        if count <= 0:
+            continue
+        if positive == 0 or negative == 0:
+            single_class_mass += count / float(total)
+        if count >= 5 and positive >= 2 and negative >= 2:
+            eligible_types += 1
+            positive_rate = positive / float(count)
+            if 0.10 <= positive_rate <= 0.90:
+                balanced_types += 1
+
+    return {
+        "eligible_types": float(eligible_types),
+        "balanced_types": float(balanced_types),
+        "single_class_mass": round(single_class_mass, 6),
+    }
 
 
 def _window_scientific_score(dataset: GNNDataset) -> float:
@@ -733,6 +793,12 @@ def _window_scientific_score(dataset: GNNDataset) -> float:
     support = math.log1p(total)
     edge_support = math.log1p(edges)
     imbalance = abs(positives - negatives) / float(total)
+    label_support = _window_label_support_profile(dataset)
+    label_support_bonus = (
+        3.0 * float(label_support["eligible_types"])
+        + 1.5 * float(label_support["balanced_types"])
+        - 8.0 * float(label_support["single_class_mass"])
+    )
     return round(
         (
             18.0 * balance
@@ -742,6 +808,7 @@ def _window_scientific_score(dataset: GNNDataset) -> float:
             + 0.8 * math.log1p(benign_negatives)
             + 7.5 * max(0.0, min(1.0, real_ratio))
             - 10.0 * imbalance
+            + label_support_bonus
         ),
         6,
     )
@@ -1013,11 +1080,13 @@ def load_dataset(
         scientific_score = _window_scientific_score(dataset)
         readiness = dict(selection_metadata.get("benchmark_readiness") or {})
         benchmarkable = bool(readiness.get("benchmarkable"))
+        label_support = _window_label_support_profile(dataset)
         selection_metadata.update({
             "window_rank": index,
             "candidate_window_count": len(candidate_windows),
             "scientific_score": scientific_score,
             "benchmarkable": benchmarkable,
+            "label_support": label_support,
         })
         dataset = replace(dataset, selection_metadata=selection_metadata)
         ranked_candidates.append(

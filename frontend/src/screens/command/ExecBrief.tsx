@@ -305,6 +305,16 @@ export default function ExecBrief({ principal }: Props) {
     new Set([...domainSummaries.map((row) => row.prediction_type), ...domainHealthRows.map((row) => row.prediction_type)]),
   ).sort((left, right) => DOMAIN_ORDER.indexOf(left) - DOMAIN_ORDER.indexOf(right));
   const strongestProofLane = strongestLane(judgeReadiness?.lanes ?? []);
+  const benchmarkEvidenceItems = judgeReadiness?.benchmark_evidence?.items ?? [];
+  const strongestBenchmark = useMemo(() => {
+    const available = benchmarkEvidenceItems.filter((item) => item.status === "ok");
+    if (available.length === 0) return benchmarkEvidenceItems[0] ?? null;
+    return [...available].sort((left, right) => {
+      const leftScore = Number(left.metrics?.auc ?? left.metrics?.pr_auc ?? left.metrics?.f1 ?? 0);
+      const rightScore = Number(right.metrics?.auc ?? right.metrics?.pr_auc ?? right.metrics?.f1 ?? 0);
+      return rightScore - leftScore;
+    })[0] ?? null;
+  }, [benchmarkEvidenceItems]);
   const strongestScientificLane = useMemo(() => {
     const lanes = judgeReadiness?.lanes ?? [];
     if (lanes.length === 0) return null;
@@ -415,7 +425,7 @@ export default function ExecBrief({ principal }: Props) {
             </span>
           </div>
 
-          <div style={{ display: "grid", gridTemplateColumns: "1.1fr 0.9fr 0.9fr 0.9fr", gap: 8, marginTop: 10 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(5, minmax(0, 1fr))", gap: 8, marginTop: 10 }}>
             <div className="metric-card accent" style={{ padding: "10px 12px" }}>
               <div className="metric-label">Strongest lane</div>
               <div className="metric-value">{strongestProofLane?.domain_label ?? "—"}</div>
@@ -441,6 +451,15 @@ export default function ExecBrief({ principal }: Props) {
                   : "No multi-window evidence yet"}
               </div>
             </div>
+            <div className={`metric-card ${metricToneClass(toneForJudgeStatus(strongestBenchmark?.status ?? "missing"))}`} style={{ padding: "10px 12px" }}>
+              <div className="metric-label">Fraud benchmark</div>
+              <div className="metric-value">{strongestBenchmark ? String(strongestBenchmark.status).toUpperCase() : "MISSING"}</div>
+              <div className="metric-sub">
+                {strongestBenchmark?.metrics?.auc != null
+                  ? `AUC ${formatPercent(strongestBenchmark.metrics.auc)} · PR-AUC ${formatPercent(strongestBenchmark.metrics.pr_auc)}`
+                  : strongestBenchmark?.headline ?? "No external benchmark artifact yet"}
+              </div>
+            </div>
             <div className="metric-card" style={{ padding: "10px 12px" }}>
               <div className="metric-label">Caveats</div>
               <div className="metric-value">{judgeCaveats.length}</div>
@@ -451,6 +470,12 @@ export default function ExecBrief({ principal }: Props) {
           {strongestProofLane && (
             <div className="exec-situation-item" style={{ marginTop: 12, borderLeftColor: toneColor(toneForJudgeStatus(strongestProofLane.status)), padding: "10px 12px" }}>
               <strong>{strongestProofLane.domain_label}</strong> shows {strongestProofLane.kpi_evidence.operating_metrics?.sample_count ?? 0} operating samples, threshold mode {strongestProofLane.kpi_evidence.operating_metrics?.threshold_mode ?? "unknown"}, and baseline coverage {strongestProofLane.kpi_evidence.baselines?.coverage_count ?? 0}.
+            </div>
+          )}
+
+          {strongestBenchmark && (
+            <div className="exec-situation-item" style={{ marginTop: 8, borderLeftColor: toneColor(toneForJudgeStatus(strongestBenchmark.status)), padding: "10px 12px" }}>
+              <strong>{strongestBenchmark.label}</strong> is recorded at {formatTimestamp(strongestBenchmark.recorded_at)} with {strongestBenchmark.metrics?.sample_count ?? 0} holdout samples and {strongestBenchmark.run_config?.snapshot_inserted ?? 0} benchmark snapshots seeded. {strongestBenchmark.honest_caveat ?? strongestBenchmark.headline ?? "Benchmark evidence loaded."}
             </div>
           )}
 
@@ -614,6 +639,64 @@ export default function ExecBrief({ principal }: Props) {
                       </div>
                       <div className="exec-situation-item" style={{ borderLeftColor: toneColor(cardTone), padding: "10px 12px" }}>
                         Robustness guardrails: {health?.real_data_gate_passed === false ? "real-data gate not yet passed" : "real-data gate passed or not flagged"}; {health?.fairness_blocked ? "fairness policy blocks deployment" : "no fairness block recorded"}.
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+
+              {benchmarkEvidenceItems.map((item) => {
+                const cardTone = toneForJudgeStatus(item.status);
+                return (
+                  <div key={item.benchmark_id} className="priority-card" style={{ marginTop: 0 }}>
+                    <div className="priority-card-head">
+                      <div>
+                        <h4 className="priority-card-title">{item.label}</h4>
+                        <p className="priority-card-copy">{item.headline ?? item.description ?? "Benchmark evidence"}</p>
+                      </div>
+                      <span
+                        className="chip"
+                        style={{
+                          color: toneColor(cardTone),
+                          borderColor: `${toneColor(cardTone)}55`,
+                        }}
+                      >
+                        {String(item.status).toUpperCase()}
+                      </span>
+                    </div>
+
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 10 }}>
+                      <div className={`metric-card ${metricToneClass(cardTone)}`} style={{ padding: "10px 12px" }}>
+                        <div className="metric-label">AUC</div>
+                        <div className="metric-value">{formatPercent(item.metrics?.auc)}</div>
+                        <div className="metric-sub">{item.metrics?.evaluation_scope ?? "benchmark artifact"}</div>
+                      </div>
+                      <div className={`metric-card ${metricToneClass(cardTone)}`} style={{ padding: "10px 12px" }}>
+                        <div className="metric-label">PR-AUC</div>
+                        <div className="metric-value">{formatPercent(item.metrics?.pr_auc)}</div>
+                        <div className="metric-sub">Held-out ranking quality</div>
+                      </div>
+                      <div className="metric-card" style={{ padding: "10px 12px" }}>
+                        <div className="metric-label">Precision</div>
+                        <div className="metric-value">{formatPercent(item.metrics?.precision)}</div>
+                        <div className="metric-sub">Current operating threshold</div>
+                      </div>
+                      <div className="metric-card" style={{ padding: "10px 12px" }}>
+                        <div className="metric-label">Recall</div>
+                        <div className="metric-value">{formatPercent(item.metrics?.recall)}</div>
+                        <div className="metric-sub">Current operating threshold</div>
+                      </div>
+                    </div>
+
+                    <div style={{ display: "grid", gap: 8, marginTop: 10 }}>
+                      <div className="exec-situation-item" style={{ borderLeftColor: toneColor(cardTone), padding: "10px 12px" }}>
+                        Dataset: {item.dataset ?? "Unknown"} | CSV: {item.run_config?.csv_name ?? "not recorded"} | Window {item.run_config?.window_key ?? "—"}.
+                      </div>
+                      <div className="exec-situation-item" style={{ borderLeftColor: toneColor(cardTone), padding: "10px 12px" }}>
+                        Holdout support: {item.metrics?.holdout_positive_count ?? 0} positive, {item.metrics?.holdout_negative_count ?? 0} negative, {item.metrics?.sample_count ?? 0} samples total.
+                      </div>
+                      <div className="exec-situation-item" style={{ borderLeftColor: "var(--warning)", padding: "10px 12px" }}>
+                        {item.honest_caveat ?? "Benchmark caveat not recorded."}
                       </div>
                     </div>
                   </div>

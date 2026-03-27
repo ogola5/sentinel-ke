@@ -1,18 +1,18 @@
 # Top-15 KPI / Evidence Sheet
 
-Last updated: 2026-03-26
+Last updated: 2026-03-27
 
 This sheet is intentionally narrow: each row ties a metric or evidence artifact to an existing repo fact. If a value is pending, it is marked pending instead of being approximated.
 
 | # | KPI or evidence item | Current repo fact | Source(s) |
 |---|---|---|---|
-| 1 | Cyber operating F1 | `0.941176` on the live benchmarked window | `docs/BENCHMARK_SUMMARY.md`, `docs/THREE_LANE_AI_STORY.md`, `docs/JUDGE_TOP15_SCRIPT.md` |
-| 2 | Cyber graph size | `97` nodes, `237` edges | `docs/BENCHMARK_SUMMARY.md`, `docs/THREE_LANE_AI_STORY.md` |
+| 1 | Cyber operating F1 | `0.7000` on the latest matched benchmarked window | `docs/BENCHMARK_SUMMARY.md`, `docs/THREE_LANE_AI_STORY.md`, `/v1/ai/judge-readiness` |
+| 2 | Cyber graph size | `2,500` nodes, `6,424` edges on the latest matched run | `docs/BENCHMARK_SUMMARY.md`, `docs/THREE_LANE_AI_STORY.md`, `/v1/ai/judge-readiness` |
 | 3 | Cyber holdout | Temporal holdout on `Wmid` | `docs/BENCHMARK_SUMMARY.md`, `docs/THREE_LANE_AI_STORY.md`, `backend/scripts/train_cyber_gnn.py` |
 | 4 | Fraud benchmark identity | PaySim, 6.3M M-Pesa-style transactions, 8,213 fraud accounts | `docs/BENCHMARK_SUMMARY.md`, `docs/THREE_LANE_AI_STORY.md`, `docs/FRAUD_BENCHMARK_POSITIONING.md` |
-| 5 | Fraud benchmark status | Fresh PaySim artifact still required before quoting a judge-safe AUC | `docs/BENCHMARK_SUMMARY.md`, `docs/THREE_LANE_AI_STORY.md`, `backend/scripts/run_paysim_gnn.py` |
+| 5 | Fraud benchmark status | Fresh PaySim artifact present: holdout `AUC 0.9555`, `PR-AUC 0.9291`, precision `0.1251`, recall `1.0`, F1 `0.2224` | `/v1/ai/benchmarks`, `docs/BENCHMARK_SUMMARY.md`, `backend/scripts/run_paysim_gnn.py` |
 | 6 | Corruption graph size | `2,026` nodes, `3,900` edges | `docs/THREE_LANE_AI_STORY.md`, `docs/BENCHMARK_SUMMARY.md`, `docs/JUDGE_TOP15_SCRIPT.md` |
-| 7 | Corruption model status | Holdout `AUC 0.9135`, fairness passed on the active window, mixed-supervision caveat remains | `docs/THREE_LANE_AI_STORY.md`, `docs/BENCHMARK_SUMMARY.md`, `backend/app/analytics/corruption/train_worker.py` |
+| 7 | Corruption model status | Holdout `AUC 0.9158`, fairness passed on the active window, mixed-supervision caveat remains | `docs/THREE_LANE_AI_STORY.md`, `docs/BENCHMARK_SUMMARY.md`, `backend/app/analytics/corruption/train_worker.py`, `/v1/ai/judge-readiness` |
 | 8 | `/health` benchmark | `120` complete, `0` failed, p50 `98 ms`, p95 `193 ms`, p99 `203 ms`, `86.05` req/s | `docs/PERFORMANCE_SLO_EVIDENCE.md` |
 | 9 | `/v1/metrics` benchmark | `180` complete, `178` length mismatches reported by the tool, p50 `187 ms`, p95 `245 ms`, p99 `268 ms`, `101.14` req/s | `docs/PERFORMANCE_SLO_EVIDENCE.md` |
 | 10 | Controlled replay benchmark | `200` loaded, `72` schema-valid, `72` accepted, `0` failures, effective replay RPS `49.75`, latency p50/p95/p99 `35.39 / 67.9 / 108.51 ms` | `docs/PERFORMANCE_SLO_EVIDENCE.md` |
@@ -30,7 +30,7 @@ This sheet is intentionally narrow: each row ties a metric or evidence artifact 
 
 ## Notes
 
-- The live judge-readiness API currently reports `status: ok` with lane-specific caveats. Cyber is anchored to the latest benchmarked run window for like-for-like comparison, but the current live holdout is still class-thin and should be described via operating metrics rather than AUC.
-- Fraud AUC is intentionally not quoted here because the repo still needs a fresh PaySim artifact.
+- The live judge-readiness API currently reports `status: ok` with lane-specific caveats. Cyber now reports `scientific_evidence.status: strong` across recent windows, but the metrics still reflect the current supervision mix rather than fully adjudicated national incident truth.
+- Fraud AUC is now quoted here because the PaySim artifact was freshly regenerated on `2026-03-27T12:59:29+00:00`. The honest caveat is that the current operating threshold is still conservative even though the ranking metrics are strong.
 - Corruption AUC is judge-safe only as a live risk-ranking result with fairness passed and weak-supervision caveats.
 - The `/v1/metrics` benchmark row keeps the original tool caveat: the failure count is a body-length mismatch, not a transport or status-code failure.

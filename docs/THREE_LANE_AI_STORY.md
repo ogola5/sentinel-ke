@@ -32,16 +32,17 @@ operational OSINT network telemetry feeds
 
 **Evaluation:**
 - Holdout type: temporal recency holdout with class-support backfill
-- Operating metrics on the live benchmarked window: **F1 0.9412**, **precision 1.0**, **recall 0.8889**
-- Holdout ranking metric is currently weak: **AUC 0.0** on a holdout with `18` positives and `1` negative
-- Graph size at evaluation: 97 nodes, 237 edges
+- Latest matched run metrics: **AUC 0.9682**, **F1 0.7000**, **precision 0.7538**, **recall 0.6533**
+- Latest matched graph size: **2,500 nodes**, **6,424 edges**
+- Live judge-readiness now reports cyber scientific evidence as **strong** across recent benchmarkable windows
 
 **Benchmark statement:**
-The cyber GNN is now operationally aligned on a real Kenyan cyber event graph using a
+The cyber GNN is operationally aligned on a real Kenyan cyber event graph using a
 temporal split, live thresholds, live baselines, and a matched prediction window. The
-current judge-safe cyber claim is thresholded operating performance on live ingested
-data, not a strong ranking AUC. The holdout still has very thin negative support, so the
-ranking metric is scientifically weak even though the live operating point is strong.
+current judge-safe cyber claim is that the lane now has both live operating evidence and
+strong recent scientific support across multiple benchmarkable windows. The remaining
+caveat is that evaluation still reflects the current supervision mix rather than fully
+adjudicated national incident ground truth.
 
 **What this does not prove:**
 This result does not validate fraud detection or corruption risk ranking. Cyber AUC is
@@ -61,17 +62,20 @@ the industry-standard benchmark for mobile money fraud research.
 - Fraud accounts in dataset: 8,213
 
 **Evaluation:**
-- AUC: **pending fresh artifact**
+- Holdout AUC: **0.9555**
+- Holdout PR-AUC: **0.9291**
+- Holdout precision / recall / F1: **0.1251 / 1.0 / 0.2224**
 - Holdout type: temporal (train on earlier transaction steps, test on later steps)
 - Script: `backend/scripts/run_paysim_gnn.py`
+- Artifact: `/app/artifacts/paysim_auc.json`
 
 **Why PaySim:**
 PaySim is the accepted M-Pesa fraud benchmark in the academic and industry literature.
-It replicates the statistical properties of real Central Bank mobile money logs. Using
-PaySim allows Sentinel-KE to report a reproducible, verifiable fraud benchmark once the
-current artifact is regenerated. It is not a substitute for live M-Pesa data, but it
-establishes that the GNN architecture can be evaluated on a public mobile-money-style
-corpus before live data is available.
+It replicates the statistical properties of real Central Bank mobile money logs. Sentinel-KE
+now has a fresh reproducible artifact with CSV identity, SHA256, seeded snapshot count,
+and held-out metrics. It is not a substitute for live M-Pesa data, but it establishes that
+the GNN architecture can be evaluated on a public mobile-money-style corpus before live
+data is available.
 
 **What this does not prove:**
 This result does not validate cyber threat detection or corruption risk ranking. The
@@ -92,7 +96,7 @@ PaySim lane remains specific to the mobile money fraud domain.
 
 **Current status: operational ranking lane with mixed-supervision caveat**
 
-The corruption GNN now reports a live holdout AUC of **0.9135** with fairness passed on
+The corruption GNN now reports a live holdout AUC of **0.9158** with fairness passed on
 the active window. The lane still carries a mixed-supervision caveat because outcome-backed
 labels are not yet the full national ground truth. The metrics are useful for risk ranking
 and investigation support; they should still be described as mixed-supervision evidence,
@@ -140,12 +144,12 @@ inference step; it does not inherit the AUC of either lane's standalone model.
 
 | Lane | Honest Claim |
 |---|---|
-| Cyber | Strong thresholded operating metrics on a real Kenyan cyber event graph, with an honest caveat that the current holdout AUC is weak because the holdout is class-thin |
-| Fraud | PaySim is the separate fraud benchmark lane; quote the AUC only when the fresh artifact is present |
-| Corruption | 0.9135 holdout AUC on PPRA + Kenya Law + EACC mixed-supervision data, with ranking focus and a non-adjudication caveat |
+| Cyber | Strong matched-run cyber metrics on a real Kenyan cyber event graph, plus strong recent scientific evidence across multiple windows, with an honest caveat that evaluation still uses the current supervision mix |
+| Fraud | PaySim is the separate fraud benchmark lane and now has a fresh artifact: AUC `0.9555`, PR-AUC `0.9291`, with an honest caveat that the current operating threshold is still weak |
+| Corruption | 0.9158 holdout AUC on PPRA + Kenya Law + EACC mixed-supervision data, with ranking focus and a non-adjudication caveat |
 
 **The single claim for judges:**
 
-> "Our cyber lane currently shows strong live operating metrics on real cyber events, but we
-> keep an explicit caveat that the ranking AUC is still weak on the current class-thin holdout.
-> Fraud and corruption are separate lanes with their own evidence and caveats."
+> "Our cyber lane now shows both live operating evidence and strong recent scientific support
+> on real cyber events. Fraud and corruption are separate lanes with their own evidence and
+> caveats, and we do not use the fraud benchmark to overstate cyber or corruption."

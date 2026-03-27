@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from statistics import mean, median
 from typing import Any, Literal
 
@@ -60,6 +62,13 @@ DOMAIN_PREDICTION_TYPES: tuple[str, ...] = ("risk_gnn", "corruption_risk")
 DOMAIN_LABELS: dict[str, str] = {
     "risk_gnn": "Cyber GNN",
     "corruption_risk": "Corruption GNN",
+}
+
+BENCHMARK_ARTIFACT_CANDIDATES: dict[str, tuple[Path, ...]] = {
+    "paysim_fraud": (
+        Path(settings.gnn_artifact_dir).resolve().parent / "paysim_auc.json",
+        Path("/app/artifacts/paysim_auc.json"),
+    ),
 }
 
 
@@ -1008,6 +1017,94 @@ def _build_judge_lane_summary(db: Session, prediction_type: str) -> dict[str, An
     }
 
 
+def _load_json_artifact(candidates: tuple[Path, ...]) -> dict[str, Any] | None:
+    for candidate in candidates:
+        try:
+            if candidate.exists() and candidate.is_file():
+                return json.loads(candidate.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+    return None
+
+
+def _build_benchmark_evidence() -> dict[str, Any]:
+    paysim = _load_json_artifact(BENCHMARK_ARTIFACT_CANDIDATES["paysim_fraud"])
+    items: list[dict[str, Any]] = []
+    if paysim:
+        metrics = dict(paysim.get("metrics") or {})
+        run_config = dict(paysim.get("run_config") or {})
+        auc = _safe_float(metrics.get("auc"))
+        pr_auc = _safe_float(metrics.get("pr_auc"))
+        f1 = _safe_float(metrics.get("f1"))
+        precision = _safe_float(metrics.get("precision"))
+        recall = _safe_float(metrics.get("recall"))
+        holdout_positive_count = _safe_int(metrics.get("holdout_positive_count"))
+        holdout_negative_count = _safe_int(metrics.get("holdout_negative_count"))
+        sample_count = _safe_int(metrics.get("eval_samples"))
+        items.append(
+            {
+                "benchmark_id": "paysim_fraud",
+                "label": "PaySim fraud benchmark",
+                "domain": "fraud",
+                "status": "ok",
+                "dataset": paysim.get("dataset"),
+                "description": paysim.get("description"),
+                "model": paysim.get("model"),
+                "recorded_at": paysim.get("run_at"),
+                "headline": (
+                    f"AUC {auc:.4f}, PR-AUC {pr_auc:.4f} on a held-out PaySim window."
+                    if auc is not None and pr_auc is not None
+                    else "PaySim benchmark artifact is present."
+                ),
+                "metrics": {
+                    "auc": auc,
+                    "pr_auc": pr_auc,
+                    "f1": f1,
+                    "precision": precision,
+                    "recall": recall,
+                    "sample_count": sample_count,
+                    "evaluation_scope": metrics.get("evaluation_scope"),
+                    "holdout_positive_count": holdout_positive_count,
+                    "holdout_negative_count": holdout_negative_count,
+                },
+                "run_config": {
+                    "window_key": run_config.get("window_key"),
+                    "max_rows": run_config.get("max_rows"),
+                    "csv_supplied": bool(run_config.get("csv_supplied")),
+                    "csv_name": run_config.get("csv_name"),
+                    "csv_sha256": run_config.get("csv_sha256"),
+                    "snapshot_inserted": _safe_int(
+                        dict(run_config.get("snapshot_seed") or {}).get("inserted")
+                    ),
+                },
+                "honest_caveat": (
+                    "This is a strong fraud-ranking benchmark, but the current operating threshold is still conservative: recall is high while precision and F1 remain weaker than the AUC."
+                ),
+                "artifact_path": str(BENCHMARK_ARTIFACT_CANDIDATES["paysim_fraud"][0]),
+            }
+        )
+    else:
+        items.append(
+            {
+                "benchmark_id": "paysim_fraud",
+                "label": "PaySim fraud benchmark",
+                "domain": "fraud",
+                "status": "missing",
+                "headline": "Fresh PaySim benchmark artifact is not available yet.",
+                "honest_caveat": "Do not quote a PaySim AUC until the artifact is regenerated from a supplied CSV.",
+            }
+        )
+    return {
+        "available": any(item.get("status") == "ok" for item in items),
+        "items": items,
+    }
+
+
+@router.get("/benchmarks")
+def benchmark_evidence_summary():
+    return _build_benchmark_evidence()
+
+
 @router.get("/predictions")
 def list_predictions(
     pagination: dict = Depends(pagination_params),
@@ -1215,6 +1312,7 @@ def judge_readiness_summary(
 ):
     prediction_types = [prediction_type] if prediction_type else list(DOMAIN_PREDICTION_TYPES)
     lanes = [_build_judge_lane_summary(db, kind) for kind in prediction_types]
+    benchmark_evidence = _build_benchmark_evidence()
     statuses = [str(item.get("status") or "missing") for item in lanes]
     overall_status = "ok"
     if not lanes or all(status == "missing" for status in statuses):
@@ -1227,6 +1325,10 @@ def judge_readiness_summary(
     for lane in lanes:
         for caveat in list(lane.get("honest_caveats") or []):
             aggregated_caveats.append(f"{lane.get('domain_label')}: {caveat}")
+    for item in list(benchmark_evidence.get("items") or []):
+        caveat = str(item.get("honest_caveat") or "").strip()
+        if caveat:
+            aggregated_caveats.append(f"{item.get('label')}: {caveat}")
     return {
         "status": overall_status,
         "headline": (
@@ -1239,11 +1341,13 @@ def judge_readiness_summary(
             )
         ),
         "lanes": lanes,
+        "benchmark_evidence": benchmark_evidence,
         "honest_caveats": list(dict.fromkeys(aggregated_caveats)),
         "evidence_endpoints": {
             "latest_runs": "/v1/ai/gnn/latest-runs",
             "domain_health": "/v1/ai/gnn/domain-health",
             "scientific_summary": "/v1/ai/gnn/scientific-summary",
+            "benchmarks": "/v1/ai/benchmarks",
             "thresholds": "/v1/ai/thresholds",
             "baselines": "/v1/ai/baselines",
             "trust_summary": "/v1/ai/trust/summary",

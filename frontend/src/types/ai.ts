@@ -228,15 +228,53 @@ export interface JudgeLaneSummary {
   honest_caveats: string[];
 }
 
+export interface JudgeBenchmarkEvidenceItem {
+  benchmark_id: string;
+  label: string;
+  domain: string;
+  status: "ok" | "missing" | string;
+  dataset?: string | null;
+  description?: string | null;
+  model?: string | null;
+  recorded_at?: string | null;
+  headline?: string | null;
+  honest_caveat?: string | null;
+  artifact_path?: string | null;
+  metrics?: {
+    auc?: number | null;
+    pr_auc?: number | null;
+    f1?: number | null;
+    precision?: number | null;
+    recall?: number | null;
+    sample_count?: number | null;
+    evaluation_scope?: string | null;
+    holdout_positive_count?: number | null;
+    holdout_negative_count?: number | null;
+  };
+  run_config?: {
+    window_key?: string | null;
+    max_rows?: number | null;
+    csv_supplied?: boolean;
+    csv_name?: string | null;
+    csv_sha256?: string | null;
+    snapshot_inserted?: number | null;
+  };
+}
+
 export interface JudgeReadinessPayload {
   status: "ok" | "warn" | "missing" | string;
   headline: string;
   lanes: JudgeLaneSummary[];
+  benchmark_evidence?: {
+    available?: boolean;
+    items: JudgeBenchmarkEvidenceItem[];
+  };
   honest_caveats: string[];
   evidence_endpoints: {
     latest_runs?: string;
     domain_health?: string;
     scientific_summary?: string;
+    benchmarks?: string;
     thresholds?: string;
     baselines?: string;
     trust_summary?: string;

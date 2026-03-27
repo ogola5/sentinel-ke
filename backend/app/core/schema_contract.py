@@ -39,6 +39,28 @@ def _column_exists(conn, *, table_name: str, column_name: str) -> bool:
     return bool(row)
 
 
+def _constraint_matches(conn, *, table_name: str, constraint_name: str, definition: str) -> bool:
+    row = conn.execute(
+        text(
+            """
+            SELECT 1
+            FROM pg_constraint c
+            JOIN pg_class t ON t.oid = c.conrelid
+            WHERE t.relname = :table_name
+              AND c.conname = :constraint_name
+              AND pg_get_constraintdef(c.oid) = :definition
+            LIMIT 1
+            """
+        ),
+        {
+            "table_name": table_name,
+            "constraint_name": constraint_name,
+            "definition": definition,
+        },
+    ).fetchone()
+    return bool(row)
+
+
 def apply_schema_contract(engine: Engine) -> Dict[str, int]:
     """
     Apply idempotent DDL patches required by current backend models.
@@ -60,25 +82,59 @@ def apply_schema_contract(engine: Engine) -> Dict[str, int]:
         "CREATE INDEX IF NOT EXISTS ix_event_entity_type ON event_entity_index (entity_type)",
         """
         DO $$
+        DECLARE
+            expected_def text := 'UNIQUE (entity_key, prediction_type, window_key, window_end)';
+            current_def text;
         BEGIN
-            IF EXISTS (
-                SELECT 1
-                FROM pg_constraint c
-                JOIN pg_class t ON t.oid = c.conrelid
-                WHERE t.relname = 'ai_prediction'
-                  AND c.conname = 'uq_ai_prediction'
-                  AND pg_get_constraintdef(c.oid) = 'UNIQUE (entity_key, prediction_type, window_end)'
-            ) THEN
+            SELECT pg_get_constraintdef(c.oid)
+            INTO current_def
+            FROM pg_constraint c
+            JOIN pg_class t ON t.oid = c.conrelid
+            WHERE t.relname = 'ai_prediction'
+              AND c.conname = 'uq_ai_prediction'
+            LIMIT 1;
+
+            IF current_def IS NOT NULL AND current_def <> expected_def THEN
+                DELETE FROM ai_prediction stale
+                USING ai_prediction newer
+                WHERE stale.entity_key = newer.entity_key
+                  AND stale.prediction_type = newer.prediction_type
+                  AND stale.window_key = newer.window_key
+                  AND stale.window_end = newer.window_end
+                  AND (
+                    stale.created_at < newer.created_at
+                    OR (
+                        stale.created_at = newer.created_at
+                        AND stale.id::text < newer.id::text
+                    )
+                  );
                 ALTER TABLE ai_prediction DROP CONSTRAINT uq_ai_prediction;
-            END IF;
-            IF NOT EXISTS (
+                current_def := NULL;
+            ELSIF current_def IS NULL AND EXISTS (
                 SELECT 1
-                FROM pg_constraint c
-                JOIN pg_class t ON t.oid = c.conrelid
+                FROM pg_class i
+                JOIN pg_index ix ON i.oid = ix.indexrelid
+                JOIN pg_class t ON t.oid = ix.indrelid
                 WHERE t.relname = 'ai_prediction'
-                  AND c.conname = 'uq_ai_prediction'
-                  AND pg_get_constraintdef(c.oid) = 'UNIQUE (entity_key, prediction_type, window_key, window_end)'
+                  AND i.relname = 'uq_ai_prediction'
             ) THEN
+                DROP INDEX IF EXISTS uq_ai_prediction;
+            END IF;
+
+            IF current_def IS DISTINCT FROM expected_def THEN
+                DELETE FROM ai_prediction stale
+                USING ai_prediction newer
+                WHERE stale.entity_key = newer.entity_key
+                  AND stale.prediction_type = newer.prediction_type
+                  AND stale.window_key = newer.window_key
+                  AND stale.window_end = newer.window_end
+                  AND (
+                    stale.created_at < newer.created_at
+                    OR (
+                        stale.created_at = newer.created_at
+                        AND stale.id::text < newer.id::text
+                    )
+                  );
                 ALTER TABLE ai_prediction
                 ADD CONSTRAINT uq_ai_prediction UNIQUE (entity_key, prediction_type, window_key, window_end);
             END IF;
@@ -100,14 +156,14 @@ def apply_schema_contract(engine: Engine) -> Dict[str, int]:
 
     applied = 0
     skipped = 0
-    with engine.begin() as conn:
-        for sql in statements:
-            try:
+    for sql in statements:
+        try:
+            with engine.begin() as conn:
                 conn.execute(text(sql))
-                applied += 1
-            except Exception as exc:  # noqa: BLE001
-                skipped += 1
-                log.warning("schema_contract_patch_skipped sql=%s err=%s", sql[:80], exc)
+            applied += 1
+        except Exception as exc:  # noqa: BLE001
+            skipped += 1
+            log.warning("schema_contract_patch_skipped sql=%s err=%s", sql[:80], exc)
     return {"applied": applied, "skipped": skipped}
 
 
@@ -121,5 +177,12 @@ def schema_contract_status(engine: Engine) -> Dict[str, object]:
             absent = [c for c in columns if not _column_exists(conn, table_name=table_name, column_name=c)]
             if absent:
                 missing[table_name] = absent
+        if not _constraint_matches(
+            conn,
+            table_name="ai_prediction",
+            constraint_name="uq_ai_prediction",
+            definition="UNIQUE (entity_key, prediction_type, window_key, window_end)",
+        ):
+            missing.setdefault("ai_prediction", []).append("uq_ai_prediction(window_key)")
     missing_count = sum(len(v) for v in missing.values())
     return {"ok": missing_count == 0, "missing": missing, "missing_count": missing_count}
