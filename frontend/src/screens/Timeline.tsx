@@ -202,8 +202,7 @@ export default function Timeline({
               <p style={{ fontWeight: 600 }}>{Math.round(forecast.confidence * 100)}%</p>
             </div>
             <p className="muted" style={{ fontSize: "0.76rem", width: "100%", marginTop: 4 }}>
-              ⚖️ AI output is a risk indicator for investigative prioritization only —
-              not final proof. Requires legal/forensic corroboration.
+              AI risk score for investigative prioritisation. Legal enforcement requires forensic corroboration.
             </p>
           </div>
         </div>

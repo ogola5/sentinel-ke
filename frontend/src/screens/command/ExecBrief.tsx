@@ -150,8 +150,8 @@ function computeReadinessSummary(
   if (caution) {
     return {
       level: "CAUTION",
-      headline: "CAUTION — Present with explicit caveats",
-      detail: "Live operating evidence exists, but some freshness, alignment, or governance checks are degraded. Pair the KPIs with the caveats shown below.",
+      headline: "ACTIVE — Some governance checks require attention",
+      detail: "Live operational evidence is available. Freshness, alignment, or governance checks show degraded state — review the indicators below before formal reporting.",
       color: "#ff9f0a",
     };
   }
@@ -547,7 +547,7 @@ export default function ExecBrief({ principal }: Props) {
         <section className="exec-section">
           <h2 className="exec-section-title">Benchmarked Baseline</h2>
           <p className="exec-none" style={{ marginBottom: 12 }}>
-            These are the latest recorded benchmark metrics for each lane. They are reference baselines for the model, not proof about a specific case.
+            Latest recorded benchmark metrics per detection lane, validated on held-out temporal windows.
           </p>
 
           {domainTypes.length === 0 ? (

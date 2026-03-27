@@ -447,7 +447,7 @@ export default function EntityInvestigation({ initialEntityKey, analystId, princ
       toolCount > 0 ? `${toolCount} likely attacker tool mapping(s) are currently attached.` : null,
       dataRealism ?? null,
       containmentReadiness ?? null,
-      "Treat this as an investigative indicator, not final proof.",
+      "This risk score is an investigative signal for analyst prioritisation. Legal enforcement requires forensic corroboration.",
     ].filter(Boolean).join(" ");
   }, [entityKey, explanation, prediction, toolAttribution, trustSummary]);
 

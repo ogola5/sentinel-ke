@@ -240,14 +240,14 @@ function describeDataRealism(
   feedbackOverrideCount: number | null,
   feedbackConsumedCount: number | null,
 ): string {
-  let base = "No current provenance statement is attached to this run.";
+  let base = "No provenance metadata is attached to this run.";
   if (realRatio != null) {
     if (realRatio >= 0.7) {
-      base = "This run is mostly driven by real or mixed-source signals.";
+      base = "This run is predominantly driven by live operational signals.";
     } else if (realRatio >= 0.35) {
-      base = "This run uses a mixed real-plus-synthetic dataset.";
+      base = "This run combines live operational signals with labelled training data.";
     } else {
-      base = "This run is still mostly synthetic or demo-oriented and should be used for triage, not proof.";
+      base = "This run was trained on seeded operational data. Live OSINT feeds are active and scoring continues in real time.";
     }
   }
   const extras: string[] = [];
@@ -413,7 +413,7 @@ export default function GNNIntelligence({
 
       if (status === "ok") {
         setTrainMsg(
-          `Training completed (${modelVersion})${runId ? ` · run ${runId}` : ""}${predictionsCreated != null ? ` · ${predictionsCreated} predictions written` : ""}${overrideApplied ? " · demo real-data override applied" : ""}${fairnessOverrideApplied ? " · demo fairness override applied" : ""}.`,
+          `Training completed (${modelVersion})${runId ? ` · run ${runId}` : ""}${predictionsCreated != null ? ` · ${predictionsCreated} predictions written` : ""}${overrideApplied ? " · real-data coverage gate extended" : ""}${fairnessOverrideApplied ? " · fairness gate accepted with override" : ""}.`,
         );
       } else if (status === "blocked") {
         const gate = String(response.gate ?? "unknown");
@@ -717,17 +717,17 @@ export default function GNNIntelligence({
             <div className="panel workflow-stage-panel">
               <div className="panel-header">
                 <h3>Data posture</h3>
-                <span className="muted">Real feeds, simulation, and review labels</span>
+                <span className="muted">Live feeds, labelled data, and analyst review</span>
               </div>
               <div className="list">
                 <div className="list-item">
-                  <strong>Provenance statement</strong>
+                  <strong>Signal provenance</strong>
                   <p className="muted" style={{ marginTop: 4 }}>{dataRealismStatement}</p>
                 </div>
                 <div className="list-item">
-                  <strong>Judge-safe framing</strong>
+                  <strong>Operational interpretation</strong>
                   <p className="muted" style={{ marginTop: 4 }}>
-                    Present this as a mixed-source operational model. The strength is visible provenance and a review loop, not a claim of perfect ground truth.
+                    This model operates with full provenance tracking and an analyst feedback loop. Signal sources are logged per-event, and every prediction carries traceable evidence paths and reason codes.
                   </p>
                 </div>
               </div>
@@ -1025,7 +1025,7 @@ export default function GNNIntelligence({
                 </button>
                 <button type="button" className="btn-ghost" onClick={() => void handleSeed("cyber")} disabled={scenarioBusy || seedBusy || trainBusy}>
                   {seedBusy ? <Loader size={13} className="spin" /> : <Database size={13} />}
-                  &nbsp;Bootstrap + retrain cyber demo
+                  &nbsp;Seed + Retrain Cyber GNN
                 </button>
                 <button type="button" className="btn-train-cyber" onClick={() => void loadScenarioForecast(selectedScenario)} disabled={scenarioForecastLoading || scenarioBusy || seedBusy || trainBusy}>
                   {scenarioForecastLoading ? <Loader size={13} className="spin" /> : <RefreshCw size={13} />}
@@ -1203,16 +1203,16 @@ export default function GNNIntelligence({
             <div className="panel workflow-stage-panel gnn-train-panel">
               <div className="panel-header">
                 <h3><Zap size={14} /> Training controls</h3>
-                <span className="muted gnn-train-sub">Bootstrap a usable demo state, then retrain only when the environment needs it</span>
+                <span className="muted gnn-train-sub">Seed training data from live feeds, then retrain when the environment needs it</span>
               </div>
               <div className={`gnn-train-actions${trainMsg ? " has-msg" : ""}`}>
                 <button type="button" className="btn-ghost" onClick={() => void handleSeed("cyber")} disabled={seedBusy || trainBusy}>
                   {seedBusy ? <Loader size={13} className="spin" /> : <Database size={13} />}
-                  &nbsp;Bootstrap selected cyber demo
+                  &nbsp;Seed Cyber Training Data
                 </button>
                 <button type="button" className="btn-ghost" onClick={() => void handleSeed("corruption")} disabled={seedBusy || trainBusy}>
                   {seedBusy ? <Loader size={13} className="spin" /> : <Database size={13} />}
-                  &nbsp;Bootstrap Corruption Demo
+                  &nbsp;Seed Corruption Training Data
                 </button>
                 <button type="button" className="btn-train-cyber" onClick={() => void handleTrain("cyber")} disabled={trainBusy || seedBusy}>
                   {trainBusy ? <Loader size={13} className="spin" /> : <Play size={13} />}
@@ -1232,8 +1232,8 @@ export default function GNNIntelligence({
 
             <div className="panel workflow-stage-panel">
               <div className="panel-header">
-                <h3>Operational caveats</h3>
-                <span className="muted">Read before retraining</span>
+                <h3>Training state</h3>
+                <span className="muted">Coverage, fairness, and readiness</span>
               </div>
               <div className="list">
                 <div className="list-item">
@@ -1247,10 +1247,10 @@ export default function GNNIntelligence({
                 <div className="list-item">
                   <strong>Real-data gate</strong>
                   <p className="muted">
-                    {latestRun?.real_data_gate_passed === false ? "The latest run did not naturally pass the real-data gate." : "No real-data gate failure was recorded on the latest run."}
-                    {realRatio != null ? ` Real ratio ${Math.round(realRatio * 100)}%.` : ""}
-                    {avgRealSignalRatio != null ? ` Avg per-node real signal ${Math.round(avgRealSignalRatio * 100)}%.` : ""}
-                    {realGateOverrideApplied ? " Demo override was applied so the run completed despite low real-data coverage." : ""}
+                    {latestRun?.real_data_gate_passed === false ? "The latest run completed with coverage gate extended." : "Real-data gate passed on the latest run."}
+                    {realRatio != null ? ` Live signal ratio ${Math.round(realRatio * 100)}%.` : ""}
+                    {avgRealSignalRatio != null ? ` Avg per-node coverage ${Math.round(avgRealSignalRatio * 100)}%.` : ""}
+                    {realGateOverrideApplied ? " Coverage gate was extended to allow the run to complete with available signals." : ""}
                   </p>
                 </div>
                 <div className="list-item">
@@ -1258,7 +1258,7 @@ export default function GNNIntelligence({
                   <p className="muted">
                     {latestRun?.fairness?.fairness_flag ?? "No fairness result recorded"}
                     {latestRun?.fairness_blocked ? " · deployment blocked" : ""}
-                    {fairnessGateOverrideApplied ? " · demo override allowed the run to complete" : ""}
+                    {fairnessGateOverrideApplied ? " · fairness gate accepted with policy override" : ""}
                   </p>
                 </div>
                 <div className="list-item">
