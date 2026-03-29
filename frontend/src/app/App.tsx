@@ -153,24 +153,6 @@ function AuthenticatedApp({
     triggerSync,
   ]);
 
-  if (!snapshotReady && isSyncing) {
-    return (
-      <div className="app-shell">
-        <main className="primary" style={{ minHeight: "100vh", display: "grid", placeItems: "center", padding: 24 }}>
-          <section className="panel" style={{ maxWidth: 560, width: "100%", textAlign: "center" }}>
-            <div className="state-box" style={{ padding: "40px 24px" }}>
-              <Loader size={24} className="spin" />
-              <p style={{ fontWeight: 700, marginTop: 12 }}>Syncing live workspace…</p>
-              <p className="muted" style={{ maxWidth: 420, margin: "8px auto 0" }}>
-                Sentinel-KE is loading events, campaigns, infrastructure, and graph context from the backend before opening the workspace.
-              </p>
-            </div>
-          </section>
-        </main>
-      </div>
-    );
-  }
-
   useEffect(() => {
     if (campaignsData.length > 0 && !campaignsData.find((campaign) => campaign.id === selectedCampaignId)) {
       setSelectedCampaignId(campaignsData[0].id);
@@ -206,6 +188,7 @@ function AuthenticatedApp({
   const selectedCampaign = campaignsData.find((campaign) => campaign.id === selectedCampaignId);
   const screenGuide = SCREEN_GUIDES[activeScreen];
   const screenChrome = SCREEN_CHROME[activeScreen];
+  const showWorkspaceLoading = !snapshotReady && isSyncing;
   const timelineEvidenceRefs = useMemo(
     () =>
       Array.from(
@@ -357,96 +340,108 @@ function AuthenticatedApp({
 
         <div className={`content${inspectorOpen ? " inspector-open" : ""}`}>
           <main className="primary">
-            <ActiveScreen
-              activeScreen={activeScreen}
-              principal={principal}
-              central={central}
-              execute={execute}
-              manageUsers={manageUsers}
-              operationsData={operationsData}
-              campaignsData={campaignsData}
-              eventsData={eventsData}
-              timelineData={timelineData}
-              indicatorsData={indicatorsData}
-              threatSummaryData={threatSummaryData}
-              infraClustersData={infraClustersData}
-              entitiesData={entitiesData}
-              graphData={graphData}
-              activeCase={activeCase}
-              isSyncing={isSyncing}
-              snapshotReady={snapshotReady}
-              selectedEntity={selectedEntity}
-              investigationEntityKey={investigationEntityKey}
-              selectedCampaignId={selectedCampaignId}
-              selectedClusterId={selectedClusterId}
-              selectedServiceId={selectedServiceId}
-              timelineEvidenceRefs={timelineEvidenceRefs}
-              sourceFilters={sourceFilters}
-              healthGnnLoaded={healthGnnLoaded}
-              healthModelVersion={healthModelVersion}
-              healthGnnMetrics={healthGnnMetrics}
-              healthPlatformStatus={healthPlatformStatus}
-              leakageActionLabel={leakageActionLabel}
-              onNavigate={(id) => setActiveScreen(id)}
-              onSelectEvent={handleSelectEvent}
-              onSelectEntity={(entity) => {
-                setSelectedEntity(entity);
-                setInvestigationEntityKey(entity.id);
-                setInspectorOpen(true);
-              }}
-              onSelectCampaignId={setSelectedCampaignId}
-              onSelectClusterId={setSelectedClusterId}
-              onSelectServiceId={setSelectedServiceId}
-              onOpenEvidence={openEvidence}
-              onGenerateCase={() => void handleGenerateCase()}
-              onGenerateCaseForId={(id: string) => void handleGenerateCase(id)}
-              onOpenCampaignEvidence={async () => {
-                if (!selectedCampaignId) return;
-                try {
-                  const items = await fetchCampaignEvidenceForDrawer(selectedCampaignId);
-                  openEvidence(`Campaign evidence (${selectedCampaignId})`, items);
-                } catch {
-                  openEvidence("Campaign evidence", []);
-                }
-              }}
-              onRunLeakage={() => void handleRunLeakage()}
-              onCaseExportJson={() => {
-                const exportCampaignId = activeCase?.campaignId ?? selectedCampaignId;
-                if (exportCampaignId) {
-                  void (async () => {
-                    try {
-                      const filename = await downloadCasePacketFromCampaign(exportCampaignId);
-                      setActionStatus(`downloaded ${filename}`);
-                    } catch (err) {
-                      setActionStatus(`failed: ${err instanceof Error ? err.message : "request_failed"}`);
-                    }
-                  })();
-                }
-              }}
-              onCaseExportStix={() => {
-                const exportCampaignId = activeCase?.campaignId ?? selectedCampaignId;
-                if (exportCampaignId) {
-                  void (async () => {
-                    try {
-                      const filename = await downloadStixBundleForCampaign(exportCampaignId);
-                      setActionStatus(`downloaded ${filename}`);
-                    } catch (err) {
-                      setActionStatus(`failed: ${err instanceof Error ? err.message : "request_failed"}`);
-                    }
-                  })();
-                }
-              }}
-              onInvestigateEntity={(entityKey: string) => {
-                const match = entitiesData.find(
-                  (e) => e.id === entityKey || e.label.toLowerCase() === entityKey.toLowerCase(),
-                );
-                if (match) {
-                  setSelectedEntity(match);
-                }
-                setInvestigationEntityKey(entityKey);
-                setActiveScreen("investigate");
-              }}
-            />
+            {showWorkspaceLoading ? (
+              <section className="panel" style={{ maxWidth: 560, width: "100%", margin: "0 auto", textAlign: "center" }}>
+                <div className="state-box" style={{ padding: "40px 24px" }}>
+                  <Loader size={24} className="spin" />
+                  <p style={{ fontWeight: 700, marginTop: 12 }}>Syncing live workspace…</p>
+                  <p className="muted" style={{ maxWidth: 420, margin: "8px auto 0" }}>
+                    Sentinel-KE is loading events, campaigns, infrastructure, and graph context from the backend before opening the workspace.
+                  </p>
+                </div>
+              </section>
+            ) : (
+              <ActiveScreen
+                activeScreen={activeScreen}
+                principal={principal}
+                central={central}
+                execute={execute}
+                manageUsers={manageUsers}
+                operationsData={operationsData}
+                campaignsData={campaignsData}
+                eventsData={eventsData}
+                timelineData={timelineData}
+                indicatorsData={indicatorsData}
+                threatSummaryData={threatSummaryData}
+                infraClustersData={infraClustersData}
+                entitiesData={entitiesData}
+                graphData={graphData}
+                activeCase={activeCase}
+                isSyncing={isSyncing}
+                snapshotReady={snapshotReady}
+                selectedEntity={selectedEntity}
+                investigationEntityKey={investigationEntityKey}
+                selectedCampaignId={selectedCampaignId}
+                selectedClusterId={selectedClusterId}
+                selectedServiceId={selectedServiceId}
+                timelineEvidenceRefs={timelineEvidenceRefs}
+                sourceFilters={sourceFilters}
+                healthGnnLoaded={healthGnnLoaded}
+                healthModelVersion={healthModelVersion}
+                healthGnnMetrics={healthGnnMetrics}
+                healthPlatformStatus={healthPlatformStatus}
+                leakageActionLabel={leakageActionLabel}
+                onNavigate={(id) => setActiveScreen(id)}
+                onSelectEvent={handleSelectEvent}
+                onSelectEntity={(entity) => {
+                  setSelectedEntity(entity);
+                  setInvestigationEntityKey(entity.id);
+                  setInspectorOpen(true);
+                }}
+                onSelectCampaignId={setSelectedCampaignId}
+                onSelectClusterId={setSelectedClusterId}
+                onSelectServiceId={setSelectedServiceId}
+                onOpenEvidence={openEvidence}
+                onGenerateCase={() => void handleGenerateCase()}
+                onGenerateCaseForId={(id: string) => void handleGenerateCase(id)}
+                onOpenCampaignEvidence={async () => {
+                  if (!selectedCampaignId) return;
+                  try {
+                    const items = await fetchCampaignEvidenceForDrawer(selectedCampaignId);
+                    openEvidence(`Campaign evidence (${selectedCampaignId})`, items);
+                  } catch {
+                    openEvidence("Campaign evidence", []);
+                  }
+                }}
+                onRunLeakage={() => void handleRunLeakage()}
+                onCaseExportJson={() => {
+                  const exportCampaignId = activeCase?.campaignId ?? selectedCampaignId;
+                  if (exportCampaignId) {
+                    void (async () => {
+                      try {
+                        const filename = await downloadCasePacketFromCampaign(exportCampaignId);
+                        setActionStatus(`downloaded ${filename}`);
+                      } catch (err) {
+                        setActionStatus(`failed: ${err instanceof Error ? err.message : "request_failed"}`);
+                      }
+                    })();
+                  }
+                }}
+                onCaseExportStix={() => {
+                  const exportCampaignId = activeCase?.campaignId ?? selectedCampaignId;
+                  if (exportCampaignId) {
+                    void (async () => {
+                      try {
+                        const filename = await downloadStixBundleForCampaign(exportCampaignId);
+                        setActionStatus(`downloaded ${filename}`);
+                      } catch (err) {
+                        setActionStatus(`failed: ${err instanceof Error ? err.message : "request_failed"}`);
+                      }
+                    })();
+                  }
+                }}
+                onInvestigateEntity={(entityKey: string) => {
+                  const match = entitiesData.find(
+                    (e) => e.id === entityKey || e.label.toLowerCase() === entityKey.toLowerCase(),
+                  );
+                  if (match) {
+                    setSelectedEntity(match);
+                  }
+                  setInvestigationEntityKey(entityKey);
+                  setActiveScreen("investigate");
+                }}
+              />
+            )}
           </main>
 
           {inspectorOpen && (
