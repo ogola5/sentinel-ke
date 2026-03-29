@@ -128,6 +128,8 @@ export default function GlobalAssistantPanel({
   const quickPrompts = useMemo(() => {
     const prompts = [
       "Explain the whole system end to end.",
+      "How was the cyber lane trained and evaluated?",
+      "What do the graph nodes and edges mean in plain English?",
       "What can I honestly claim to judges right now?",
       "What readiness evidence is strongest right now?",
       "How do legacy systems connect to Sentinel-KE?",

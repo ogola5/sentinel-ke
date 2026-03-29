@@ -18,6 +18,7 @@ from app.analytics.ai_models import (
 )
 from app.analytics.layer3.ai_intel import techniques_to_tools
 from app.analytics.layer3.forecasting import build_risk_forecast
+from app.analytics.layer3.local_knowledge_pack import get_local_knowledge
 from app.analytics.layer3.trust_service import build_entity_trust_summary, build_platform_trust_summary
 from app.core.config import settings
 from app.defense.models import ContainmentAction
@@ -82,6 +83,7 @@ def _detect_intent(question: str) -> str:
         "deployment": sum(w in q for w in ("deploy", "deployment", "public url", "render", "vercel", "on-prem", "sovereign", "edge", "cloud")),
         "connectors": sum(w in q for w in ("connector", "legacy", "csv", "jsonl", "batch", "bridge", "siem", "export", "integrate", "integration")),
         "claims": sum(w in q for w in ("claim", "overclaim", "honest", "safe to say", "not say", "caveat", "wording")),
+        "training": sum(w in q for w in ("train", "trained", "training data", "dataset", "data source", "holdout", "evaluated", "evaluation")),
         "mfa": sum(w in q for w in ("mfa", "otp", "totp", "two-factor", "2fa", "step-up", "authenticator")),
         "gnn": sum(w in q for w in ("gnn", "model", "uncertainty", "confidence", "fused", "score meaning")),
         "graph": sum(w in q for w in ("graph", "path", "hop", "linked", "campaign link", "relationship")),
@@ -292,18 +294,17 @@ def _current_workspace_hint(context: Mapping[str, Any] | None) -> str:
 
 
 def _system_answer(context: Mapping[str, Any] | None, screen_hint: str | None) -> str:
+    knowledge = get_local_knowledge("system")
     workspace = _current_workspace_hint(context)
     hint = f" {screen_hint}" if screen_hint else ""
     return (
-        "Sentinel-KE works as one operating loop: connectors or legacy exports feed the canonical event ledger, "
-        "the graph layer links services, endpoints, IPs, accounts, devices, suppliers, and campaigns, "
-        "the GNN prioritizes which entities deserve attention, the explanation layer exposes reasons and trust checks, "
-        "and the defense and reporting layers turn that into action and auditable output. "
+        f"{knowledge['summary']} "
         f"{workspace}{hint}"
     ).strip()
 
 
 def _readiness_answer(db: Session) -> str:
+    knowledge = get_local_knowledge("claims")
     cyber_run = _latest_training_run_by_type(db, "risk_gnn")
     corruption_run = _latest_training_run_by_type(db, "corruption_risk")
     paysim = _load_paysim_artifact()
@@ -327,24 +328,23 @@ def _readiness_answer(db: Session) -> str:
             f"Corruption intelligence is live: latest window AUC {float(corruption_run.auc or 0.0):.4f} with fairness "
             f"{'passed' if not bool(getattr(corruption_run, 'fairness_blocked', False)) else 'blocked'}."
         )
-    parts.append(
-        "Judge-safe framing is: cyber is the lead live lane, PaySim is a separate fraud benchmark lane, and corruption is investigative risk intelligence rather than legal proof."
-    )
+    parts.append(str(knowledge["summary"]))
     return " ".join(parts)
 
 
 def _deployment_answer(context: Mapping[str, Any] | None, screen_hint: str | None) -> str:
+    knowledge = get_local_knowledge("deployment")
     backend_status = str((context or {}).get("backend_status") or "").strip()
     hint = f" {screen_hint}" if screen_hint else ""
     return (
-        "Deployment is designed for sovereign operation: agencies can run hub-and-edge mode, keep sensitive data local, and sync only the required risk signals outward. "
-        "Legacy systems do not need to be replaced; they can bridge data through the connector API and export bridge. "
+        f"{knowledge['summary']} "
         "The honest caveat is that stable public judge-verifiable hosting is a deployment hardening task separate from the core analytics workflow. "
         f"Current UI backend state: {backend_status or 'not supplied.'}{hint}"
     )
 
 
 def _connectors_answer(question: str) -> str:
+    knowledge = get_local_knowledge("connectors", question)
     connectors = list_connectors()
     q = question.lower()
     preferred: list[str] = []
@@ -367,20 +367,11 @@ def _connectors_answer(question: str) -> str:
     if not chosen:
         chosen = connectors[:5]
     examples = ", ".join(item["key"] for item in chosen[:5])
-    return (
-        "Legacy and partner systems should stream into Sentinel-KE through the connector seam: "
-        "GET /v1/integrations/connectors, then POST /v1/integrations/{connector_key}/event or /batch. "
-        "The practical bridge path is file export or SIEM relay to connector API to canonical event ledger to graph, GNN, and response. "
-        f"Relevant connector examples right now: {examples}."
-    )
+    return f"{knowledge['summary']} Relevant connector examples right now: {examples}."
 
 
 def _claims_answer() -> str:
-    return (
-        "Judge-safe claims are: cyber is live and strongly evidenced, PaySim is a fresh separate fraud benchmark, "
-        "corruption is a real risk-ranking lane with caveats, containment is bounded and auditable, and agencies can integrate through connectors and legacy export bridges. "
-        "Do not say the GNN alone detects everything, do not treat corruption as legal proof, and do not present benchmark fraud evidence as live sovereign partner telemetry."
-    )
+    return str(get_local_knowledge("claims")["summary"])
 
 
 def _containment_answer(
@@ -389,6 +380,7 @@ def _containment_answer(
     containment: ContainmentAction | None,
     trust_summary: Mapping[str, Any] | None,
 ) -> str:
+    knowledge = get_local_knowledge("containment")
     if containment:
         base = (
             f"Latest containment on {entity_key or containment.target}: {containment.action_type} "
@@ -401,11 +393,12 @@ def _containment_answer(
             else "No executed containment action is currently tied to the selected context."
         )
     readiness = str(dict((trust_summary or {}).get("operator_brief") or {}).get("containment_readiness") or "").strip()
-    ladder = (
-        " The correct escalation ladder is observe, then challenge or rate-limit, then isolate a specific asset or account path, "
-        "then upstream block or scrub only when evidence and impact justify it."
-    )
-    return f"{base} {readiness}{ladder}".strip()
+    return f"{base} {readiness} {knowledge['summary']}".strip()
+
+
+def _training_answer(question: str) -> str:
+    knowledge = get_local_knowledge("training", question)
+    return str(knowledge["summary"])
 
 
 def _presentation_answer(
@@ -476,6 +469,7 @@ def _entity_gnn_answer(
 
 
 def _entity_graph_answer(entity_key: str, trust_summary: Mapping[str, Any] | None) -> str:
+    knowledge = get_local_knowledge("graph", entity_key)
     brief = dict((trust_summary or {}).get("operator_brief") or {})
     graph_meaning = str(brief.get("graph_meaning") or "").strip()
     linked = list((trust_summary or {}).get("linked_campaigns") or [])
@@ -485,10 +479,10 @@ def _entity_graph_answer(entity_key: str, trust_summary: Mapping[str, Any] | Non
         else "No linked campaign indicators currently reference this entity."
     )
     if graph_meaning:
-        return f"{graph_meaning} {linked_sentence}"
+        return f"{graph_meaning} {linked_sentence} {knowledge['summary']}"
     return (
         f"For {entity_key}, the graph view should be read as relationship evidence: who this entity is connected to, what they shared, "
-        "and whether those links look operationally risky."
+        f"and whether those links look operationally risky. {knowledge['summary']}"
     )
 
 
@@ -497,10 +491,11 @@ def _data_realism_answer(
     trust_summary: Mapping[str, Any] | None,
     platform_summary: Mapping[str, Any] | None,
 ) -> str:
+    knowledge = get_local_knowledge("training")
     if trust_summary:
         brief = dict(trust_summary.get("operator_brief") or {})
         if brief.get("data_realism"):
-            return str(brief["data_realism"])
+            return f"{brief['data_realism']} {knowledge['summary']}"
     if platform_summary:
         models = list(platform_summary.get("model_governance") or [])
         if models:
@@ -514,8 +509,8 @@ def _data_realism_answer(
                 if caveat:
                     bits.append(caveat)
             if bits:
-                return " ".join(bits) + " Mixed public threat feeds, synthetic scenarios, and analyst feedback are all visible in governance."
-    return "The platform uses mixed public threat feeds, synthetic scenarios, and analyst feedback. The key is to state that provenance honestly, not to overclaim."
+                return " ".join(bits) + f" {knowledge['summary']}"
+    return f"The platform uses mixed public threat feeds, synthetic scenarios, and analyst feedback. The key is to state that provenance honestly, not to overclaim. {knowledge['summary']}"
 
 
 def _mfa_answer(context: Mapping[str, Any] | None, screen_hint: str | None) -> str:
@@ -615,43 +610,57 @@ def answer_local_analyst_query(
         }
 
     if intent == "system":
+        knowledge = get_local_knowledge("system")
         return {
             "answer": _system_answer(context, screen_hint),
             "model": settings.ai_copilot_model,
             "intent": intent,
-            "sources": ["ui_context", "workflow_rules", "connector_registry"],
+            "sources": ["ui_context", "workflow_rules", "connector_registry", *knowledge.get("sources", [])],
         }
 
     if intent == "readiness":
+        knowledge = get_local_knowledge("claims")
         return {
             "answer": _readiness_answer(db),
             "model": settings.ai_copilot_model,
             "intent": intent,
-            "sources": ["gnn_training_run", "paysim_benchmark_artifact", "platform_trust_summary"],
+            "sources": ["gnn_training_run", "paysim_benchmark_artifact", "platform_trust_summary", *knowledge.get("sources", [])],
         }
 
     if intent == "deployment":
+        knowledge = get_local_knowledge("deployment")
         return {
             "answer": _deployment_answer(context, screen_hint),
             "model": settings.ai_copilot_model,
             "intent": intent,
-            "sources": ["ui_context", "deployment_policy", "connector_registry"],
+            "sources": ["ui_context", "deployment_policy", "connector_registry", *knowledge.get("sources", [])],
         }
 
     if intent == "connectors":
+        knowledge = get_local_knowledge("connectors", question)
         return {
             "answer": _connectors_answer(question),
             "model": settings.ai_copilot_model,
             "intent": intent,
-            "sources": ["connector_registry", "integration_api"],
+            "sources": ["connector_registry", "integration_api", *knowledge.get("sources", [])],
         }
 
     if intent == "claims":
+        knowledge = get_local_knowledge("claims")
         return {
             "answer": _claims_answer(),
             "model": settings.ai_copilot_model,
             "intent": intent,
-            "sources": ["judge_safe_claims", "benchmark_evidence", "platform_trust_summary"],
+            "sources": ["judge_safe_claims", "benchmark_evidence", "platform_trust_summary", *knowledge.get("sources", [])],
+        }
+
+    if intent == "training":
+        knowledge = get_local_knowledge("training", question)
+        return {
+            "answer": _training_answer(question),
+            "model": settings.ai_copilot_model,
+            "intent": intent,
+            "sources": ["training_lane_summary", *knowledge.get("sources", [])],
         }
 
     if intent == "platform":
@@ -671,6 +680,9 @@ def answer_local_analyst_query(
         }
 
     if entity_key and prediction:
+        graph_knowledge = get_local_knowledge("graph", question)
+        training_knowledge = get_local_knowledge("training", question)
+        containment_knowledge = get_local_knowledge("containment", question)
         technique_rows = _latest_techniques(db, entity_key, prediction.window_end)
         technique_ids = [str(r.technique_id) for r in technique_rows]
         tools = techniques_to_tools(technique_ids)
@@ -748,6 +760,15 @@ def answer_local_analyst_query(
                 "ai_attack_path_score",
                 "ai_decision_fusion",
                 "ai_attack_technique_hit",
+                *(
+                    graph_knowledge.get("sources", [])
+                    if intent == "graph"
+                    else training_knowledge.get("sources", [])
+                    if intent in {"data_realism", "gnn"}
+                    else containment_knowledge.get("sources", [])
+                    if intent == "containment"
+                    else []
+                ),
             ],
         }
 

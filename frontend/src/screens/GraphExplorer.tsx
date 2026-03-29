@@ -114,6 +114,34 @@ function describeEdge(edge: GraphEdge, nodeById: Map<string, GraphNode>): string
   }
 }
 
+function explainNodeMeaning(node: GraphNode, degree: number, live: boolean): string {
+  const role = COMMUNITY_DESC[node.community] ?? node.community;
+  const liveText = live ? " It has recent live activity in the current window." : "";
+  if (node.type.toLowerCase() === "service") {
+    return `${node.label} is a target service. In this graph, that means it is a victim-side service receiving hostile pressure or linked attack activity. It currently has ${degree} visible relationship${degree !== 1 ? "s" : ""}.${liveText}`;
+  }
+  if (node.type.toLowerCase() === "endpoint") {
+    return `${node.label} is an exposed endpoint on a target service. It shows where hostile requests are landing. It currently has ${degree} visible relationship${degree !== 1 ? "s" : ""}.${liveText}`;
+  }
+  if (node.type.toLowerCase() === "ip") {
+    return `${node.label} is attacker-side infrastructure. In this graph, an attacker IP means a source that has been observed targeting a service or endpoint. It currently has ${degree} visible relationship${degree !== 1 ? "s" : ""}.${liveText}`;
+  }
+  if (node.type.toLowerCase() === "cluster") {
+    return `${node.label} is an infrastructure cluster. It groups related attacker infrastructure so operators can see whether multiple observations belong to one operational footprint. It currently has ${degree} visible relationship${degree !== 1 ? "s" : ""}.${liveText}`;
+  }
+  if (node.type.toLowerCase() === "campaign") {
+    return `${node.label} is a campaign grouping node. It helps answer whether separate services, endpoints, or attacker infrastructure belong to one broader operation. It currently has ${degree} visible relationship${degree !== 1 ? "s" : ""}.${liveText}`;
+  }
+  return `${node.label} is shown here as ${readableNodeType(node)}. Its role is ${role}. It currently has ${degree} visible relationship${degree !== 1 ? "s" : ""}.${liveText}`;
+}
+
+function explainEdgeMeaning(edge: GraphEdge, nodeById: Map<string, GraphNode>): string {
+  const base = describeEdge(edge, nodeById);
+  const sources = edge.sources.length > 0 ? ` Sources: ${edge.sources.join(", ")}.` : "";
+  const evidence = edge.count > 0 ? ` The link is backed by ${edge.count} observed event${edge.count !== 1 ? "s" : ""}.` : "";
+  return `${base}${evidence}${sources}`.trim();
+}
+
 function preferredInvestigationKey(node: GraphNode): string | null {
   const normalizedType = node.type.toLowerCase();
   if (normalizedType === "endpoint" && node.id.startsWith("endpoint:")) {
@@ -183,6 +211,8 @@ export default function GraphExplorer({
 }: GraphExplorerProps) {
   const [selectedEdge,      setSelectedEdge]      = useState<GraphEdge | null>(null);
   const [selectedNode,      setSelectedNode]      = useState<GraphNode | null>(null);
+  const [hoveredEdge,       setHoveredEdge]       = useState<GraphEdge | null>(null);
+  const [hoveredNode,       setHoveredNode]       = useState<GraphNode | null>(null);
   const [pinned,            setPinned]            = useState<GraphNode[]>([]);
   const [showPath,          setShowPath]          = useState(false);
   const [nodePanel,         setNodePanel]         = useState(false);
@@ -412,6 +442,29 @@ export default function GraphExplorer({
     }
     return connected;
   }, [graph.edges, selectedNode]);
+
+  const hoverExplanation = useMemo(() => {
+    if (hoveredEdge) {
+      return {
+        title: "Hovered relationship",
+        body: explainEdgeMeaning(hoveredEdge, nodeById),
+      };
+    }
+    if (hoveredNode) {
+      return {
+        title: "Hovered node",
+        body: explainNodeMeaning(
+          hoveredNode,
+          nodeDegree.get(hoveredNode.id) ?? 0,
+          liveServiceIds.has(hoveredNode.id),
+        ),
+      };
+    }
+    return {
+      title: "How to interpret the graph",
+      body: "Hover on a node or relationship to get a plain-English explanation. Click to move from overview into investigation.",
+    };
+  }, [hoveredEdge, hoveredNode, liveServiceIds, nodeById, nodeDegree]);
 
   // ── Empty state ──────────────────────────────────────────────────────────
   if (graph.nodes.length === 0) {
@@ -699,6 +752,11 @@ export default function GraphExplorer({
         ))}
       </div>
 
+      <div className="panel" style={{ padding: "12px 14px" }}>
+        <p className="label" style={{ marginBottom: 4 }}>{hoverExplanation.title}</p>
+        <p style={{ margin: 0, lineHeight: 1.55, fontSize: "0.84rem" }}>{hoverExplanation.body}</p>
+      </div>
+
       {/* ── Graph canvas ───────────────────────────────────────────────────── */}
       <div className="panel graph-panel">
         <svg
@@ -792,6 +850,8 @@ export default function GraphExplorer({
 
             return (
               <g key={edge.id} style={{ cursor: "pointer", opacity: isRelevant ? 1 : 0.14 }}
+                onMouseEnter={() => setHoveredEdge(edge)}
+                onMouseLeave={() => setHoveredEdge((current) => (current?.id === edge.id ? null : current))}
                 onClick={() => { setSelectedEdge(edge); onSelectEdge(edge); }}
               >
                 <title>{`${describeEdge(edge, nodeById)}\n${edge.count} event${edge.count !== 1 ? "s" : ""} · sources: ${edge.sources.join(", ")}`}</title>
@@ -841,6 +901,8 @@ export default function GraphExplorer({
                 key={node.id}
                 className={`graph-node${isLiveNode ? " graph-node-live" : ""}`}
                 style={{ filter: isLiveNode ? "url(#gr-glow)" : undefined, opacity: isRelevant ? 1 : 0.24 }}
+                onMouseEnter={() => setHoveredNode(node)}
+                onMouseLeave={() => setHoveredNode((current) => (current?.id === node.id ? null : current))}
                 onClick={() => selectNode(node)}
               >
                 <title>{`${node.label}\nRole: ${COMMUNITY_DESC[node.community] ?? node.community}\nType: ${readableNodeType(node)}\nConnections: ${degree}${isLiveNode ? "\n⚡ LIVE — threat event in last 12s" : ""}`}</title>
