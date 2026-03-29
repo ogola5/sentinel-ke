@@ -12,6 +12,7 @@ This runbook covers the 10-minute live demo only. It is built for the strongest 
 Companion slide pack:
 
 - [PRESENTATION_10_SLIDE_CLAUDE_PACK.md](/home/ogola/personal/sentinel-ke/docs/PRESENTATION_10_SLIDE_CLAUDE_PACK.md)
+- [HIGH_SCORE_SCREEN_TEST_PACK.md](/home/ogola/personal/sentinel-ke/docs/HIGH_SCORE_SCREEN_TEST_PACK.md)
 
 - judge readiness
 - cyber graph / GNN evidence

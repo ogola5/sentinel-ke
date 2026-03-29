@@ -68,6 +68,9 @@ const ZONE_X: Record<string, number> = {
   campaign: 590,
 };
 
+const FULL_ZONES = ["target", "infra", "campaign"] as const;
+const OPERATIONAL_ZONES = ["target", "infra"] as const;
+
 function shortLabel(label: string, max = 13): string {
   return label.length > max ? label.slice(0, max - 1) + "…" : label;
 }
@@ -200,6 +203,8 @@ type GraphExplorerProps = {
   campaignCount?: number;
 };
 
+type GraphViewMode = "operational" | "full";
+
 export default function GraphExplorer({
   graph,
   isSyncing = false,
@@ -209,6 +214,7 @@ export default function GraphExplorer({
   onInvestigateEntity,
   campaignCount,
 }: GraphExplorerProps) {
+  const [viewMode,          setViewMode]          = useState<GraphViewMode>("operational");
   const [selectedEdge,      setSelectedEdge]      = useState<GraphEdge | null>(null);
   const [selectedNode,      setSelectedNode]      = useState<GraphNode | null>(null);
   const [hoveredEdge,       setHoveredEdge]       = useState<GraphEdge | null>(null);
@@ -233,6 +239,24 @@ export default function GraphExplorer({
   const liveTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
   const { liveEvents, streamStatus } = useEventStream();
+  const visibleZones = viewMode === "full" ? FULL_ZONES : OPERATIONAL_ZONES;
+
+  const visibleNodes = useMemo(() => {
+    if (viewMode === "full") return graph.nodes;
+    return graph.nodes.filter((node) => node.community !== "campaign" && node.community !== "support");
+  }, [graph.nodes, viewMode]);
+
+  const visibleNodeIds = useMemo(
+    () => new Set(visibleNodes.map((node) => node.id)),
+    [visibleNodes],
+  );
+
+  const visibleEdges = useMemo(() => {
+    if (viewMode === "full") return graph.edges;
+    return graph.edges.filter(
+      (edge) => visibleNodeIds.has(edge.source) && visibleNodeIds.has(edge.target),
+    );
+  }, [graph.edges, viewMode, visibleNodeIds]);
 
   useEffect(() => {
     if (liveEvents.length === 0) return;
@@ -262,6 +286,17 @@ export default function GraphExplorer({
 
     liveTimers.current.set(key, timer);
   }, [liveEvents, graph.nodes]);
+
+  useEffect(() => {
+    if (selectedNode && !visibleNodeIds.has(selectedNode.id)) {
+      setSelectedNode(null);
+      setNodePanel(false);
+    }
+    if (selectedEdge) {
+      const stillVisible = visibleEdges.some((edge) => edge.id === selectedEdge.id);
+      if (!stillVisible) setSelectedEdge(null);
+    }
+  }, [selectedEdge, selectedNode, viewMode, visibleEdges, visibleNodeIds]);
 
   // ── Live graph fetch when a node is selected ───────────────────────────
   async function loadLiveNeighbours(node: GraphNode) {
@@ -365,25 +400,25 @@ export default function GraphExplorer({
   }, [showPath, pathResult]);
 
   const nodeById = useMemo(
-    () => new Map(graph.nodes.map((n) => [n.id, n])),
-    [graph.nodes],
+    () => new Map(visibleNodes.map((n) => [n.id, n])),
+    [visibleNodes],
   );
 
   const nodeDegree = useMemo(() => {
     const deg = new Map<string, number>();
-    for (const e of graph.edges) {
+    for (const e of visibleEdges) {
       deg.set(e.source, (deg.get(e.source) ?? 0) + 1);
       deg.set(e.target, (deg.get(e.target) ?? 0) + 1);
     }
     return deg;
-  }, [graph.edges]);
+  }, [visibleEdges]);
 
   const neighborEdges = useMemo(() => {
     if (!selectedNode) return [];
-    return graph.edges.filter(
+    return visibleEdges.filter(
       (e) => e.source === selectedNode.id || e.target === selectedNode.id,
     );
-  }, [selectedNode, graph.edges]);
+  }, [selectedNode, visibleEdges]);
 
   const isLive = streamStatus === "live";
 
@@ -436,12 +471,12 @@ export default function GraphExplorer({
   const selectedNeighborhood = useMemo(() => {
     if (!selectedNode) return null;
     const connected = new Set<string>([selectedNode.id]);
-    for (const edge of graph.edges) {
+    for (const edge of visibleEdges) {
       if (edge.source === selectedNode.id) connected.add(edge.target);
       if (edge.target === selectedNode.id) connected.add(edge.source);
     }
     return connected;
-  }, [graph.edges, selectedNode]);
+  }, [visibleEdges, selectedNode]);
 
   const hoverExplanation = useMemo(() => {
     if (hoveredEdge) {
@@ -510,6 +545,22 @@ export default function GraphExplorer({
             <span className={isLive ? "pulse" : ""} />
             {isLive ? "LIVE" : "POLL"}
           </span>
+          <button
+            className={viewMode === "operational" ? "chip chip-active" : "chip ghost"}
+            type="button"
+            onClick={() => setViewMode("operational")}
+            title="Default judge-safe view: target side and attacker infrastructure first"
+          >
+            Operational view
+          </button>
+          <button
+            className={viewMode === "full" ? "chip chip-active" : "chip ghost"}
+            type="button"
+            onClick={() => setViewMode("full")}
+            title="Show campaign grouping and full graph context"
+          >
+            Full graph
+          </button>
           {liveServiceIds.size > 0 && (
             <span className="chip chip-active" title="Nodes with a threat event in the last 12 seconds">
               ⚡ {liveServiceIds.size} active node{liveServiceIds.size !== 1 ? "s" : ""}
@@ -536,8 +587,11 @@ export default function GraphExplorer({
             Who is attacking whom, through what infrastructure, and under which campaign grouping?
           </p>
           <p className="muted" style={{ fontSize: "0.8rem", lineHeight: 1.55 }}>
-            This overview uses the recent activity snapshot to show target-side nodes on the left, attacker infrastructure in the middle,
-            and campaign grouping on the right. Click a node to focus the graph. Use <strong>Find path</strong> for live Neo4j path lookup.
+            {viewMode === "operational"
+              ? "This default view emphasizes the operational picture first: target-side nodes on the left and attacker infrastructure in the middle. Campaign grouping is still counted above and available in Full graph when needed."
+              : "This full view adds campaign grouping on the right. Use it when a judge asks how multiple observations are grouped into one broader operation."}
+            {" "}
+            Click a node to focus the graph. Use <strong>Find path</strong> for live Neo4j path lookup.
           </p>
         </div>
         <div>
@@ -643,23 +697,32 @@ export default function GraphExplorer({
           </p>
         </div>
         <div className="panel" style={{ padding: "12px 14px" }}>
-          <p className="label" style={{ marginBottom: 6 }}>Under which campaign grouping</p>
-          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-            {topCampaigns.map((node) => (
-              <button
-                key={node.id}
-                type="button"
-                className="chip"
-                onClick={() => selectNode(node)}
-                style={{ cursor: "pointer" }}
-              >
-                {shortLabel(node.label, 24)}
-              </button>
-            ))}
-          </div>
-          <p className="muted" style={{ fontSize: "0.75rem", marginTop: 6 }}>
-            {counts.campaign} groupings are visible on the canvas and {counts.campaignTotal} are active in the wider snapshot.
-          </p>
+          <p className="label" style={{ marginBottom: 6 }}>Campaign grouping context</p>
+          {viewMode === "full" ? (
+            <>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                {topCampaigns.map((node) => (
+                  <button
+                    key={node.id}
+                    type="button"
+                    className="chip"
+                    onClick={() => selectNode(node)}
+                    style={{ cursor: "pointer" }}
+                  >
+                    {shortLabel(node.label, 24)}
+                  </button>
+                ))}
+              </div>
+              <p className="muted" style={{ fontSize: "0.75rem", marginTop: 6 }}>
+                {counts.campaign} groupings are visible on the canvas and {counts.campaignTotal} are active in the wider snapshot.
+              </p>
+            </>
+          ) : (
+            <p className="muted" style={{ fontSize: "0.78rem", lineHeight: 1.5 }}>
+              {counts.campaignTotal} active campaign grouping{counts.campaignTotal !== 1 ? "s are" : " is"} tracked behind this snapshot.
+              Keep this hidden in the first pass. Open <strong>Full graph</strong> only if a judge asks how separate observations are grouped into one operation.
+            </p>
+          )}
         </div>
       </div>
 
@@ -788,7 +851,7 @@ export default function GraphExplorer({
           </defs>
 
           {/* ── Zone background bands ─────────────────────────────────────── */}
-          {(["target", "infra", "campaign"] as const).map(zone => {
+          {visibleZones.map(zone => {
             const cx = ZONE_X[zone];
             const color = COMMUNITY_HEX[zone];
             return (
@@ -828,7 +891,7 @@ export default function GraphExplorer({
           </text>
 
           {/* ── Edges ─────────────────────────────────────────────────────── */}
-          {graph.edges.map((edge) => {
+          {visibleEdges.map((edge) => {
             const src = nodeById.get(edge.source);
             const tgt = nodeById.get(edge.target);
             if (!src || !tgt) return null;
@@ -886,7 +949,7 @@ export default function GraphExplorer({
           })}
 
           {/* ── Nodes ─────────────────────────────────────────────────────── */}
-          {graph.nodes.map((node) => {
+          {visibleNodes.map((node) => {
             const color       = COMMUNITY_COLOR[node.community] ?? "var(--ink-muted)";
             const hex         = COMMUNITY_HEX[node.community]   ?? "#abc7b6";
             const isLiveNode  = liveServiceIds.has(node.id);
@@ -976,7 +1039,9 @@ export default function GraphExplorer({
           {[
             { cls: "dot-target",   label: "Target side",      title: "Victim service or exposed endpoint" },
             { cls: "dot-infra",    label: "Attacker infra",   title: "Attacker IP, cluster, or provider" },
-            { cls: "dot-campaign", label: "Campaign group",   title: "Operation grouping" },
+            ...(viewMode === "full"
+              ? [{ cls: "dot-campaign", label: "Campaign group", title: "Operation grouping" }]
+              : []),
             { cls: "dot-live",     label: "⚡ Live activity", title: "Event in last 12s" },
           ].map(l => (
             <span key={l.cls} className="legend-item" title={l.title}>
