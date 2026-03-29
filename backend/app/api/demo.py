@@ -52,7 +52,7 @@ def _seed_corruption() -> dict:
 
 class DemoBootstrapRequest(BaseModel):
     domain: Literal["cyber", "corruption", "all"] = "all"
-    scenario: Literal["ddos", "vpn", "sim_swap", "fraud", "ddos_vpn", "ddos_vpn_fraud", "all"] = "ddos_vpn_fraud"
+    scenario: Literal["ddos", "malware", "vpn", "sim_swap", "fraud", "ddos_vpn", "ddos_vpn_fraud", "all"] = "ddos_vpn_fraud"
     epochs: int = 40
     cyber_runs: int = 10
     corruption_runs: int = 10
@@ -208,6 +208,7 @@ def bootstrap_demo_environment(
 
     Scenario names:
       - ddos
+      - malware
       - vpn
       - sim_swap (alias for the fraud / mobile-money chain)
       - fraud

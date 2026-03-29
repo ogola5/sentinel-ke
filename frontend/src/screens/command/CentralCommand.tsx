@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 
 import ArchitectureFlow from "../../app/ArchitectureFlow";
+import ScenarioLauncher from "../../components/ScenarioLauncher";
 import { fetchFederationCorrelations, fetchFederationPartners } from "../../api/federation";
 import { apiListUsers } from "../../api/auth";
 import { fetchDriftReports, fetchPlatformTrustSummary, runDriftCheck } from "../../api/ai";
@@ -371,6 +372,8 @@ export default function CentralCommand({
               ))}
             </div>
           </div>
+
+          <ScenarioLauncher onNavigate={(screen) => onNavigate(screen)} />
 
           <div className="grid-two">
             <div className="panel">

@@ -45,6 +45,9 @@ export type ScreenGuide = {
   purpose: string;
   steps: [string, string, string];
   next?: string;
+  nextScreen?: ScreenId;
+  examples?: string[];
+  sampleInputs?: Array<{ label: string; value: string }>;
 };
 
 // ── Primary navigation (8 items — analyst daily workflow) ─────────────────────
@@ -108,7 +111,7 @@ export const SCREEN_CHROME: Record<ScreenId, ScreenChrome> = {
     showTimeWindow: true,
     showEntitySearch: true,
     entitySearchLabel: "Jump to entity",
-    entitySearchPlaceholder: "Search a service or entity to investigate",
+    entitySearchPlaceholder: "Try service_id:ecitizen or ip:50.16.16.211",
   },
   graph: {
     title: "Threat Graph",
@@ -117,28 +120,28 @@ export const SCREEN_CHROME: Record<ScreenId, ScreenChrome> = {
     showTimeWindow: true,
     showEntitySearch: true,
     entitySearchLabel: "Investigate entity",
-    entitySearchPlaceholder: "Search an entity to open investigation",
+    entitySearchPlaceholder: "Try service_id:ecitizen or ip:50.16.16.211",
   },
   investigate: {
     title: "Investigation",
     subtitle: "Trace one entity from score to decision.",
     showEntitySearch: true,
     entitySearchLabel: "Entity key",
-    entitySearchPlaceholder: "Search a service or entity key",
+    entitySearchPlaceholder: "Try ip:50.16.16.211 or service_id:ecitizen",
   },
   campaigns: {
     title: "Campaigns",
     subtitle: "Review coordinated activity.",
     showEntitySearch: true,
     entitySearchLabel: "Find linked entity",
-    entitySearchPlaceholder: "Search entity to pivot into investigation",
+    entitySearchPlaceholder: "Try service_id:ecitizen or ip:50.16.16.211",
   },
   cases: {
     title: "Cases",
     subtitle: "Export evidence-backed case packets.",
     showEntitySearch: true,
     entitySearchLabel: "Entity jump",
-    entitySearchPlaceholder: "Search entity to investigate before export",
+    entitySearchPlaceholder: "Try service_id:ecitizen before export",
   },
   defense: {
     title: "Defense",
@@ -207,61 +210,98 @@ export const SCREEN_GUIDES: Record<ScreenId, ScreenGuide> = {
     purpose: "Use this page to understand what is arriving right now before you open a deeper workflow.",
     steps: ["Scan the newest events.", "Open one event only.", "Pivot to graph or investigation if it matters."],
     next: "Investigate",
+    nextScreen: "investigate",
+    examples: ["Watch for DDOS_SIGNAL_EVENT, DFIR_FINDING_EVENT, and LOGIN_EVENT.", "Open one live event, not the whole feed.", "Use this screen to prove signals are arriving now."],
+    sampleInputs: [
+      { label: "eCitizen", value: "service_id:ecitizen" },
+      { label: "IOC IP", value: "ip:50.16.16.211" },
+    ],
   },
   graph: {
     purpose: "Use this page to see how services, infrastructure, and campaigns connect.",
     steps: ["Pick one node or edge.", "Check linked evidence.", "Move to Investigate for a single-entity explanation."],
     next: "Investigate",
+    nextScreen: "investigate",
+    examples: ["Focus entity: service_id:ecitizen", "Focus entity: ip:50.16.16.211", "Start with Operational view before opening Full graph."],
+    sampleInputs: [
+      { label: "eCitizen", value: "service_id:ecitizen" },
+      { label: "IOC IP", value: "ip:50.16.16.211" },
+    ],
   },
   investigate: {
     purpose: "Use this page to explain one entity clearly, record analyst judgment, and trigger a contained response.",
     steps: ["Search one real entity key.", "Read trust and evidence before acting.", "Record feedback, containment, or export a report."],
     next: "Reports",
+    nextScreen: "reports",
+    examples: ["Search: ip:50.16.16.211", "Search: service_id:ecitizen", "Use this screen to explain score, evidence, and next action."],
+    sampleInputs: [
+      { label: "IOC IP", value: "ip:50.16.16.211" },
+      { label: "eCitizen", value: "service_id:ecitizen" },
+    ],
   },
   campaigns: {
     purpose: "Use this page to review coordinated activity, not isolated alerts.",
     steps: ["Open the highest-risk campaign.", "Inspect linked entities.", "Generate a case if escalation is justified."],
     next: "Cases",
+    nextScreen: "cases",
+    sampleInputs: [
+      { label: "eCitizen", value: "service_id:ecitizen" },
+      { label: "IOC IP", value: "ip:50.16.16.211" },
+    ],
   },
   cases: {
     purpose: "Use this page to package evidence into a clean, reviewable case artifact.",
     steps: ["Generate a case from a campaign.", "Check evidence coverage.", "Export JSON or STIX when ready."],
     next: "Reports",
+    nextScreen: "reports",
+    sampleInputs: [{ label: "eCitizen", value: "service_id:ecitizen" }],
   },
   defense: {
     purpose: "Use this page to execute response actions and confirm webhook delivery.",
     steps: ["Select an incident run.", "Choose the safest action.", "Confirm delivery receipts before closing."],
     next: "Audit",
+    nextScreen: "audit",
+    examples: ["Start with run: service_id:ecitizen", "Action: enable_waf_challenge", "Check delivery receipts before you close the run."],
   },
   ops: {
     purpose: "Use this page to keep operational queues lean and prioritized.",
     steps: ["Start with the highest-risk queue.", "Open only one queue at a time.", "Escalate to campaigns or reports when needed."],
     next: "Investigate",
+    nextScreen: "investigate",
+    examples: ["Read Signals ingested, Cyber queue, and Integrity pressure first.", "Use this screen to choose the next queue, not finish the investigation.", "If cyber pressure is high, move next to Investigate or Defense."],
   },
   reports: {
     purpose: "Use this page to create readable outputs for operators, leadership, and legal review.",
     steps: ["Choose one report type.", "Use a real entity or prediction.", "Preview before downloading."],
     next: "Investigate",
+    nextScreen: "investigate",
+    examples: ["Report type: entity_investigation", "Target: ip:50.16.16.211", "Use reports after the operational story is already clear."],
   },
   command: {
     purpose: "Use this page to keep leadership focused on threat level, network posture, and readiness.",
     steps: ["Read the national brief.", "Check agency network or readiness.", "Open the next operational workspace only when needed."],
     next: "Operations",
+    nextScreen: "ops",
+    examples: ["Start with the national posture card.", "Use the scenario launcher only when you need fresh activity.", "Open Dashboard or Live Feed next, not every screen at once."],
   },
   timeline: {
     purpose: "Use this page to understand service movement over time.",
     steps: ["Choose one service.", "Review the timeline.", "Pivot to campaigns or infrastructure if it escalates."],
     next: "Campaigns",
+    nextScreen: "campaigns",
   },
   infra: {
     purpose: "Use this page to inspect shared infrastructure behind linked attacks.",
     steps: ["Choose one cluster.", "Review shared endpoints and evidence.", "Escalate to graph or campaigns if confirmed."],
     next: "Graph",
+    nextScreen: "graph",
   },
   gnn: {
     purpose: "Use this page to review model quality, queue quality, and training caveats.",
     steps: ["Check the queue first.", "Review metrics with caveats.", "Train or seed only when needed."],
     next: "Investigate",
+    nextScreen: "investigate",
+    examples: ["Show this only after the operational story is clear.", "Use it to explain why the model is trustworthy, not to open the workflow.", "Open the ops tab only when you need scenario controls or forecast."],
   },
   crypto: {
     purpose: "Use this page to inspect cryptographic posture and self-test state.",
@@ -272,31 +312,37 @@ export const SCREEN_GUIDES: Record<ScreenId, ScreenGuide> = {
     purpose: "Use this page to review procurement and leakage risks in one place.",
     steps: ["Check the highest-risk anomaly.", "Open the supporting integrity signal.", "Export a report for review."],
     next: "Reports",
+    nextScreen: "reports",
   },
   federation: {
     purpose: "Use this page to see partner status and cross-agency correlations.",
     steps: ["Check which partners are active.", "Review the highest-risk correlation.", "Escalate only material matches."],
     next: "Command",
+    nextScreen: "command",
   },
   audit: {
     purpose: "Use this page to verify accountability, control events, and traceability.",
     steps: ["Start with the newest entries.", "Verify the action trail.", "Use reports if leadership needs a summary."],
     next: "Reports",
+    nextScreen: "reports",
   },
   exec: {
     purpose: "Use this page to prepare a short crisis brief for leadership.",
     steps: ["Confirm the threat level.", "Summarize only the top risks.", "Move leaders to Command or Reports if deeper detail is needed."],
     next: "Command",
+    nextScreen: "command",
   },
   onboard: {
     purpose: "Use this page to prepare an agency for controlled federation access.",
     steps: ["Create the agency profile.", "Provision the user and access level.", "Confirm readiness before federation use."],
     next: "Users",
+    nextScreen: "users",
   },
   users: {
     purpose: "Use this page to manage access, not operational investigations.",
     steps: ["Search the user.", "Update the account or password.", "Return to Command or Defense for operations."],
     next: "Command",
+    nextScreen: "command",
   },
 };
 

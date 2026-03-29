@@ -21,6 +21,11 @@ const stageClass = (stage: string) => {
   return "stage";
 };
 
+const stageLabel = (stage: string) => {
+  if (stage === "rehearsal") return "probing";
+  return stage;
+};
+
 const KILL_CHAIN_ORDER = [
   "reconnaissance", "weaponization", "delivery",
   "exploitation", "installation", "command_and_control", "actions_on_objectives",
@@ -461,7 +466,7 @@ export default function Timeline({
                     {item.serviceId}
                   </button>
                 ))}
-                <div className={stageClass(current.stage)}>Stage: {current.stage}</div>
+                <div className={stageClass(current.stage)}>Stage: {stageLabel(current.stage)}</div>
               </div>
             </div>
             <div className="grid-three">

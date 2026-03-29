@@ -433,7 +433,7 @@ export default function LoginScreen({ onLogin }: Props) {
             </div>
             <ul className="landing-access-list">
               <li>Accounts are created by a central administrator. There is no public self-registration.</li>
-              <li>TOTP MFA can be demonstrated after enrollment from the secure workspace.</li>
+              <li>TOTP MFA can be shown after enrollment from the secure workspace.</li>
               <li>RBAC separates central, section, admin, analyst, operator, and auditor capabilities.</li>
               <li>Sessions use access and refresh tokens with revocation on resets and MFA state changes.</li>
             </ul>

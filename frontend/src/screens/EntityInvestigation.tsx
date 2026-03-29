@@ -1117,7 +1117,7 @@ export default function EntityInvestigation({ initialEntityKey, analystId, princ
                 "Explain this in plain English",
                 "What does the graph score mean here?",
                 "Is this low risk or urgent?",
-                "What should I say in a presentation about this entity?",
+                "How should I explain this entity clearly?",
                 "How real is the data behind this score?",
               ].map((prompt) => (
                 <button key={prompt} className="chip ghost" type="button" onClick={() => setCopilotQuestion(prompt)}>

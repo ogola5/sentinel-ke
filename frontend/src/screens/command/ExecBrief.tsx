@@ -1,7 +1,7 @@
 /**
  * Executive Readiness Brief
  *
- * A judge-facing presentation layer that shows what the platform can prove
+ * An executive presentation layer that shows what the platform can prove
  * operationally right now, where the live system is aligned to benchmarked
  * model runs, and where caveats still apply.
  */
@@ -113,7 +113,7 @@ function computeReadinessSummary(
     return {
       level: "REMEDIATE",
       headline: "REMEDIATE — Readiness evidence is unavailable",
-      detail: "Core readiness feeds did not load. Do not present the platform as judge-ready until trust and domain-health evidence is visible.",
+      detail: "Core readiness feeds did not load. Do not treat the platform as operationally ready until trust and domain-health evidence is visible.",
       color: "#ff2d55",
     };
   }
@@ -244,7 +244,7 @@ export default function ExecBrief({ principal }: Props) {
       const missingFeeds = [
         latestRuns.length === 0 ? "benchmark metrics" : null,
         domainHealth.length === 0 ? "domain health" : null,
-        judgeReady == null ? "judge readiness" : null,
+        judgeReady == null ? "readiness evidence" : null,
         trust == null ? "trust summary" : null,
         health == null ? "operational health" : null,
       ].filter(Boolean);
@@ -275,8 +275,8 @@ export default function ExecBrief({ principal }: Props) {
         headline: judgeReadiness.headline,
         detail:
           judgeReadiness.lanes.length > 0
-            ? `Judge readiness is anchored to ${judgeReadiness.lanes.length} live lanes and their latest benchmarked evidence.`
-            : "Judge readiness evidence is loaded, but no lane summaries are available.",
+            ? `Readiness is anchored to ${judgeReadiness.lanes.length} live lanes and their latest benchmarked evidence.`
+            : "Readiness evidence is loaded, but no lane summaries are available.",
         color:
           judgeReadiness.status === "ok" ? "#30d158" : judgeReadiness.status === "warn" ? "#ff9f0a" : "#ff2d55",
       } satisfies ReadinessSummary;
@@ -403,12 +403,12 @@ export default function ExecBrief({ principal }: Props) {
       </div>
 
       <section className="exec-section" style={{ marginTop: 12 }}>
-        <h2 className="exec-section-title">Judge Panel</h2>
+        <h2 className="exec-section-title">Operational Readiness</h2>
         <div className="priority-card" style={{ marginTop: 0 }}>
           <div className="priority-card-head">
             <div>
               <h3 className="priority-card-title">
-                {judgeReadiness?.status === "ok" ? "Ready for judge review" : judgeReadiness?.status === "warn" ? "Ready with caveats" : "Remediate before presenting"}
+                {judgeReadiness?.status === "ok" ? "Ready for operational review" : judgeReadiness?.status === "warn" ? "Operational with caveats" : "Remediate before operational use"}
               </h3>
               <p className="priority-card-copy">
                 {judgeReadiness?.headline ?? readiness.detail}
@@ -550,7 +550,7 @@ export default function ExecBrief({ principal }: Props) {
           <div style={{ marginTop: 14 }}>
             <div className="exec-section-title" style={{ marginBottom: 10 }}>Active response queue</div>
             {incidentRuns.length === 0 ? (
-              <p className="exec-none">No active incident runs are blocking the presentation surface right now.</p>
+              <p className="exec-none">No active incident runs are blocking the current workspace right now.</p>
             ) : (
               <ol className="exec-action-list">
                 {incidentRuns.map((run) => (
@@ -764,7 +764,7 @@ export default function ExecBrief({ principal }: Props) {
             <div className="exec-situation-item" style={{ borderLeftColor: "var(--warning)", padding: "10px 12px" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 <Shield size={14} color="var(--warning)" />
-                <strong>Presentation guardrail</strong>
+                <strong>Operational guardrail</strong>
               </div>
               <div className="muted" style={{ marginTop: 6 }}>
                 This brief shows current readiness, live queue pressure, benchmark references, and trust controls. It does not establish wrongdoing, intent, or certainty without analyst review and case evidence.

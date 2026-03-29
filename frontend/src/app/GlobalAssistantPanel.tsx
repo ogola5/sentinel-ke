@@ -130,7 +130,7 @@ export default function GlobalAssistantPanel({
       "Explain the whole system end to end.",
       "How was the cyber lane trained and evaluated?",
       "What do the graph nodes and edges mean in plain English?",
-      "What can I honestly claim to judges right now?",
+      "What can I honestly claim right now?",
       "What readiness evidence is strongest right now?",
       "How do legacy systems connect to Sentinel-KE?",
       `What should I say on the ${screenTitle} screen?`,
@@ -191,7 +191,7 @@ export default function GlobalAssistantPanel({
     } catch (err) {
       const detail = (err as { detail?: string })?.detail ?? String(err);
       if (detail === "mfa_already_enabled") {
-        setMfaStatus("MFA is already enabled for this account. Log out and sign back in to demonstrate the MFA prompt.");
+        setMfaStatus("MFA is already enabled for this account. Log out and sign back in to show the MFA prompt.");
       } else {
         setMfaStatus(detail);
       }
@@ -210,7 +210,7 @@ export default function GlobalAssistantPanel({
         LOGIN_NOTICE_KEY,
         "MFA has been enrolled for this account. Sign in again with your password, then enter the 6-digit authenticator code to continue.",
       );
-      setMfaStatus("MFA enrolled successfully. You will be returned to the login screen so you can demonstrate the second-factor prompt.");
+      setMfaStatus("MFA enrolled successfully. You will be returned to the login screen so you can show the second-factor prompt.");
       onRequireLogin();
     } catch (err) {
       const detail = (err as { detail?: string })?.detail ?? String(err);
@@ -229,7 +229,7 @@ export default function GlobalAssistantPanel({
           <p className="eyebrow">Local Copilot</p>
           <h3 style={{ margin: 0 }}>Mission Assistant</h3>
           <p className="muted" style={{ marginTop: 4 }}>
-            Screen-aware guidance, presentation help, workflow suggestions, and security tools.
+            Screen-aware guidance, system explanation, workflow suggestions, and security tools.
           </p>
         </div>
         <button className="btn-ghost" type="button" onClick={onClose}>Close</button>
@@ -262,7 +262,7 @@ export default function GlobalAssistantPanel({
           <div className="topbar-search-row" style={{ width: "100%" }}>
             <input
               className="search"
-              placeholder="Ask the local assistant what to say, what to click next, what the graph means, or how to present the workflow."
+              placeholder="Ask what this means, what to click next, what the graph shows, or how the workflow works."
               value={question}
               onChange={(event) => setQuestion(event.target.value)}
               onKeyDown={(event) => {
@@ -315,7 +315,7 @@ export default function GlobalAssistantPanel({
         <div className="panel">
           <div className="panel-header">
             <h3><ShieldCheck size={14} /> Security tools</h3>
-            <span className="muted">MFA demonstration support</span>
+            <span className="muted">MFA walkthrough support</span>
           </div>
           <div className="list">
             <div className="list-item">
@@ -327,7 +327,7 @@ export default function GlobalAssistantPanel({
               </p>
             </div>
             <div className="list-item">
-              <strong>How to demo MFA</strong>
+              <strong>How to show MFA</strong>
               <p className="muted" style={{ marginTop: 4 }}>
                 Start enrollment, add the secret to an authenticator app, verify one code, then sign in again. The login screen will then require the 6-digit code after password entry.
               </p>

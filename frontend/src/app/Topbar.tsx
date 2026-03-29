@@ -1,6 +1,7 @@
 import type { EntityProfile, SourceType } from "../types/domain";
 import {
   SCREEN_CHROME,
+  SCREEN_GUIDES,
   SOURCE_OPTIONS,
   TIME_WINDOWS,
   sourceLabel,
@@ -18,7 +19,9 @@ export default function Topbar({
   onToggleSource,
   onSelectTimeWindow,
   onEntityQueryChange,
+  onApplyEntityExample,
   onInvestigateEntity,
+  onOpenNextScreen,
   onOpenInspector,
   onToggleAssistant,
 }: {
@@ -32,14 +35,18 @@ export default function Topbar({
   onToggleSource: (source: SourceType) => void;
   onSelectTimeWindow: (id: string) => void;
   onEntityQueryChange: (query: string) => void;
+  onApplyEntityExample: (value: string) => void;
   onInvestigateEntity: (entity: EntityProfile) => void;
+  onOpenNextScreen: (screen: ScreenId) => void;
   onOpenInspector: () => void;
   onToggleAssistant: () => void;
 }) {
   const chrome = SCREEN_CHROME[activeScreen];
+  const guide = SCREEN_GUIDES[activeScreen];
   const showSourceFilters = Boolean(chrome.showSourceFilters);
   const showTimeWindow = Boolean(chrome.showTimeWindow);
   const showEntitySearch = Boolean(chrome.showEntitySearch);
+  const sampleInputs = showEntitySearch ? guide.sampleInputs ?? [] : [];
   const normalizedQuery = entityQuery.trim().toLowerCase();
   const matchedEntity = normalizedQuery
     ? entities.find((item) => item.label.toLowerCase() === normalizedQuery)
@@ -51,7 +58,7 @@ export default function Topbar({
   return (
     <header className="topbar">
       <div className="topbar-screen">
-        <p className="topbar-label">Workspace</p>
+        <p className="topbar-label">Current view</p>
         <div className="topbar-screen-title">{chrome.title}</div>
         <p className="topbar-screen-subtitle">{chrome.subtitle}</p>
       </div>
@@ -120,6 +127,22 @@ export default function Topbar({
                 Investigate
               </button>
             </div>
+            {sampleInputs.length > 0 && (
+              <div className="chip-row topbar-example-row">
+                <span className="topbar-example-label">Try</span>
+                {sampleInputs.map((item) => (
+                  <button
+                    key={`${activeScreen}:${item.value}`}
+                    className="chip ghost"
+                    type="button"
+                    onClick={() => onApplyEntityExample(item.value)}
+                    title={item.value}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+            )}
             <datalist id="entity-options">
               {entities.map((entity) => (
                 <option key={entity.id} value={entity.id} label={entity.label} />
@@ -129,6 +152,16 @@ export default function Topbar({
         )}
 
         <div className="topbar-end">
+          {guide.nextScreen && (
+            <button
+              className="chip ghost"
+              type="button"
+              onClick={() => onOpenNextScreen(guide.nextScreen!)}
+              title={`Open ${SCREEN_CHROME[guide.nextScreen].title}`}
+            >
+              Next: {SCREEN_CHROME[guide.nextScreen].title}
+            </button>
+          )}
           <button className={assistantOpen ? "chip active" : "chip ghost"} type="button" onClick={onToggleAssistant} title="Open platform assistant">
             Assistant
           </button>

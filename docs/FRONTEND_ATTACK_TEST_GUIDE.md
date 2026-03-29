@@ -5,6 +5,15 @@
 **Frontend**: http://localhost:3000
 **Tested**: 2026-03-27
 
+Preferred demo path:
+
+- Open `Command`
+- Use the built-in `Judge scenario launcher`
+- Click `Launch now` or `Bootstrap + retrain`
+- Then open the recommended screens instead of using terminal `curl`
+
+Use the curl snippets below only as a fallback when you want manual verification outside the UI.
+
 See also:
 
 - [CYBER_SCREEN_REALITY_AUDIT.md](/home/ogola/personal/sentinel-ke/docs/CYBER_SCREEN_REALITY_AUDIT.md) for the screen-by-screen realism review, backend route dependencies, and the honest demo boundary for cyber / VPN / DDoS / malware.

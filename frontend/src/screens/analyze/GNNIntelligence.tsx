@@ -37,6 +37,7 @@ import {
   submitAIFeedback,
   triggerGNNTrain,
 } from "../../api/ai";
+import { DEMO_SCENARIOS, demoScenarioLabelFor, type DemoScenarioId } from "../../demo/scenarios";
 import type {
   AIFeedback,
   AIPrediction,
@@ -52,7 +53,7 @@ const ANALYST_ID_STORAGE_KEY = "sentinel_analyst_id";
 type Domain = "cyber" | "corruption";
 type DomainWindowKey = "Wmid" | "Wcorruption";
 type GNNView = "overview" | "review" | "ops";
-type CyberScenario = "ddos" | "vpn" | "sim_swap" | "ddos_vpn" | "ddos_vpn_fraud";
+type CyberScenario = DemoScenarioId;
 
 const DOMAIN_OPTIONS: Array<{ domain: Domain; windowKey: DomainWindowKey; label: string }> = [
   { domain: "cyber", windowKey: "Wmid", label: "Cyber (Wmid)" },
@@ -75,33 +76,11 @@ const CYBER_SCENARIO_OPTIONS: Array<{
   id: CyberScenario;
   label: string;
   summary: string;
-}> = [
-  {
-    id: "ddos",
-    label: "DDoS pressure",
-    summary: "Simulates a rising burst against KPLC login infrastructure with IP fan-in and degrading service health.",
-  },
-  {
-    id: "vpn",
-    label: "VPN login reuse",
-    summary: "Simulates repeated successful logins from a rotating IP pool through a VPN-like provider pattern.",
-  },
-  {
-    id: "sim_swap",
-    label: "SIM swap / fraud",
-    summary: "Simulates a Kenyan mobile-money fraud chain: SIM swap, suspicious login, transfer to mule, then agent cash-out.",
-  },
-  {
-    id: "ddos_vpn",
-    label: "DDoS + VPN",
-    summary: "Simulates concurrent DDoS pressure and credential reuse through VPN-like access patterns.",
-  },
-  {
-    id: "ddos_vpn_fraud",
-    label: "Combined pressure",
-    summary: "Simulates DDoS, VPN-style login abuse, and SIM-swap fraud pressure in one combined rehearsal.",
-  },
-];
+}> = DEMO_SCENARIOS.map(({ id, label, summary }) => ({
+  id,
+  label,
+  summary,
+}));
 
 const GNN_VIEW_CONTENT: Record<GNNView, {
   kicker: string;
@@ -131,7 +110,7 @@ const GNN_VIEW_CONTENT: Record<GNNView, {
   },
   ops: {
     kicker: "Model operations",
-    title: "Seed, retrain, and rehearse here.",
+    title: "Seed, retrain, and run scenarios here.",
     summary: "Keep model operations separate from daily review.",
     steps: [
       "Seed only when you need fresh data.",
@@ -273,7 +252,7 @@ function describeUncertaintyMeaning(): string {
 }
 
 function scenarioLabelFor(scenario: CyberScenario): string {
-  return CYBER_SCENARIO_OPTIONS.find((option) => option.id === scenario)?.label ?? scenario;
+  return demoScenarioLabelFor(scenario);
 }
 
 interface Props {
@@ -974,9 +953,9 @@ export default function GNNIntelligence({
           {activeDomain === "cyber" && (
             <div className="panel workflow-stage-panel">
               <div className="panel-header">
-                <h3>Scenario rehearsal and next 24 hours</h3>
+                <h3>Scenario controls and next 24 hours</h3>
                 <span className="muted">
-                  {selectedScenarioOption.label} · simulate now, then forecast hourly pressure for the next day
+                  {selectedScenarioOption.label} · launch now, then forecast hourly pressure for the next day
                 </span>
               </div>
 
@@ -997,7 +976,7 @@ export default function GNNIntelligence({
 
               <div className="list" style={{ marginBottom: 14 }}>
                 <div className="list-item">
-                  <strong>What this scenario simulates</strong>
+                  <strong>What this run creates</strong>
                   <p className="muted" style={{ marginTop: 4 }}>{selectedScenarioOption.summary}</p>
                 </div>
               </div>
@@ -1021,11 +1000,11 @@ export default function GNNIntelligence({
               <div className={`gnn-train-actions${trainMsg ? " has-msg" : ""}`} style={{ marginBottom: 14 }}>
                 <button type="button" className="btn-ghost" onClick={() => void handleScenarioReplay()} disabled={scenarioBusy || seedBusy || trainBusy}>
                   {scenarioBusy ? <Loader size={13} className="spin" /> : <Play size={13} />}
-                  &nbsp;Simulate selected scenario
+                  &nbsp;Launch selected scenario
                 </button>
                 <button type="button" className="btn-ghost" onClick={() => void handleSeed("cyber")} disabled={scenarioBusy || seedBusy || trainBusy}>
                   {seedBusy ? <Loader size={13} className="spin" /> : <Database size={13} />}
-                  &nbsp;Seed + Retrain Cyber GNN
+                  &nbsp;Prepare data + refresh cyber model
                 </button>
                 <button type="button" className="btn-train-cyber" onClick={() => void loadScenarioForecast(selectedScenario)} disabled={scenarioForecastLoading || scenarioBusy || seedBusy || trainBusy}>
                   {scenarioForecastLoading ? <Loader size={13} className="spin" /> : <RefreshCw size={13} />}

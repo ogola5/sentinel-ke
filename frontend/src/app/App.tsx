@@ -33,6 +33,7 @@ import GlobalAssistantPanel from "./GlobalAssistantPanel";
 import Inspector from "./Inspector";
 import Sidebar from "./Sidebar";
 import Topbar from "./Topbar";
+import WorkflowGuideStrip from "./WorkflowGuideStrip";
 import { SCREEN_CHROME, SCREEN_GUIDES, SOURCE_OPTIONS, type ScreenId } from "./navigation";
 import { useDashboardSync } from "./useDashboardSync";
 import { canonicalServiceKey } from "../utils/entityKeys";
@@ -132,7 +133,7 @@ function AuthenticatedApp({
   const [selectedCaseId, setSelectedCaseId] = useState("");
   const [evidence, setEvidence] = useState<EvidenceState>({ open: false, title: "", items: [] });
   const [entityQuery, setEntityQuery] = useState("");
-  const [connectionPanelOpen, setConnectionPanelOpen] = useState(false);
+const [connectionPanelOpen, setConnectionPanelOpen] = useState(false);
   const [credentials, setCredentials] = useState<ClientCredentials>(() => loadClientCredentials());
 
   useEffect(() => {
@@ -188,6 +189,7 @@ function AuthenticatedApp({
   const selectedCampaign = campaignsData.find((campaign) => campaign.id === selectedCampaignId);
   const screenGuide = SCREEN_GUIDES[activeScreen];
   const screenChrome = SCREEN_CHROME[activeScreen];
+  const showWorkflowGuide = ["command", "ops", "live", "graph", "investigate", "defense", "reports", "gnn"].includes(activeScreen);
   const showWorkspaceLoading = !snapshotReady && isSyncing;
   const timelineEvidenceRefs = useMemo(
     () =>
@@ -295,12 +297,14 @@ function AuthenticatedApp({
           onToggleSource={toggleSource}
           onSelectTimeWindow={setTimeWindow}
           onEntityQueryChange={setEntityQuery}
+          onApplyEntityExample={(value) => setEntityQuery(value)}
           onInvestigateEntity={(entity) => {
             setSelectedEntity(entity);
             setInvestigationEntityKey(entity.id);
             setActiveScreen("investigate");
             setInspectorOpen(true);
           }}
+          onOpenNextScreen={(screen) => setActiveScreen(screen)}
           onOpenInspector={() => setInspectorOpen(true)}
           onToggleAssistant={() => setAssistantOpen((open) => !open)}
         />
@@ -351,96 +355,106 @@ function AuthenticatedApp({
                 </div>
               </section>
             ) : (
-              <ActiveScreen
-                activeScreen={activeScreen}
-                principal={principal}
-                central={central}
-                execute={execute}
-                manageUsers={manageUsers}
-                operationsData={operationsData}
-                campaignsData={campaignsData}
-                eventsData={eventsData}
-                timelineData={timelineData}
-                indicatorsData={indicatorsData}
-                threatSummaryData={threatSummaryData}
-                infraClustersData={infraClustersData}
-                entitiesData={entitiesData}
-                graphData={graphData}
-                activeCase={activeCase}
-                isSyncing={isSyncing}
-                snapshotReady={snapshotReady}
-                selectedEntity={selectedEntity}
-                investigationEntityKey={investigationEntityKey}
-                selectedCampaignId={selectedCampaignId}
-                selectedClusterId={selectedClusterId}
-                selectedServiceId={selectedServiceId}
-                timelineEvidenceRefs={timelineEvidenceRefs}
-                sourceFilters={sourceFilters}
-                healthGnnLoaded={healthGnnLoaded}
-                healthModelVersion={healthModelVersion}
-                healthGnnMetrics={healthGnnMetrics}
-                healthPlatformStatus={healthPlatformStatus}
-                leakageActionLabel={leakageActionLabel}
-                onNavigate={(id) => setActiveScreen(id)}
-                onSelectEvent={handleSelectEvent}
-                onSelectEntity={(entity) => {
-                  setSelectedEntity(entity);
-                  setInvestigationEntityKey(entity.id);
-                  setInspectorOpen(true);
-                }}
-                onSelectCampaignId={setSelectedCampaignId}
-                onSelectClusterId={setSelectedClusterId}
-                onSelectServiceId={setSelectedServiceId}
-                onOpenEvidence={openEvidence}
-                onGenerateCase={() => void handleGenerateCase()}
-                onGenerateCaseForId={(id: string) => void handleGenerateCase(id)}
-                onOpenCampaignEvidence={async () => {
-                  if (!selectedCampaignId) return;
-                  try {
-                    const items = await fetchCampaignEvidenceForDrawer(selectedCampaignId);
-                    openEvidence(`Campaign evidence (${selectedCampaignId})`, items);
-                  } catch {
-                    openEvidence("Campaign evidence", []);
-                  }
-                }}
-                onRunLeakage={() => void handleRunLeakage()}
-                onCaseExportJson={() => {
-                  const exportCampaignId = activeCase?.campaignId ?? selectedCampaignId;
-                  if (exportCampaignId) {
-                    void (async () => {
-                      try {
-                        const filename = await downloadCasePacketFromCampaign(exportCampaignId);
-                        setActionStatus(`downloaded ${filename}`);
-                      } catch (err) {
-                        setActionStatus(`failed: ${err instanceof Error ? err.message : "request_failed"}`);
-                      }
-                    })();
-                  }
-                }}
-                onCaseExportStix={() => {
-                  const exportCampaignId = activeCase?.campaignId ?? selectedCampaignId;
-                  if (exportCampaignId) {
-                    void (async () => {
-                      try {
-                        const filename = await downloadStixBundleForCampaign(exportCampaignId);
-                        setActionStatus(`downloaded ${filename}`);
-                      } catch (err) {
-                        setActionStatus(`failed: ${err instanceof Error ? err.message : "request_failed"}`);
-                      }
-                    })();
-                  }
-                }}
-                onInvestigateEntity={(entityKey: string) => {
-                  const match = entitiesData.find(
-                    (e) => e.id === entityKey || e.label.toLowerCase() === entityKey.toLowerCase(),
-                  );
-                  if (match) {
-                    setSelectedEntity(match);
-                  }
-                  setInvestigationEntityKey(entityKey);
-                  setActiveScreen("investigate");
-                }}
-              />
+              <>
+                {showWorkflowGuide && (
+                  <WorkflowGuideStrip
+                    title={screenChrome.title}
+                    guide={screenGuide}
+                    onNavigate={(screen) => setActiveScreen(screen)}
+                    onApplyExample={(value) => setEntityQuery(value)}
+                  />
+                )}
+                <ActiveScreen
+                  activeScreen={activeScreen}
+                  principal={principal}
+                  central={central}
+                  execute={execute}
+                  manageUsers={manageUsers}
+                  operationsData={operationsData}
+                  campaignsData={campaignsData}
+                  eventsData={eventsData}
+                  timelineData={timelineData}
+                  indicatorsData={indicatorsData}
+                  threatSummaryData={threatSummaryData}
+                  infraClustersData={infraClustersData}
+                  entitiesData={entitiesData}
+                  graphData={graphData}
+                  activeCase={activeCase}
+                  isSyncing={isSyncing}
+                  snapshotReady={snapshotReady}
+                  selectedEntity={selectedEntity}
+                  investigationEntityKey={investigationEntityKey}
+                  selectedCampaignId={selectedCampaignId}
+                  selectedClusterId={selectedClusterId}
+                  selectedServiceId={selectedServiceId}
+                  timelineEvidenceRefs={timelineEvidenceRefs}
+                  sourceFilters={sourceFilters}
+                  healthGnnLoaded={healthGnnLoaded}
+                  healthModelVersion={healthModelVersion}
+                  healthGnnMetrics={healthGnnMetrics}
+                  healthPlatformStatus={healthPlatformStatus}
+                  leakageActionLabel={leakageActionLabel}
+                  onNavigate={(id) => setActiveScreen(id)}
+                  onSelectEvent={handleSelectEvent}
+                  onSelectEntity={(entity) => {
+                    setSelectedEntity(entity);
+                    setInvestigationEntityKey(entity.id);
+                    setInspectorOpen(true);
+                  }}
+                  onSelectCampaignId={setSelectedCampaignId}
+                  onSelectClusterId={setSelectedClusterId}
+                  onSelectServiceId={setSelectedServiceId}
+                  onOpenEvidence={openEvidence}
+                  onGenerateCase={() => void handleGenerateCase()}
+                  onGenerateCaseForId={(id: string) => void handleGenerateCase(id)}
+                  onOpenCampaignEvidence={async () => {
+                    if (!selectedCampaignId) return;
+                    try {
+                      const items = await fetchCampaignEvidenceForDrawer(selectedCampaignId);
+                      openEvidence(`Campaign evidence (${selectedCampaignId})`, items);
+                    } catch {
+                      openEvidence("Campaign evidence", []);
+                    }
+                  }}
+                  onRunLeakage={() => void handleRunLeakage()}
+                  onCaseExportJson={() => {
+                    const exportCampaignId = activeCase?.campaignId ?? selectedCampaignId;
+                    if (exportCampaignId) {
+                      void (async () => {
+                        try {
+                          const filename = await downloadCasePacketFromCampaign(exportCampaignId);
+                          setActionStatus(`downloaded ${filename}`);
+                        } catch (err) {
+                          setActionStatus(`failed: ${err instanceof Error ? err.message : "request_failed"}`);
+                        }
+                      })();
+                    }
+                  }}
+                  onCaseExportStix={() => {
+                    const exportCampaignId = activeCase?.campaignId ?? selectedCampaignId;
+                    if (exportCampaignId) {
+                      void (async () => {
+                        try {
+                          const filename = await downloadStixBundleForCampaign(exportCampaignId);
+                          setActionStatus(`downloaded ${filename}`);
+                        } catch (err) {
+                          setActionStatus(`failed: ${err instanceof Error ? err.message : "request_failed"}`);
+                        }
+                      })();
+                    }
+                  }}
+                  onInvestigateEntity={(entityKey: string) => {
+                    const match = entitiesData.find(
+                      (e) => e.id === entityKey || e.label.toLowerCase() === entityKey.toLowerCase(),
+                    );
+                    if (match) {
+                      setSelectedEntity(match);
+                    }
+                    setInvestigationEntityKey(entityKey);
+                    setActiveScreen("investigate");
+                  }}
+                />
+              </>
             )}
           </main>
 

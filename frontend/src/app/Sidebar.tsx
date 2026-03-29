@@ -80,7 +80,7 @@ export default function Sidebar({
       {!collapsed && (
         <div className="nav-header">
           <p className="nav-wordmark">Sentinel-KE</p>
-          <h1 className="nav-title">Workspace</h1>
+          <h1 className="nav-title">Operations</h1>
 
           {/* Agency badge — dynamic border/bg from agencyColor */}
           <div
@@ -107,16 +107,20 @@ export default function Sidebar({
       )}
 
       <nav className="nav-list">
-        {!auditorOnly && (
-          <NavGroup label="SENSE" color="var(--info)" items={NAV_SENSE} active={activeScreen}
+        {central && (
+          <NavGroup label="COMMAND" color="var(--command)" items={NAV_COMMAND} active={activeScreen}
             collapsed={collapsed} onSelect={(id) => onNavigate(id as ScreenId)} />
         )}
         {!auditorOnly && (
-          <NavGroup label="ANALYZE" color="var(--accent)" items={NAV_ANALYZE} active={activeScreen}
+          <NavGroup label="MONITOR" color="var(--info)" items={NAV_SENSE} active={activeScreen}
             collapsed={collapsed} onSelect={(id) => onNavigate(id as ScreenId)} />
         )}
         {!auditorOnly && (
-          <NavGroup label="ATTRIBUTE" color="var(--warning)" items={NAV_ATTRIBUTE} active={activeScreen}
+          <NavGroup label="INVESTIGATE" color="var(--accent)" items={NAV_ANALYZE} active={activeScreen}
+            collapsed={collapsed} onSelect={(id) => onNavigate(id as ScreenId)} />
+        )}
+        {!auditorOnly && (
+          <NavGroup label="COORDINATE" color="var(--warning)" items={NAV_ATTRIBUTE} active={activeScreen}
             collapsed={collapsed} onSelect={(id) => onNavigate(id as ScreenId)} />
         )}
         {!auditorOnly && execute && (
@@ -127,12 +131,8 @@ export default function Sidebar({
           <NavGroup label="RESPOND" color="var(--risk-critical)" items={[NAV_RESPOND[0]]} active={activeScreen}
             collapsed={collapsed} onSelect={(id) => onNavigate(id as ScreenId)} />
         )}
-        <NavGroup label="GOVERN" color="var(--risk-low)" items={NAV_GOVERN} active={activeScreen}
+        <NavGroup label="OPERATE" color="var(--risk-low)" items={NAV_GOVERN} active={activeScreen}
           collapsed={collapsed} onSelect={(id) => onNavigate(id as ScreenId)} />
-        {central && (
-          <NavGroup label="COMMAND" color="var(--command)" items={NAV_COMMAND} active={activeScreen}
-            collapsed={collapsed} onSelect={(id) => onNavigate(id as ScreenId)} />
-        )}
 
         {/* ── System drawer ─────────────────────────────────────────────── */}
         <div className="nav-group">
@@ -145,7 +145,7 @@ export default function Sidebar({
             <Settings size={12} style={{ opacity: 0.5 }} />
             {!collapsed && (
               <>
-                <span className="nav-group-label nav-group-label-grow">SYSTEM</span>
+                <span className="nav-group-label nav-group-label-grow">PLATFORM</span>
                 {adminOpen ? <ChevronUp size={10} style={{ opacity: 0.4 }} /> : <ChevronDown size={10} style={{ opacity: 0.4 }} />}
               </>
             )}

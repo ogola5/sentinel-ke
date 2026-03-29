@@ -125,6 +125,85 @@ def _vpn_events(base_time: datetime) -> List[CanonicalEvent]:
     return events
 
 
+def _malware_events(base_time: datetime) -> List[CanonicalEvent]:
+    events: List[CanonicalEvent] = []
+    shared_ip = "50.16.16.211"
+    shared_domain = "update-checkin-control.net"
+    shared_url = "http://update-checkin-control.net/bootstrap.bin"
+
+    rows = [
+        {
+            "minutes_ago": 22,
+            "device_id": "gov-edge-host-17",
+            "service_id": "ecitizen",
+            "finding_type": "botnet_c2_indicator",
+            "malware_family": "mirai",
+            "confidence": 0.92,
+            "source": "threatfox",
+        },
+        {
+            "minutes_ago": 18,
+            "device_id": "gov-edge-host-17",
+            "service_id": "ecitizen",
+            "finding_type": "malware_url",
+            "malware_family": "mirai",
+            "confidence": 0.88,
+            "source": "urlhaus",
+        },
+        {
+            "minutes_ago": 13,
+            "device_id": "kra-edge-host-02",
+            "service_id": "kra-tax-portal-ke",
+            "finding_type": "botnet_c2_indicator",
+            "malware_family": "mirai",
+            "confidence": 0.9,
+            "source": "feodo",
+        },
+        {
+            "minutes_ago": 9,
+            "device_id": "finance-mail-node-04",
+            "service_id": "mail-gateway-ke",
+            "finding_type": "malware_url",
+            "malware_family": "loader",
+            "confidence": 0.85,
+            "source": "malwarebazaar",
+        },
+    ]
+
+    for row in rows:
+        ts = base_time - timedelta(minutes=int(row["minutes_ago"]))
+        events.append(
+            CanonicalEvent(
+                event_type="DFIR_FINDING_EVENT",
+                occurred_at=ts,
+                anchors={
+                    "ip": shared_ip,
+                    "domain": shared_domain,
+                    "url": shared_url,
+                    "device_id": str(row["device_id"]),
+                    "service_id": str(row["service_id"]),
+                },
+                payload={
+                    "host": row["device_id"],
+                    "artifact_name": "network_ioc_hunt",
+                    "ip": shared_ip,
+                    "domain": shared_domain,
+                    "url": shared_url,
+                    "device_id": row["device_id"],
+                    "service_id": row["service_id"],
+                    "finding_type": row["finding_type"],
+                    "malware_family": row["malware_family"],
+                    "severity": "high",
+                    "confidence": row["confidence"],
+                    "source": row["source"],
+                    "summary": f"{row['malware_family']} infrastructure touching {row['service_id']}",
+                },
+            )
+        )
+
+    return events
+
+
 def _fraud_events(base_time: datetime) -> List[CanonicalEvent]:
     events: List[CanonicalEvent] = []
 
@@ -237,6 +316,8 @@ def run_demo(*, seed: bool = False, scenario: str = "ddos_vpn", mode: str = "db"
     events: List[CanonicalEvent] = []
     if normalized_scenario in ("ddos", "ddos_vpn", "all", "ddos_vpn_fraud"):
         events.extend(_ddos_events(base_time))
+    if normalized_scenario in ("malware", "all"):
+        events.extend(_malware_events(base_time))
     if normalized_scenario in ("vpn", "ddos_vpn", "all", "ddos_vpn_fraud"):
         events.extend(_vpn_events(base_time))
     if normalized_scenario in ("fraud", "all", "ddos_vpn_fraud"):
@@ -297,7 +378,7 @@ def main():
 
     p = argparse.ArgumentParser()
     p.add_argument("--seed-sources", action="store_true")
-    p.add_argument("--scenario", choices=["ddos", "vpn", "sim_swap", "fraud", "ddos_vpn", "ddos_vpn_fraud", "all"], default="ddos_vpn")
+    p.add_argument("--scenario", choices=["ddos", "malware", "vpn", "sim_swap", "fraud", "ddos_vpn", "ddos_vpn_fraud", "all"], default="ddos_vpn")
     p.add_argument("--mode", choices=["db", "kafka"], default="db")
     p.add_argument("--topic", default="sentinel.ingest")
     args = p.parse_args()

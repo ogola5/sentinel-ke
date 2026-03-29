@@ -373,7 +373,7 @@ export default function Campaigns({
             ) : fraudTrigger === "done" ? (
               <>✓ Injected — refresh in 30s</>
             ) : fraudTrigger === "error" ? (
-              <>✗ Failed — check demo mode</>
+              <>✗ Failed — check scenario mode</>
             ) : (
               <><Play size={14} />&nbsp;Run Mule Ring Demo</>
             )}

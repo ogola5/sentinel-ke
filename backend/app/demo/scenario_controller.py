@@ -33,10 +33,10 @@ async def start_scenario(
     scenario_name: str,
     background_tasks: BackgroundTasks,
 ):
-    """Triggers a specific data scenario (ddos, vpn, fraud)."""
+    """Triggers a specific data scenario (ddos, malware, vpn, fraud)."""
     if not _demo_enabled():
         raise HTTPException(status_code=403, detail="demo_endpoints_disabled")
-    valid = ["ddos", "vpn", "sim_swap", "fraud", "ddos_vpn", "ddos_vpn_fraud", "all"]
+    valid = ["ddos", "malware", "vpn", "sim_swap", "fraud", "ddos_vpn", "ddos_vpn_fraud", "all"]
     if scenario_name not in valid:
         raise HTTPException(status_code=400, detail=f"Invalid scenario. Use: {valid}")
 
@@ -67,7 +67,7 @@ async def trigger_replay(
     """Replays the selected scenario through the canonical ingest path."""
     if not _demo_enabled():
         raise HTTPException(status_code=403, detail="demo_endpoints_disabled")
-    valid = ["ddos", "vpn", "sim_swap", "fraud", "ddos_vpn", "ddos_vpn_fraud", "all"]
+    valid = ["ddos", "malware", "vpn", "sim_swap", "fraud", "ddos_vpn", "ddos_vpn_fraud", "all"]
     if scenario_name not in valid:
         raise HTTPException(status_code=400, detail=f"Invalid scenario. Use: {valid}")
     normalized = _normalize_scenario_name(scenario_name)

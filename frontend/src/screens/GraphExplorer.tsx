@@ -549,7 +549,7 @@ export default function GraphExplorer({
             className={viewMode === "operational" ? "chip chip-active" : "chip ghost"}
             type="button"
             onClick={() => setViewMode("operational")}
-            title="Default judge-safe view: target side and attacker infrastructure first"
+            title="Default operational view: target side and attacker infrastructure first"
           >
             Operational view
           </button>
@@ -589,7 +589,7 @@ export default function GraphExplorer({
           <p className="muted" style={{ fontSize: "0.8rem", lineHeight: 1.55 }}>
             {viewMode === "operational"
               ? "This default view emphasizes the operational picture first: target-side nodes on the left and attacker infrastructure in the middle. Campaign grouping is still counted above and available in Full graph when needed."
-              : "This full view adds campaign grouping on the right. Use it when a judge asks how multiple observations are grouped into one broader operation."}
+              : "This full view adds campaign grouping on the right. Use it when you need to explain how multiple observations are grouped into one broader operation."}
             {" "}
             Click a node to focus the graph. Use <strong>Find path</strong> for live Neo4j path lookup.
           </p>
@@ -720,7 +720,7 @@ export default function GraphExplorer({
           ) : (
             <p className="muted" style={{ fontSize: "0.78rem", lineHeight: 1.5 }}>
               {counts.campaignTotal} active campaign grouping{counts.campaignTotal !== 1 ? "s are" : " is"} tracked behind this snapshot.
-              Keep this hidden in the first pass. Open <strong>Full graph</strong> only if a judge asks how separate observations are grouped into one operation.
+              Keep this hidden in the first pass. Open <strong>Full graph</strong> only when you need to explain how separate observations are grouped into one operation.
             </p>
           )}
         </div>
