@@ -26,6 +26,7 @@ export function useDashboardSync() {
   const [backendLabel, setBackendLabel] = useState("Waiting for sync…");
   const [syncError, setSyncError] = useState("");
   const [isSyncing, setIsSyncing] = useState(false);
+  const [snapshotReady, setSnapshotReady] = useState(false);
   const [syncNonce, setSyncNonce] = useState(0);
 
   const [healthGnnLoaded, setHealthGnnLoaded] = useState(false);
@@ -51,18 +52,13 @@ export function useDashboardSync() {
       setSyncError("");
 
       try {
-        const [snapshotResult, opsResult, healthResult] = await Promise.allSettled([
-          fetchBackendSnapshot(),
-          fetchOperationsSnapshot(),
-          apiFetchJson<Record<string, unknown>>(endpoints.health()),
-        ]);
+        const opsPromise = fetchOperationsSnapshot();
+        const healthPromise = apiFetchJson<Record<string, unknown>>(endpoints.health());
+        const threatSummaryPromise = apiFetchJson<ThreatSummary>(endpoints.aiIndicatorsSummary(7));
+
+        const snapshot = await fetchBackendSnapshot();
         if (cancelled) return;
 
-        if (snapshotResult.status !== "fulfilled") {
-          throw snapshotResult.reason;
-        }
-
-        const snapshot = snapshotResult.value;
         const warnings = [...snapshot.warnings];
         let nextStatus: BackendStatus = snapshot.mode === "live" ? "connected" : "degraded";
 
@@ -74,6 +70,18 @@ export function useDashboardSync() {
         setEntitiesData(snapshot.entities);
         setGraphData(snapshot.graph);
         setThreatSummaryData(snapshot.threatSummary);
+        setBackendStatus(nextStatus);
+        setBackendLabel(
+          warnings.length > 0 ? `${snapshot.connectionLabel} · ${warnings.join(", ")}` : snapshot.connectionLabel,
+        );
+        setSnapshotReady(true);
+
+        const [opsResult, healthResult, threatSummaryResult] = await Promise.allSettled([
+          opsPromise,
+          healthPromise,
+          threatSummaryPromise,
+        ]);
+        if (cancelled) return;
 
         if (opsResult.status === "fulfilled") {
           setOperationsData(opsResult.value);
@@ -112,6 +120,14 @@ export function useDashboardSync() {
           if (nextStatus === "connected") nextStatus = "degraded";
         }
 
+        if (threatSummaryResult.status === "fulfilled") {
+          setThreatSummaryData(threatSummaryResult.value);
+        } else {
+          setThreatSummaryData(snapshot.threatSummary ?? emptyThreatSummary);
+          warnings.push("ai_summary limited");
+          if (nextStatus === "connected") nextStatus = "degraded";
+        }
+
         setBackendStatus(nextStatus);
         setBackendLabel(
           warnings.length > 0 ? `${snapshot.connectionLabel} · ${warnings.join(", ")}` : snapshot.connectionLabel,
@@ -122,11 +138,13 @@ export function useDashboardSync() {
           setBackendStatus("degraded");
           setBackendLabel("Authentication required");
           setSyncError("session_expired");
+          setSnapshotReady(true);
           return;
         }
         setBackendStatus("offline");
         setBackendLabel("Backend unavailable");
         setSyncError(err instanceof Error ? err.message : "backend_unreachable");
+        setSnapshotReady(true);
       } finally {
         if (!cancelled) setIsSyncing(false);
       }
@@ -145,6 +163,7 @@ export function useDashboardSync() {
     backendLabel,
     syncError,
     isSyncing,
+    snapshotReady,
     healthGnnLoaded,
     healthModelVersion,
     healthGnnMetrics,

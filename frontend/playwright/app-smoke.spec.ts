@@ -42,7 +42,7 @@ async function login(page: Page) {
   await page.getByPlaceholder("••••••••••••").fill("Sentinel@Admin2025!");
   await page.getByRole("button", { name: /^sign in$/i }).click();
 
-  await expect(page.getByRole("heading", { name: /national command centre/i })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /national command centre/i })).toBeVisible({ timeout: 20000 });
 }
 
 async function openSystemNav(page: Page) {
@@ -80,7 +80,7 @@ test("reports preview generates and renders summary content", async ({ page }) =
   await expect(page.getByText(/preview and findings/i)).toBeVisible();
   await page.getByRole("button", { name: /preview json/i }).click();
   await expect(page.getByText(/preview generated\./i)).toBeVisible();
-  await expect(page.getByText(/plain-english summary/i)).toBeVisible();
+  await expect(page.getByText(/for everyday readers/i)).toBeVisible();
   await page.screenshot({ path: `${OUTPUT_DIR}/04-reports-preview.png`, fullPage: true });
 });
 
@@ -99,11 +99,12 @@ test("live feed opens and shows event detail workflow", async ({ page }) => {
 
   await page.getByRole("button", { name: /live feed/i }).click();
   await expect(page.getByRole("heading", { name: /national live feed/i })).toBeVisible();
-  await expect(page.getByRole("heading", { name: /incoming events/i })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /operator queue/i })).toBeVisible();
+  await expect(page.getByText(/sources · .*events/i)).toBeVisible();
 
-  const eventCards = page.locator(".event-card");
-  await expect(eventCards.first()).toBeVisible();
-  await eventCards.first().click();
+  const firstQueueEvent = page.locator(".lf-section").getByRole("button").first();
+  await expect(firstQueueEvent).toBeVisible({ timeout: 15000 });
+  await firstQueueEvent.click();
   await expect(page.getByText("Event hash", { exact: true })).toBeVisible();
   await page.screenshot({ path: `${OUTPUT_DIR}/06-live-feed-detail.png`, fullPage: true });
 });
@@ -113,7 +114,7 @@ test("campaigns and threat graph render from the analyst workflow", async ({ pag
 
   await page.getByRole("button", { name: /s4 campaigns/i }).click();
   await expect(page.getByRole("heading", { name: /campaign console/i })).toBeVisible();
-  await expect(page.getByRole("button", { name: /generate case packet/i })).toBeVisible();
+  await expect(page.getByRole("button", { name: /generate case packet/i })).toBeVisible({ timeout: 15000 });
   await page.screenshot({ path: `${OUTPUT_DIR}/07-campaigns.png`, fullPage: true });
 
   await page.getByRole("button", { name: /s2 threat graph/i }).click();

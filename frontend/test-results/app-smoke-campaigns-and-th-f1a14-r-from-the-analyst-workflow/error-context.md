@@ -1,0 +1,120 @@
+# Page snapshot
+
+```yaml
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - button "Collapse sidebar" [ref=e5] [cursor=pointer]:
+      - img [ref=e6]
+    - generic [ref=e8]:
+      - paragraph [ref=e9]: Sentinel-KE
+      - heading "Workspace" [level=1] [ref=e10]
+      - generic [ref=e11]:
+        - generic [ref=e12]: CENTRAL
+        - generic [ref=e13]: ·
+        - generic [ref=e14]: admin
+      - paragraph [ref=e17]: Syncing…
+      - paragraph [ref=e18]: admin
+    - navigation [ref=e19]:
+      - generic [ref=e20]:
+        - generic [ref=e21]: SENSE
+        - button "S1 Live Feed" [ref=e22] [cursor=pointer]:
+          - img [ref=e23]
+          - generic [ref=e29]:
+            - generic [ref=e30]: S1
+            - generic [ref=e31]: Live Feed
+      - generic [ref=e32]:
+        - generic [ref=e33]: ANALYZE
+        - button "S2 Threat Graph" [ref=e34] [cursor=pointer]:
+          - img [ref=e35]
+          - generic [ref=e40]:
+            - generic [ref=e41]: S2
+            - generic [ref=e42]: Threat Graph
+        - button "S3 Investigate" [ref=e43] [cursor=pointer]:
+          - img [ref=e44]
+          - generic [ref=e47]:
+            - generic [ref=e48]: S3
+            - generic [ref=e49]: Investigate
+      - generic [ref=e50]:
+        - generic [ref=e51]: ATTRIBUTE
+        - button "S4 Campaigns" [active] [ref=e52] [cursor=pointer]:
+          - img [ref=e53]
+          - generic [ref=e55]:
+            - generic [ref=e56]: S4
+            - generic [ref=e57]: Campaigns
+      - generic [ref=e58]:
+        - generic [ref=e59]: RESPOND
+        - button "S5 Cases" [ref=e60] [cursor=pointer]:
+          - img [ref=e61]
+          - generic [ref=e64]:
+            - generic [ref=e65]: S5
+            - generic [ref=e66]: Cases
+        - button "S6 Defense" [ref=e67] [cursor=pointer]:
+          - img [ref=e68]
+          - generic [ref=e70]:
+            - generic [ref=e71]: S6
+            - generic [ref=e72]: Defense
+      - generic [ref=e73]:
+        - generic [ref=e74]: GOVERN
+        - button "S7 Dashboard" [ref=e75] [cursor=pointer]:
+          - img [ref=e76]
+          - generic [ref=e77]:
+            - generic [ref=e78]: S7
+            - generic [ref=e79]: Dashboard
+        - button "S8 Reports" [ref=e80] [cursor=pointer]:
+          - img [ref=e81]
+          - generic [ref=e84]:
+            - generic [ref=e85]: S8
+            - generic [ref=e86]: Reports
+      - generic [ref=e87]:
+        - generic [ref=e88]: COMMAND
+        - button "C1 Command" [ref=e89] [cursor=pointer]:
+          - img [ref=e90]
+          - generic [ref=e93]:
+            - generic [ref=e94]: C1
+            - generic [ref=e95]: Command
+      - button "SYSTEM" [ref=e97] [cursor=pointer]:
+        - img [ref=e98]
+        - generic [ref=e101]: SYSTEM
+        - img [ref=e102]
+    - generic [ref=e104]:
+      - generic [ref=e105]:
+        - button "Creds" [ref=e106] [cursor=pointer]:
+          - img [ref=e107]
+          - generic [ref=e110]: Creds
+        - button "Resync" [ref=e111] [cursor=pointer]:
+          - img [ref=e112]
+          - generic [ref=e117]: Resync
+        - button "Logout" [ref=e118] [cursor=pointer]:
+          - img [ref=e119]
+          - generic [ref=e122]: Logout
+      - paragraph [ref=e123]: Central Command
+  - generic [ref=e124]:
+    - banner [ref=e125]:
+      - generic [ref=e126]:
+        - paragraph [ref=e127]: Workspace
+        - generic [ref=e128]: Campaigns
+        - paragraph [ref=e129]: Review coordinated activity.
+      - generic [ref=e130]:
+        - generic [ref=e131]:
+          - paragraph [ref=e132]: Find linked entity
+          - generic [ref=e133]:
+            - combobox "Search entity to pivot into investigation" [ref=e134]
+            - button "Investigate" [disabled] [ref=e135] [cursor=pointer]
+        - generic [ref=e136]:
+          - button "Assistant" [ref=e137] [cursor=pointer]
+          - button "Inspector" [ref=e138] [cursor=pointer]
+    - main [ref=e140]:
+      - generic [ref=e141]:
+        - generic [ref=e143]:
+          - paragraph [ref=e144]: S4
+          - heading "Campaign Console" [level=2] [ref=e145]
+          - paragraph [ref=e146]: Coordinated operations with confidence growth.
+        - paragraph [ref=e148]: No campaigns found in backend storage.
+  - generic [ref=e149]:
+    - generic [ref=e150]:
+      - generic [ref=e151]:
+        - paragraph [ref=e152]: Evidence
+        - heading [level=3]
+      - button "Close ×" [ref=e153] [cursor=pointer]
+    - paragraph [ref=e155]: No evidence loaded.
+```

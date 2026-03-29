@@ -1,0 +1,199 @@
+# Page snapshot
+
+```yaml
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - button "Collapse sidebar" [ref=e5] [cursor=pointer]:
+      - img [ref=e6]
+    - generic [ref=e8]:
+      - paragraph [ref=e9]: Sentinel-KE
+      - heading "Workspace" [level=1] [ref=e10]
+      - generic [ref=e11]:
+        - generic [ref=e12]: CENTRAL
+        - generic [ref=e13]: ·
+        - generic [ref=e14]: admin
+      - paragraph [ref=e17]: Syncing…
+      - paragraph [ref=e18]: admin
+    - navigation [ref=e19]:
+      - generic [ref=e20]:
+        - generic [ref=e21]: SENSE
+        - button "S1 Live Feed" [active] [ref=e22] [cursor=pointer]:
+          - img [ref=e23]
+          - generic [ref=e29]:
+            - generic [ref=e30]: S1
+            - generic [ref=e31]: Live Feed
+      - generic [ref=e32]:
+        - generic [ref=e33]: ANALYZE
+        - button "S2 Threat Graph" [ref=e34] [cursor=pointer]:
+          - img [ref=e35]
+          - generic [ref=e40]:
+            - generic [ref=e41]: S2
+            - generic [ref=e42]: Threat Graph
+        - button "S3 Investigate" [ref=e43] [cursor=pointer]:
+          - img [ref=e44]
+          - generic [ref=e47]:
+            - generic [ref=e48]: S3
+            - generic [ref=e49]: Investigate
+      - generic [ref=e50]:
+        - generic [ref=e51]: ATTRIBUTE
+        - button "S4 Campaigns" [ref=e52] [cursor=pointer]:
+          - img [ref=e53]
+          - generic [ref=e55]:
+            - generic [ref=e56]: S4
+            - generic [ref=e57]: Campaigns
+      - generic [ref=e58]:
+        - generic [ref=e59]: RESPOND
+        - button "S5 Cases" [ref=e60] [cursor=pointer]:
+          - img [ref=e61]
+          - generic [ref=e64]:
+            - generic [ref=e65]: S5
+            - generic [ref=e66]: Cases
+        - button "S6 Defense" [ref=e67] [cursor=pointer]:
+          - img [ref=e68]
+          - generic [ref=e70]:
+            - generic [ref=e71]: S6
+            - generic [ref=e72]: Defense
+      - generic [ref=e73]:
+        - generic [ref=e74]: GOVERN
+        - button "S7 Dashboard" [ref=e75] [cursor=pointer]:
+          - img [ref=e76]
+          - generic [ref=e77]:
+            - generic [ref=e78]: S7
+            - generic [ref=e79]: Dashboard
+        - button "S8 Reports" [ref=e80] [cursor=pointer]:
+          - img [ref=e81]
+          - generic [ref=e84]:
+            - generic [ref=e85]: S8
+            - generic [ref=e86]: Reports
+      - generic [ref=e87]:
+        - generic [ref=e88]: COMMAND
+        - button "C1 Command" [ref=e89] [cursor=pointer]:
+          - img [ref=e90]
+          - generic [ref=e93]:
+            - generic [ref=e94]: C1
+            - generic [ref=e95]: Command
+      - button "SYSTEM" [ref=e97] [cursor=pointer]:
+        - img [ref=e98]
+        - generic [ref=e101]: SYSTEM
+        - img [ref=e102]
+    - generic [ref=e104]:
+      - generic [ref=e105]:
+        - button "Creds" [ref=e106] [cursor=pointer]:
+          - img [ref=e107]
+          - generic [ref=e110]: Creds
+        - button "Resync" [ref=e111] [cursor=pointer]:
+          - img [ref=e112]
+          - generic [ref=e117]: Resync
+        - button "Logout" [ref=e118] [cursor=pointer]:
+          - img [ref=e119]
+          - generic [ref=e122]: Logout
+      - paragraph [ref=e123]: Central Command
+  - generic [ref=e124]:
+    - banner [ref=e125]:
+      - generic [ref=e126]:
+        - paragraph [ref=e127]: Workspace
+        - generic [ref=e128]: Live Feed
+        - paragraph [ref=e129]: Watch the current event flow.
+      - generic [ref=e130]:
+        - generic [ref=e131]:
+          - paragraph [ref=e132]: Source
+          - generic [ref=e133]:
+            - button "TELCO" [ref=e134] [cursor=pointer]
+            - button "BANK" [ref=e135] [cursor=pointer]
+            - button "GOV" [ref=e136] [cursor=pointer]
+            - button "OSINT" [ref=e137] [cursor=pointer]
+            - button "INFRA" [ref=e138] [cursor=pointer]
+        - generic [ref=e139]:
+          - paragraph [ref=e140]: Window
+          - generic [ref=e141]:
+            - button "10m" [ref=e142] [cursor=pointer]
+            - button "1h" [ref=e143] [cursor=pointer]
+            - button "24h" [ref=e144] [cursor=pointer]
+            - button "30d" [ref=e145] [cursor=pointer]
+        - generic [ref=e146]:
+          - paragraph [ref=e147]: Jump to entity
+          - generic [ref=e148]:
+            - combobox "Search a service or entity to investigate" [ref=e149]
+            - button "Investigate" [disabled] [ref=e150] [cursor=pointer]
+        - generic [ref=e151]:
+          - button "Assistant" [ref=e152] [cursor=pointer]
+          - button "Inspector" [ref=e153] [cursor=pointer]
+    - main [ref=e155]:
+      - generic [ref=e156]:
+        - generic [ref=e157]:
+          - generic [ref=e158]:
+            - paragraph [ref=e159]: S1
+            - heading "National Live Feed" [level=2] [ref=e160]
+            - paragraph [ref=e161]: Watch what changed now, open the highest-priority events first, and follow pressure building on services and endpoints.
+          - generic [ref=e162]:
+            - generic [ref=e163]: POLL
+            - generic [ref=e164]: 0 sources · 0 events
+        - generic [ref=e165]:
+          - article [ref=e166]:
+            - paragraph [ref=e167]: Immediate queue
+            - strong [ref=e168]: "0"
+            - paragraph [ref=e169]: events that need a human look first
+          - article [ref=e170]:
+            - paragraph [ref=e171]: New this session
+            - strong [ref=e172]: "0"
+            - paragraph [ref=e173]: fresh events received since the stream opened
+          - article [ref=e174]:
+            - paragraph [ref=e175]: Targets touched
+            - strong [ref=e176]: "0"
+            - paragraph [ref=e177]: services or endpoints currently appearing in view
+          - article [ref=e178]:
+            - paragraph [ref=e179]: Average confidence
+            - strong [ref=e180]: 0%
+            - paragraph [ref=e181]: signal confidence across the filtered feed
+        - generic [ref=e182]:
+          - generic [ref=e183]:
+            - generic [ref=e184]:
+              - generic [ref=e185]:
+                - heading "Operator queue" [level=3] [ref=e186]
+                - paragraph [ref=e187]: "Read from top to bottom: immediate review first, then watch-list activity, then background context."
+              - generic [ref=e188]:
+                - generic [ref=e189]: Type
+                - combobox "Type" [ref=e190]:
+                  - option "All" [selected]
+            - paragraph [ref=e192]: No events match the current filter.
+          - generic [ref=e193]:
+            - generic [ref=e194]:
+              - heading "Operator context" [level=3] [ref=e195]
+              - generic [ref=e196]: make sense of the queue
+            - generic [ref=e197]:
+              - generic [ref=e198]:
+                - paragraph [ref=e199]: How to read this feed
+                - list [ref=e200]:
+                  - listitem [ref=e201]: "`Needs review` means new or operator-relevant events that should be opened first."
+                  - listitem [ref=e202]: "`Watch` means useful corroboration activity around a service or endpoint."
+                  - listitem [ref=e203]: "`Background` means low-priority context until it clusters into a clearer pattern."
+              - generic [ref=e204]:
+                - paragraph [ref=e205]: What to do next
+                - list [ref=e206]:
+                  - listitem [ref=e207]: Open the event detail first to understand the target and the operator meaning.
+                  - listitem [ref=e208]: "Use `Show in Graph` when you want to see who is touching the same service or infrastructure."
+                  - listitem [ref=e209]: "Use `Timeline Context` when the question is whether pressure is rising or isolated."
+            - generic [ref=e210]:
+              - generic [ref=e211]:
+                - heading "Services under pressure" [level=3] [ref=e212]
+                - generic [ref=e213]: 0 active targets
+              - paragraph [ref=e214]: No service or endpoint concentration is visible in the current filter.
+            - generic [ref=e215]:
+              - generic [ref=e216]:
+                - heading "Events over time" [level=3] [ref=e217]
+                - generic [ref=e218]: last 30 min
+              - paragraph [ref=e220]: No timeline data yet.
+              - paragraph [ref=e221]: Use the chart to decide whether the queue is a short burst, a sustained wave, or normal background traffic.
+        - dialog [ref=e222]:
+          - generic [ref=e223]:
+            - generic:
+              - heading [level=3]
+            - button "Close panel" [ref=e224] [cursor=pointer]: ✕
+  - generic [ref=e226]:
+    - generic [ref=e227]:
+      - generic [ref=e228]:
+        - paragraph [ref=e229]: Evidence
+        - heading [level=3]
+      - button "Close ×" [ref=e230] [cursor=pointer]
+    - paragraph [ref=e232]: No evidence loaded.
+```

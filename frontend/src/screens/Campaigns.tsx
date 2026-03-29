@@ -5,6 +5,7 @@ import { Sparkline } from "../components/Charts";
 import { apiFetchJson } from "../api/client";
 import { endpoints } from "../api/endpoints";
 import { startDemoScenario } from "../api/ai";
+import { fetchCampaignList } from "../api/backend";
 import type { Campaign } from "../types/domain";
 import { formatConfidence } from "../utils/formatters";
 import { displayEntityLabel, isCanonicalEntityKey } from "../utils/entityKeys";
@@ -61,6 +62,8 @@ type CampaignDetailState = {
 
 type CampaignsProps = {
   campaigns: Campaign[];
+  isSyncing?: boolean;
+  snapshotReady?: boolean;
   selectedId: string;
   onSelect: (campaignId: string) => void;
   onOpenGraph: () => void;
@@ -179,6 +182,8 @@ function buildCampaignStory(
 
 export default function Campaigns({
   campaigns,
+  isSyncing = false,
+  snapshotReady = false,
   selectedId,
   onSelect,
   onOpenGraph,
@@ -188,6 +193,8 @@ export default function Campaigns({
 }: CampaignsProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [fallbackLoading, setFallbackLoading] = useState(false);
+  const [fallbackCampaigns, setFallbackCampaigns] = useState<Campaign[]>([]);
   const [fraudTrigger, setFraudTrigger] = useState<"idle" | "running" | "done" | "error">("idle");
 
   const triggerFraudScenario = useCallback(async () => {
@@ -209,8 +216,43 @@ export default function Campaigns({
     evidenceCount: 0,
   });
 
-  const selected = campaigns.find((campaign) => campaign.id === selectedId) ?? campaigns[0];
+  useEffect(() => {
+    if (campaigns.length > 0) {
+      setFallbackCampaigns([]);
+      return;
+    }
+    let cancelled = false;
+    setFallbackLoading(true);
+    void fetchCampaignList(15, 0)
+      .then((items) => {
+        if (!cancelled) {
+          setFallbackCampaigns(items);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setFallbackCampaigns([]);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setFallbackLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [campaigns]);
+
+  const availableCampaigns = campaigns.length > 0 ? campaigns : fallbackCampaigns;
+  const selected = availableCampaigns.find((campaign) => campaign.id === selectedId) ?? availableCampaigns[0];
   const activeCampaign = selected ?? null;
+
+  useEffect(() => {
+    if (!selectedId && availableCampaigns.length > 0) {
+      onSelect(availableCampaigns[0].id);
+    }
+  }, [availableCampaigns, onSelect, selectedId]);
 
   const loadCampaignDetail = useCallback(async () => {
     if (!activeCampaign?.id) return;
@@ -280,7 +322,7 @@ export default function Campaigns({
   const componentSize = asNumber(detailState.detail?.stats?.component_size, totalEntities);
   const indicatorCount = asNumber(detailState.detail?.stats?.indicator_count, 0);
 
-  if (campaigns.length === 0) {
+  if (availableCampaigns.length === 0) {
     return (
       <section className="screen">
         <div className="screen-header">
@@ -291,7 +333,11 @@ export default function Campaigns({
           </div>
         </div>
         <div className="panel">
-          <p className="muted">No campaigns found in backend storage.</p>
+          <p className="muted">
+            {(!snapshotReady && isSyncing) || fallbackLoading
+              ? "Syncing campaigns from the backend…"
+              : "No campaigns found in backend storage."}
+          </p>
         </div>
       </section>
     );
@@ -342,10 +388,10 @@ export default function Campaigns({
               <h3>Active campaigns</h3>
               <p className="muted">Choose one campaign, then inspect its footprint and evidence state.</p>
             </div>
-            <span className="muted">{campaigns.length} active</span>
+            <span className="muted">{availableCampaigns.length} active</span>
           </div>
           <div className="campaign-list">
-            {campaigns.map((campaign) => (
+            {availableCampaigns.map((campaign) => (
               <button
                 key={campaign.id}
                 className={campaign.id === activeCampaign?.id ? "campaign-card active" : "campaign-card"}

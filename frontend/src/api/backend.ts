@@ -42,42 +42,8 @@ type DdosAlertsResponse = {
   items?: Array<Record<string, unknown>>;
 };
 
-type DdosIndicatorsResponse = {
-  service_id?: string;
-  endpoint?: string;
-  series?: Array<{
-    ts?: string;
-    events?: number;
-    unique_ips?: number;
-    convergence?: number;
-  }>;
-  classification?: {
-    stage?: string;
-    risk?: number;
-  };
-  indicators?: {
-    spike_z?: number;
-    unique_ip_growth_z?: number;
-    convergence?: number;
-  };
-};
-
 type InfraClustersResponse = {
   items?: Array<Record<string, unknown>>;
-};
-
-type InfraClusterDetailResponse = {
-  members?: Array<{ entity_key?: string }>;
-  why_linked?: Array<{
-    reason_code?: string;
-    event_hashes?: string[];
-    details?: Record<string, unknown>;
-  }>;
-  cluster?: {
-    window_start?: string;
-    window_end?: string;
-    summary?: Record<string, unknown>;
-  };
 };
 
 type CasePacketApiResponse = {
@@ -130,6 +96,21 @@ export type BackendSnapshot = {
 const sourceSet = new Set<SourceType>(["telco", "bank", "gov", "osint", "infra"]);
 
 const clamp = (value: number, lo = 0, hi = 1) => Math.max(lo, Math.min(hi, value));
+
+const withTimeout = <T>(promise: Promise<T>, label: string, ms = 12_000): Promise<T> =>
+  new Promise<T>((resolve, reject) => {
+    const timer = window.setTimeout(() => reject(new Error(`${label}_timeout`)), ms);
+    promise.then(
+      (value) => {
+        window.clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        window.clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
 
 const toSourceType = (raw: unknown): SourceType => {
   if (typeof raw === "string" && sourceSet.has(raw as SourceType)) {
@@ -285,7 +266,7 @@ const mapTimeline = (timeline: EventsTimelineResponse): TimelinePoint[] => {
   }));
 };
 
-const mapCampaigns = (items: Array<Record<string, unknown>>): Campaign[] => {
+export const mapCampaigns = (items: Array<Record<string, unknown>>): Campaign[] => {
   return items.map((c, idx) => {
     const score = clamp(asNumber(c.score, 0));
     const confidence = Math.round(score * 100);
@@ -325,43 +306,49 @@ const mapCampaigns = (items: Array<Record<string, unknown>>): Campaign[] => {
   });
 };
 
-const mapIndicatorsFromSeries = (input: DdosIndicatorsResponse): ServiceIndicator | null => {
-  const serviceId = asString(input.service_id, "");
-  if (!serviceId) return null;
-  const endpoint = asString(input.endpoint, "n/a");
-  const series = input.series ?? [];
-  if (series.length === 0) return null;
+const mapIndicatorsFromAlerts = (items: Array<Record<string, unknown>>): ServiceIndicator[] => {
+  const latestByPair = new Map<string, Record<string, unknown>>();
+  for (const item of items) {
+    const serviceId = asString(item.service_id, "");
+    if (!serviceId) continue;
+    const endpoint = asString(item.endpoint, "n/a");
+    const key = `${serviceId}||${endpoint}`;
+    const prior = latestByPair.get(key);
+    const currentTs = new Date(asString(item.window_end, "")).getTime() || 0;
+    const priorTs = prior ? (new Date(asString(prior.window_end, "")).getTime() || 0) : 0;
+    if (!prior || currentTs >= priorTs) {
+      latestByPair.set(key, item);
+    }
+  }
 
-  const window = series.map((s) => toClock(s.ts ?? ""));
-  const reqRate = series.map((s) => asNumber(s.events, 0));
-  const uniqueIps = series.map((s) => asNumber(s.unique_ips, 0));
-  const endpointConvergence = series.map((s) => Math.round(asNumber(s.convergence, 0) * 100));
-  const stage = asString(input.classification?.stage, "emerging").toLowerCase();
-  const ddosRisk = series.map((_, i) => {
-    if (i === series.length - 1) return clamp(asNumber(input.classification?.risk, 0));
-    const ratio = (i + 1) / Math.max(1, series.length);
-    return clamp(asNumber(input.classification?.risk, 0) * ratio);
+  return Array.from(latestByPair.values()).map((item) => {
+    const serviceId = asString(item.service_id, "");
+    const endpoint = asString(item.endpoint, "n/a");
+    const risk = clamp(asNumber(item.risk, 0) / 100);
+    const convergence = clamp(asNumber(item.convergence, 0));
+    const uniqueGrowth = asNumber(item.unique_ip_growth_z, 0);
+    const stage = asString(item.stage, "normal").toLowerCase();
+    const label = toClock(asString(item.window_end, asString(item.window_start, "")));
+
+    return {
+      serviceId,
+      endpoint,
+      window: [label],
+      reqRate: [Math.max(0, Math.round(asNumber(item.spike_z, 0) * 10))],
+      uniqueIps: [Math.max(0, Math.round(Math.abs(uniqueGrowth) * 10))],
+      asnConcentration: [Math.round(convergence * 80)],
+      endpointConvergence: [Math.round(convergence * 100)],
+      anomalyScore: [risk],
+      ddosRisk: [risk],
+      stage,
+      factors: [
+        `Stage ${stage}`,
+        `Risk ${risk.toFixed(2)}`,
+        `Spike Z ${asNumber(item.spike_z, 0).toFixed(2)}`,
+        `IP growth Z ${uniqueGrowth.toFixed(2)}`,
+      ],
+    };
   });
-  const anomalyScore = ddosRisk.map((v) => clamp(v * 0.9));
-
-  return {
-    serviceId,
-    endpoint,
-    window,
-    reqRate,
-    uniqueIps,
-    asnConcentration: endpointConvergence.map((v) => Math.round(v * 0.8)),
-    endpointConvergence,
-    anomalyScore,
-    ddosRisk,
-    stage,
-    factors: [
-      `Stage ${stage}`,
-      `Risk ${asNumber(input.classification?.risk, 0).toFixed(2)}`,
-      `Spike Z ${asNumber(input.indicators?.spike_z, 0).toFixed(2)}`,
-      `IP growth Z ${asNumber(input.indicators?.unique_ip_growth_z, 0).toFixed(2)}`,
-    ],
-  };
 };
 
 type CampaignEvidenceResponse = {
@@ -371,10 +358,7 @@ type CampaignEvidenceResponse = {
   }>;
 };
 
-const mapInfraCluster = (
-  base: Record<string, unknown>,
-  detail?: InfraClusterDetailResponse,
-): InfraCluster => {
+const mapInfraCluster = (base: Record<string, unknown>): InfraCluster => {
   const clusterId = asString(base.cluster_id, "cluster");
   const confidenceRaw = asNumber(base.confidence, 0);
   const confidence = confidenceRaw <= 1 ? Math.round(confidenceRaw * 100) : Math.round(confidenceRaw);
@@ -382,29 +366,33 @@ const mapInfraCluster = (
   const clusterWindowStart = asString(base.window_start, "");
   const clusterWindowEnd = asString(base.window_end, "");
 
-  const members = (detail?.members ?? [])
-    .map((m) => asString(m.entity_key, ""))
-    .filter((k) => k !== "")
-    .map((k) => (k.startsWith("ip:") ? k.slice(3) : k))
-    .slice(0, 20);
+  const members = Array.isArray(base.members)
+    ? base.members
+      .map((member) => asString(member, ""))
+      .filter((member) => member !== "")
+      .slice(0, 20)
+    : [];
 
   const reasons = Array.from(
-    new Set((detail?.why_linked ?? []).map((w) => asString(w.reason_code, "")).filter((r) => r !== "")),
+    new Set(
+      Array.isArray(summary.reason_codes)
+        ? summary.reason_codes.map((value) => asString(value, "")).filter((value) => value !== "")
+        : [],
+    ),
   ).slice(0, 6);
 
-  const evidence = (detail?.why_linked ?? []).slice(0, 10).flatMap((w) => {
-    const hashes = Array.isArray(w.event_hashes) ? w.event_hashes : [];
-    const reason = asString(w.reason_code, "linked");
-    return hashes.slice(0, 2).map((h) => ({
-      event_hash: h,
-      source: "infra" as SourceType,
-      detail: reason,
-    }));
-  });
+  const evidenceHashes = Array.isArray(summary.event_hashes)
+    ? summary.event_hashes.map((value) => asString(value, "")).filter((value) => value !== "")
+    : [];
+  const evidence = evidenceHashes.slice(0, 10).map((eventHash) => ({
+    event_hash: eventHash,
+    source: "infra" as SourceType,
+    detail: reasons[0] ?? "linked",
+  }));
 
   const rotation = members.slice(0, 5).map((ip) => ({
     ip,
-    window: `${toClock(detail?.cluster?.window_start ?? clusterWindowStart)}-${toClock(detail?.cluster?.window_end ?? clusterWindowEnd)}`,
+    window: `${toClock(clusterWindowStart)}-${toClock(clusterWindowEnd)}`,
     provider: asString((summary.providers as string[] | undefined)?.[0], "unknown"),
   }));
 
@@ -777,19 +765,21 @@ const buildGraphFromSnapshot = (
 };
 
 export async function fetchBackendSnapshot(): Promise<BackendSnapshot> {
-  const ready = await apiFetchJson<ReadyResponse>(endpoints.ready());
   const warnings: string[] = [];
 
   const now = new Date();
   const start = new Date(now.getTime() - 60 * 60 * 1000);
 
-  const [eventsRes, timelineRes, campaignsRes, ddosAlertsRes, infraRes, threatSummaryRes] = await Promise.allSettled([
-    apiFetchJson<EventsSearchResponse>(endpoints.eventsSearch(120)),
-    apiFetchJson<EventsTimelineResponse>(endpoints.eventsTimeline(start.toISOString(), now.toISOString(), "5m")),
-    apiFetchJson<CampaignsResponse>(endpoints.campaigns(25, 0)),
-    apiFetchJson<DdosAlertsResponse>(endpoints.ddosAlerts(20, 0)),
-    apiFetchJson<InfraClustersResponse>(endpoints.infraClusters(10, 0)),
-    apiFetchJson<ThreatSummary>(endpoints.aiIndicatorsSummary(7)),
+  const [readyRes, eventsRes, timelineRes, campaignsRes, ddosAlertsRes, infraRes] = await Promise.allSettled([
+    withTimeout(apiFetchJson<ReadyResponse>(endpoints.ready()), "ready"),
+    withTimeout(apiFetchJson<EventsSearchResponse>(endpoints.eventsSearch(80)), "events"),
+    withTimeout(
+      apiFetchJson<EventsTimelineResponse>(endpoints.eventsTimeline(start.toISOString(), now.toISOString(), "5m")),
+      "timeline",
+    ),
+    withTimeout(apiFetchJson<CampaignsResponse>(endpoints.campaigns(15, 0)), "campaigns"),
+    withTimeout(apiFetchJson<DdosAlertsResponse>(endpoints.ddosAlerts(20, 0)), "ddos_alerts"),
+    withTimeout(apiFetchJson<InfraClustersResponse>(endpoints.infraClusters(10, 0)), "infra_clusters"),
   ]);
 
   const unwrap = <T>(result: PromiseSettledResult<T>, label: string, fallback: T): T => {
@@ -798,61 +788,16 @@ export async function fetchBackendSnapshot(): Promise<BackendSnapshot> {
     return fallback;
   };
 
+  const ready = unwrap(readyRes, "ready", { status: "degraded", components: {} });
   const events = mapEvents(unwrap(eventsRes, "events", { items: [] }).items ?? []);
   const timelineCounts = mapTimeline(unwrap(timelineRes, "timeline", { points: [] }));
   const campaigns = mapCampaigns(unwrap(campaignsRes, "campaigns", { items: [] }).items ?? []);
   const ddosAlerts = unwrap(ddosAlertsRes, "ddos_alerts", { items: [] }).items ?? [];
 
-  const uniquePairs = Array.from(
-    new Set(
-      ddosAlerts.map((a) => {
-        const serviceId = asString(a.service_id, "");
-        const endpoint = asString(a.endpoint, "");
-        return serviceId ? `${serviceId}||${endpoint}` : "";
-      }),
-    ),
-  )
-    .filter((x) => x !== "")
-    .slice(0, 3);
-
-  const indicatorResponses = await Promise.allSettled(
-    uniquePairs.map(async (key) => {
-      const [serviceId, endpoint] = key.split("||");
-      return apiFetchJson<DdosIndicatorsResponse>(endpoints.ddosIndicators(serviceId, endpoint || undefined, 60));
-    }),
-  );
-  const indicators = indicatorResponses
-    .filter((result): result is PromiseFulfilledResult<DdosIndicatorsResponse> => {
-      if (result.status === "fulfilled") return true;
-      warnings.push("ddos_indicators_unavailable");
-      return false;
-    })
-    .map((x) => mapIndicatorsFromSeries(x.value))
-    .filter((x): x is ServiceIndicator => x !== null);
+  const indicators = mapIndicatorsFromAlerts(ddosAlerts);
 
   const infraItems = unwrap(infraRes, "infra_clusters", { items: [] }).items ?? [];
-  const detailTargets = infraItems.slice(0, 5);
-  const details = await Promise.allSettled(
-    detailTargets.map(async (c) => {
-      const id = asString(c.cluster_id, "");
-      if (!id) return null;
-      const detail = await apiFetchJson<InfraClusterDetailResponse>(endpoints.infraClusterById(id));
-      return { id, detail };
-    }),
-  );
-  const detailMap = new Map(
-    details
-      .flatMap((result) => {
-        if (result.status === "fulfilled") return result.value ? [result.value] : [];
-        warnings.push("infra_cluster_details_unavailable");
-        return [];
-      })
-      .map((d) => [d.id, d.detail]),
-  );
-  const infraClusters = infraItems.map((item) => {
-    const id = asString(item.cluster_id, "");
-    return mapInfraCluster(item, detailMap.get(id));
-  });
+  const infraClusters = infraItems.map((item) => mapInfraCluster(item));
 
   const entities = deriveEntities(events, indicators);
   const graph = buildGraphFromSnapshot(events, campaigns, infraClusters);
@@ -861,9 +806,6 @@ export async function fetchBackendSnapshot(): Promise<BackendSnapshot> {
     mode === "live"
       ? "Backend connected"
       : `Backend degraded (${Object.entries(ready.components ?? {}).map(([k, v]) => `${k}:${v}`).join(", ")})`;
-
-  const threatSummary: ThreatSummary =
-    threatSummaryRes.status === "fulfilled" ? threatSummaryRes.value : emptyThreatSummary;
 
   return {
     mode,
@@ -876,8 +818,18 @@ export async function fetchBackendSnapshot(): Promise<BackendSnapshot> {
     infraClusters,
     entities,
     graph,
-    threatSummary,
+    threatSummary: emptyThreatSummary,
   };
+}
+
+export async function fetchCampaignList(limit = 15, offset = 0): Promise<Campaign[]> {
+  const response = await withTimeout(apiFetchJson<CampaignsResponse>(endpoints.campaigns(limit, offset)), "campaigns");
+  return mapCampaigns(response.items ?? []);
+}
+
+export async function fetchEventFeed(limit = 80): Promise<EventRecord[]> {
+  const response = await withTimeout(apiFetchJson<EventsSearchResponse>(endpoints.eventsSearch(limit)), "events");
+  return mapEvents(response.items ?? []);
 }
 
 export async function createCasePacketFromCampaign(campaignId: string): Promise<CasePacket> {

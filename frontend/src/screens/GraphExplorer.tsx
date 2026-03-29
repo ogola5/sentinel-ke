@@ -164,6 +164,8 @@ const SOURCE_LABEL: Record<string, string> = {
 
 type GraphExplorerProps = {
   graph: GraphData;
+  isSyncing?: boolean;
+  snapshotReady?: boolean;
   onSelectNode: (node: GraphNode) => void;
   onSelectEdge: (edge: GraphEdge) => void;
   onInvestigateEntity?: (entityKey: string) => void;
@@ -172,6 +174,8 @@ type GraphExplorerProps = {
 
 export default function GraphExplorer({
   graph,
+  isSyncing = false,
+  snapshotReady = false,
   onSelectNode,
   onSelectEdge,
   onInvestigateEntity,
@@ -422,10 +426,13 @@ export default function GraphExplorer({
         </div>
         <div className="panel" style={{ textAlign: "center", padding: "56px 24px" }}>
           <p style={{ fontSize: "2.4rem", marginBottom: 8 }}>🕸️</p>
-          <p style={{ fontWeight: 700, fontSize: "1.05rem", marginBottom: 6 }}>No threat graph data yet</p>
+          <p style={{ fontWeight: 700, fontSize: "1.05rem", marginBottom: 6 }}>
+            {!snapshotReady && isSyncing ? "Building threat graph snapshot…" : "No threat graph data yet"}
+          </p>
           <p className="muted" style={{ maxWidth: 440, margin: "0 auto", lineHeight: 1.6 }}>
-            Once events are ingested, SentinelKE automatically builds a live relationship map
-            connecting attacked services, attack infrastructure, and threat campaign actors.
+            {!snapshotReady && isSyncing
+              ? "The frontend is still hydrating events, campaigns, and infrastructure from the backend. This graph will appear once the first shared snapshot is ready."
+              : "Once events are ingested, SentinelKE automatically builds a live relationship map connecting attacked services, attack infrastructure, and threat campaign actors."}
           </p>
         </div>
       </section>

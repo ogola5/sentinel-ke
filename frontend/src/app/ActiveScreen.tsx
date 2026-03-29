@@ -66,6 +66,8 @@ export default function ActiveScreen({
   entitiesData,
   graphData,
   activeCase,
+  isSyncing,
+  snapshotReady,
   selectedEntity,
   investigationEntityKey,
   selectedCampaignId,
@@ -108,6 +110,8 @@ export default function ActiveScreen({
   entitiesData: EntityProfile[];
   graphData: GraphData;
   activeCase?: CasePacket;
+  isSyncing: boolean;
+  snapshotReady: boolean;
   selectedEntity: EntityProfile | null;
   investigationEntityKey: string | null;
   selectedCampaignId: string;
@@ -143,6 +147,8 @@ export default function ActiveScreen({
           operationsData={operationsData}
           activeCampaignCount={campaignsData.length}
           activeEventCount={eventsData.length}
+          isSyncing={isSyncing}
+          snapshotReady={snapshotReady}
           healthGnnLoaded={healthGnnLoaded}
           healthModelVersion={healthModelVersion}
           healthPlatformStatus={healthPlatformStatus}
@@ -156,8 +162,10 @@ export default function ActiveScreen({
       {activeScreen === "live" && (
         <LiveFeed
           events={eventsData}
+          operationsData={operationsData}
           timeline={timelineData}
           activeSources={sourceFilters}
+          isSyncing={isSyncing}
           onSelectEvent={onSelectEvent}
           onShowGraph={(event: EventRecord) => {
             onSelectEvent(event);
@@ -191,6 +199,8 @@ export default function ActiveScreen({
       {activeScreen === "graph" && (
         <GraphExplorer
           graph={graphData}
+          isSyncing={isSyncing}
+          snapshotReady={snapshotReady}
           onSelectNode={(node: GraphNode) => {
             const entity = entitiesData.find(
               (item) =>
@@ -217,6 +227,8 @@ export default function ActiveScreen({
       {activeScreen === "campaigns" && (
         <Campaigns
           campaigns={campaignsData}
+          isSyncing={isSyncing}
+          snapshotReady={snapshotReady}
           selectedId={selectedCampaignId}
           onSelect={onSelectCampaignId}
           onOpenGraph={() => onNavigate("graph")}

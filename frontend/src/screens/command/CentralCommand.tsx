@@ -32,6 +32,8 @@ interface Props {
   operationsData: OperationsSnapshot;
   activeCampaignCount: number;
   activeEventCount: number;
+  isSyncing: boolean;
+  snapshotReady: boolean;
   healthGnnLoaded: boolean;
   healthModelVersion: string | null;
   healthPlatformStatus: Record<string, unknown>;
@@ -60,6 +62,8 @@ export default function CentralCommand({
   operationsData,
   activeCampaignCount,
   activeEventCount,
+  isSyncing,
+  snapshotReady,
   healthGnnLoaded,
   healthModelVersion,
   healthPlatformStatus,
@@ -197,6 +201,9 @@ export default function CentralCommand({
     (healthGnnLoaded
       ? "Core analytics are available. Use this view to confirm policy, evidence, and operator readiness."
       : "Core analytics are not currently loaded. Treat this as a platform recovery and readiness issue.");
+  const campaignCountDisplay = !snapshotReady && isSyncing ? "…" : String(activeCampaignCount);
+  const liveEventCount = activeEventCount > 0 ? activeEventCount : operationsData.metrics.events;
+  const eventCountDisplay = !snapshotReady && isSyncing && liveEventCount === 0 ? "…" : String(liveEventCount);
   const handleBackupAttestation = async () => {
     if (!backupAssetId.trim() || !backupId.trim()) return;
     setOpsBusy(true);
@@ -315,16 +322,20 @@ export default function CentralCommand({
               <p className="focus-kicker">National posture</p>
               <p className="focus-value" style={{ color: nationalThreat.color }}>{nationalThreat.level}</p>
               <p className="focus-copy">
-                {nationalThreat.note} {forecast.forecast_score != null ? `Forecast pressure is ${formatRiskScore(forecast.forecast_score)} / 100 and the current trend is ${forecast.trend}.` : "Forecast data is still building for the current national window."}
+                {nationalThreat.note} {!snapshotReady && isSyncing
+                  ? " Live event and campaign counts are still syncing from the backend."
+                  : forecast.forecast_score != null
+                    ? ` Forecast pressure is ${formatRiskScore(forecast.forecast_score)} / 100 and the current trend is ${forecast.trend}.`
+                    : " Forecast data is still building for the current national window."}
               </p>
               <div className="focus-stat-grid">
                 <div className="focus-stat-card">
                   <div className="focus-stat-label">Campaigns</div>
-                  <div className="focus-stat-value">{activeCampaignCount}</div>
+                  <div className="focus-stat-value">{campaignCountDisplay}</div>
                 </div>
                 <div className="focus-stat-card">
                   <div className="focus-stat-label">Live events</div>
-                  <div className="focus-stat-value">{activeEventCount}</div>
+                  <div className="focus-stat-value">{eventCountDisplay}</div>
                 </div>
                 <div className="focus-stat-card">
                   <div className="focus-stat-label">AI queue</div>

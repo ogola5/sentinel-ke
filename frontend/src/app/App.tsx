@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { Loader } from "lucide-react";
 
 import "../App.css";
 
@@ -88,6 +89,7 @@ function AuthenticatedApp({
     backendLabel,
     syncError,
     isSyncing,
+    snapshotReady,
     healthGnnLoaded,
     healthModelVersion,
     healthGnnMetrics,
@@ -108,6 +110,7 @@ function AuthenticatedApp({
   const [actionStatus, setActionStatus] = useState("");
   const [leakageActionLabel, setLeakageActionLabel] = useState("Run leakage detector");
   const [casesData, setCasesData] = useState<CasePacket[]>([]);
+  const [startupRetryIssued, setStartupRetryIssued] = useState(false);
   const [navCollapsed, setNavCollapsed] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [assistantOpen, setAssistantOpen] = useState(false);
@@ -131,6 +134,42 @@ function AuthenticatedApp({
   const [entityQuery, setEntityQuery] = useState("");
   const [connectionPanelOpen, setConnectionPanelOpen] = useState(false);
   const [credentials, setCredentials] = useState<ClientCredentials>(() => loadClientCredentials());
+
+  useEffect(() => {
+    if (startupRetryIssued || !snapshotReady || isSyncing) return;
+    if (eventsData.length > 0 || campaignsData.length > 0 || infraClustersData.length > 0) return;
+    setStartupRetryIssued(true);
+    const timer = window.setTimeout(() => {
+      triggerSync();
+    }, 1200);
+    return () => window.clearTimeout(timer);
+  }, [
+    campaignsData.length,
+    eventsData.length,
+    infraClustersData.length,
+    isSyncing,
+    snapshotReady,
+    startupRetryIssued,
+    triggerSync,
+  ]);
+
+  if (!snapshotReady && isSyncing) {
+    return (
+      <div className="app-shell">
+        <main className="primary" style={{ minHeight: "100vh", display: "grid", placeItems: "center", padding: 24 }}>
+          <section className="panel" style={{ maxWidth: 560, width: "100%", textAlign: "center" }}>
+            <div className="state-box" style={{ padding: "40px 24px" }}>
+              <Loader size={24} className="spin" />
+              <p style={{ fontWeight: 700, marginTop: 12 }}>Syncing live workspace…</p>
+              <p className="muted" style={{ maxWidth: 420, margin: "8px auto 0" }}>
+                Sentinel-KE is loading events, campaigns, infrastructure, and graph context from the backend before opening the workspace.
+              </p>
+            </div>
+          </section>
+        </main>
+      </div>
+    );
+  }
 
   useEffect(() => {
     if (campaignsData.length > 0 && !campaignsData.find((campaign) => campaign.id === selectedCampaignId)) {
@@ -334,6 +373,8 @@ function AuthenticatedApp({
               entitiesData={entitiesData}
               graphData={graphData}
               activeCase={activeCase}
+              isSyncing={isSyncing}
+              snapshotReady={snapshotReady}
               selectedEntity={selectedEntity}
               investigationEntityKey={investigationEntityKey}
               selectedCampaignId={selectedCampaignId}

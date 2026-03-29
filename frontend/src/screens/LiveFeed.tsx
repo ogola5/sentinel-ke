@@ -9,11 +9,13 @@
  *   what needs review first,
  *   and which services are currently carrying pressure.
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { EventRecord, SourceType } from "../types/domain";
+import type { OperationsSnapshot } from "../types/operations";
 import { BarChart } from "../components/Charts";
 import DetailPanel from "../components/DetailPanel";
 import { useEventStream } from "../hooks/useEventStream";
+import { fetchEventFeed } from "../api/backend";
 import { shortHash } from "../utils/formatters";
 
 const SOURCE_LABEL: Record<SourceType, string> = {
@@ -38,8 +40,10 @@ type FeedLane = "needs_review" | "watch" | "background";
 
 type LiveFeedProps = {
   events: EventRecord[];
+  operationsData?: OperationsSnapshot;
   timeline: { label: string; value: number }[];
   activeSources: Record<SourceType, boolean>;
+  isSyncing?: boolean;
   onSelectEvent: (event: EventRecord) => void;
   onShowGraph: (event: EventRecord) => void;
   onShowTimeline: (event: EventRecord) => void;
@@ -172,8 +176,10 @@ function eventLane(event: EventRecord, isNew: boolean): FeedLane {
 
 export default function LiveFeed({
   events: historicalEvents,
+  operationsData,
   timeline,
   activeSources,
+  isSyncing = false,
   onSelectEvent,
   onShowGraph,
   onShowTimeline,
@@ -181,8 +187,74 @@ export default function LiveFeed({
 }: LiveFeedProps) {
   const [typeFilter, setTypeFilter] = useState("all");
   const [selected, setSelected] = useState<EventRecord | null>(null);
+  const [fallbackEvents, setFallbackEvents] = useState<EventRecord[]>([]);
+  const [fallbackLoading, setFallbackLoading] = useState(false);
 
   const { liveEvents, streamStatus } = useEventStream();
+
+  useEffect(() => {
+    if (historicalEvents.length > 0) {
+      setFallbackEvents([]);
+      return;
+    }
+    let cancelled = false;
+    setFallbackLoading(true);
+    void fetchEventFeed(80)
+      .then((items) => {
+        if (!cancelled) {
+          setFallbackEvents(items);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setFallbackEvents([]);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setFallbackLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [historicalEvents]);
+
+  const anomalyFallbackEvents = useMemo(() => {
+    const items = operationsData?.anomalies ?? [];
+    const nowIso = new Date().toISOString();
+    return items.map((item) => {
+      const score = Math.max(0, Math.min(item.score, 1));
+      const summary = item.reasonCodes.length > 0
+        ? `Backend anomaly on ${item.serviceId}${item.endpoint && item.endpoint !== "n/a" ? ` ${item.endpoint}` : ""}: ${item.reasonCodes.join(", ")}`
+        : `Backend anomaly on ${item.serviceId}${item.endpoint && item.endpoint !== "n/a" ? ` ${item.endpoint}` : ""}`;
+      return {
+        event_hash: item.id || `${item.serviceId}:${item.endpoint}:${item.windowEnd}`,
+        type: "ANOMALY_ALERT",
+        source: "infra" as const,
+        classification: score >= 0.8 ? "critical" : "warning",
+        confidence: score,
+        occurred_at: nowIso,
+        received_at: nowIso,
+        service_id: item.serviceId || "unknown_service",
+        endpoint: item.endpoint || "n/a",
+        summary,
+        evidence: [
+          {
+            event_hash: item.id || `${item.serviceId}:${item.endpoint}:${item.windowEnd}`,
+            source: "infra" as const,
+            detail: summary,
+          },
+        ],
+      } satisfies EventRecord;
+    });
+  }, [operationsData?.anomalies]);
+
+  const baseEvents = historicalEvents.length > 0
+    ? historicalEvents
+    : fallbackEvents.length > 0
+      ? fallbackEvents
+      : anomalyFallbackEvents;
 
   const liveEventHashes = useMemo(
     () => new Set(liveEvents.map((event) => event.event_hash)),
@@ -192,7 +264,7 @@ export default function LiveFeed({
   const merged = useMemo(() => {
     const seen = new Set<string>();
     const out: EventRecord[] = [];
-    for (const event of [...liveEvents, ...historicalEvents]) {
+    for (const event of [...liveEvents, ...baseEvents]) {
       if (!seen.has(event.event_hash)) {
         seen.add(event.event_hash);
         out.push(event);
@@ -203,7 +275,7 @@ export default function LiveFeed({
       const rightTs = parseTs(right.occurred_at) || parseTs(right.received_at);
       return rightTs - leftTs;
     });
-  }, [liveEvents, historicalEvents]);
+  }, [baseEvents, liveEvents]);
 
   const availableTypes = useMemo(
     () => Array.from(new Set(merged.map((event) => event.type))).sort(),
@@ -379,7 +451,11 @@ export default function LiveFeed({
           <div className="event-card-list lf-queue-list">
             {filtered.length === 0 && (
               <p className="muted ec-empty">
-                {streamStatus === "connecting" ? "Connecting to stream…" : "No events match the current filter."}
+                {(isSyncing && merged.length === 0) || fallbackLoading
+                  ? "Syncing events from the backend…"
+                  : streamStatus === "connecting"
+                    ? "Connecting to stream…"
+                    : "No events match the current filter."}
               </p>
             )}
 
