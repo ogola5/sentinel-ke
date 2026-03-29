@@ -6,9 +6,14 @@ This is the single entry point for the Top 15 presentation.
 
 Use the materials in this order:
 
-1. [PRESENTATION_8_SLIDE_SCRIPT.md](/home/ogola/personal/sentinel-ke/docs/PRESENTATION_8_SLIDE_SCRIPT.md)
-2. [DEMO_10MIN_RUNBOOK.md](/home/ogola/personal/sentinel-ke/docs/DEMO_10MIN_RUNBOOK.md)
-3. [JUDGE_QA_BANK.md](/home/ogola/personal/sentinel-ke/docs/JUDGE_QA_BANK.md)
+1. [PRESENTATION_10_SLIDE_CLAUDE_PACK.md](/home/ogola/personal/sentinel-ke/docs/PRESENTATION_10_SLIDE_CLAUDE_PACK.md)
+2. [PRESENTATION_5MIN_WORD_FOR_WORD.md](/home/ogola/personal/sentinel-ke/docs/PRESENTATION_5MIN_WORD_FOR_WORD.md)
+3. [DEMO_10MIN_RUNBOOK.md](/home/ogola/personal/sentinel-ke/docs/DEMO_10MIN_RUNBOOK.md)
+4. [JUDGE_QA_BANK.md](/home/ogola/personal/sentinel-ke/docs/JUDGE_QA_BANK.md)
+
+Keep the older 8-slide pack only as a fallback:
+
+- [PRESENTATION_8_SLIDE_SCRIPT.md](/home/ogola/personal/sentinel-ke/docs/PRESENTATION_8_SLIDE_SCRIPT.md)
 
 Supporting evidence:
 
@@ -23,7 +28,7 @@ Supporting evidence:
 
 ### First 5 minutes
 
-Use the 8-slide deck only.
+Use the 10-slide deck only.
 
 Target outcome:
 
@@ -71,7 +76,7 @@ Use these repeatedly:
 
 ### Rehearsal 1 — Slides only
 
-- speak through all 8 slides in under 5 minutes
+- speak through all 10 slides in under 5 minutes
 - remove any sentence that sounds like hype
 - keep only the strongest metrics
 

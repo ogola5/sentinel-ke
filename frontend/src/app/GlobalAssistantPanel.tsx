@@ -58,6 +58,7 @@ export default function GlobalAssistantPanel({
 }: Props) {
   const [question, setQuestion] = useState("");
   const [answer, setAnswer] = useState<string | null>(null);
+  const [answerMeta, setAnswerMeta] = useState<{ intent?: string | null; model?: string | null; sources?: string[] } | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -126,6 +127,10 @@ export default function GlobalAssistantPanel({
 
   const quickPrompts = useMemo(() => {
     const prompts = [
+      "Explain the whole system end to end.",
+      "What can I honestly claim to judges right now?",
+      "What readiness evidence is strongest right now?",
+      "How do legacy systems connect to Sentinel-KE?",
       `What should I say on the ${screenTitle} screen?`,
       "What should I click next to keep the workflow strong?",
       "Summarize the current workflow in plain language.",
@@ -151,11 +156,18 @@ export default function GlobalAssistantPanel({
       if (!response || typeof response.answer !== "string") {
         setError("No local assistant answer was returned.");
         setAnswer(null);
+        setAnswerMeta(null);
       } else {
         setAnswer(response.answer);
+        setAnswerMeta({
+          intent: typeof response.intent === "string" ? response.intent : null,
+          model: typeof response.model === "string" ? response.model : null,
+          sources: Array.isArray(response.sources) ? response.sources.map((item) => String(item)) : [],
+        });
       }
     } catch (err) {
       setAnswer(null);
+      setAnswerMeta(null);
       setError(err instanceof Error ? err.message : "assistant_request_failed");
     } finally {
       setLoading(false);
@@ -278,6 +290,22 @@ export default function GlobalAssistantPanel({
               <div className="list-item">
                 <p style={{ margin: 0, lineHeight: 1.7, whiteSpace: "pre-wrap" }}>{answer}</p>
               </div>
+              {answerMeta && (
+                <div className="detail-grid" style={{ marginTop: 10 }}>
+                  <div>
+                    <p className="label">Intent</p>
+                    <p>{answerMeta.intent ?? "—"}</p>
+                  </div>
+                  <div>
+                    <p className="label">Model</p>
+                    <p>{answerMeta.model ?? "—"}</p>
+                  </div>
+                  <div style={{ gridColumn: "1 / -1" }}>
+                    <p className="label">Grounded in</p>
+                    <p className="mono">{answerMeta.sources && answerMeta.sources.length > 0 ? answerMeta.sources.join(", ") : "—"}</p>
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>

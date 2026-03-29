@@ -9,6 +9,10 @@ This is the live demo script for a 15-minute judging slot:
 
 This runbook covers the 10-minute live demo only. It is built for the strongest current proof chain:
 
+Companion slide pack:
+
+- [PRESENTATION_10_SLIDE_CLAUDE_PACK.md](/home/ogola/personal/sentinel-ke/docs/PRESENTATION_10_SLIDE_CLAUDE_PACK.md)
+
 - judge readiness
 - cyber graph / GNN evidence
 - live event stream
@@ -25,6 +29,7 @@ Use this sentence at the start and keep returning to it:
 > "Sentinel-KE ingests real events, correlates them in a graph, scores them with a GNN, and routes bounded containment with signed audit evidence."
 
 Do not start with corruption, and do not deep-dive into fraud unless a judge asks. The strongest live story is cyber plus containment.
+Do not split the main presentation between DDoS and mule-ring proof in the same primary narrative. Use cyber DDoS as the lead live story, and keep fraud as a benchmark/supporting lane unless a judge asks for it.
 
 ## Pre-Demo Checklist
 

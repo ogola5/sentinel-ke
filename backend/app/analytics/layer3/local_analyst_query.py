@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 import re
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Mapping, Sequence
 
 from sqlalchemy import text
@@ -19,6 +21,7 @@ from app.analytics.layer3.forecasting import build_risk_forecast
 from app.analytics.layer3.trust_service import build_entity_trust_summary, build_platform_trust_summary
 from app.core.config import settings
 from app.defense.models import ContainmentAction
+from app.integrations.connectors import list_connectors
 from app.legal.models import LegalEvidenceBundle
 
 
@@ -53,12 +56,18 @@ SCREEN_GUIDE = {
     "defense": "Use Defense to show governed action, webhook delivery, and incident-run tracking.",
 }
 
+BENCHMARK_ARTIFACT_CANDIDATES = (
+    Path(settings.gnn_artifact_dir).resolve().parent / "paysim_auc.json",
+    Path("/app/artifacts/paysim_auc.json"),
+)
+
 
 def _pick_entity_key(question: str, context: Mapping[str, Any] | None) -> str | None:
     if context:
-        raw = str(context.get("entity_key") or "").strip()
-        if raw:
-            return raw
+        for key in ("entity_key", "selected_entity_key", "selectedEntityKey"):
+            raw = str(context.get(key) or "").strip()
+            if raw:
+                return raw
     match = ENTITY_KEY_RE.search(question or "")
     return match.group(0) if match else None
 
@@ -68,12 +77,17 @@ def _detect_intent(question: str) -> str:
     score_map = {
         "presentation": sum(w in q for w in ("present", "presentation", "demo", "judge", "show", "screen", "click", "say")),
         "platform": sum(w in q for w in ("platform", "workflow", "what can", "how do i use", "which screen", "where should")),
+        "system": sum(w in q for w in ("whole system", "end to end", "architecture", "how it works", "full workflow", "overall system")),
+        "readiness": sum(w in q for w in ("readiness", "kpi", "benchmark", "baseline", "scorecard", "rubric", "evidence", "top 3")),
+        "deployment": sum(w in q for w in ("deploy", "deployment", "public url", "render", "vercel", "on-prem", "sovereign", "edge", "cloud")),
+        "connectors": sum(w in q for w in ("connector", "legacy", "csv", "jsonl", "batch", "bridge", "siem", "export", "integrate", "integration")),
+        "claims": sum(w in q for w in ("claim", "overclaim", "honest", "safe to say", "not say", "caveat", "wording")),
         "mfa": sum(w in q for w in ("mfa", "otp", "totp", "two-factor", "2fa", "step-up", "authenticator")),
         "gnn": sum(w in q for w in ("gnn", "model", "uncertainty", "confidence", "fused", "score meaning")),
         "graph": sum(w in q for w in ("graph", "path", "hop", "linked", "campaign link", "relationship")),
         "data_realism": sum(w in q for w in ("real data", "synthetic", "realness", "provenance", "mixed data", "public feed")),
         "forecast": sum(w in q for w in ("forecast", "predict", "likelihood", "next week", "trend", "rising")),
-        "containment": sum(w in q for w in ("contain", "block", "isolate", "mitigate", "response", "action")),
+        "containment": sum(w in q for w in ("contain", "block", "isolate", "mitigate", "response", "action", "waf", "edr", "webhook", "partner", "receipt")),
         "tools": sum(w in q for w in ("tool", "malware", "software", "family", "mimikatz", "cobalt", "impacket")),
         "evidence": sum(w in q for w in ("evidence", "proof", "why", "explain", "legal", "bundle", "path")),
         "timing": sum(w in q for w in ("when", "time", "hour", "daily", "weekly", "weekday", "peak", "occur")),
@@ -239,6 +253,161 @@ def _screen_hint_from_context(context: Mapping[str, Any] | None) -> str | None:
     return " ".join(bits) if bits else None
 
 
+def _latest_training_run_by_type(db: Session, prediction_type: str):
+    from app.analytics.ai_models import GNNTrainingRun
+
+    return (
+        db.query(GNNTrainingRun)
+        .filter(GNNTrainingRun.prediction_type == prediction_type)
+        .order_by(GNNTrainingRun.created_at.desc())
+        .first()
+    )
+
+
+def _load_paysim_artifact() -> dict[str, Any] | None:
+    for candidate in BENCHMARK_ARTIFACT_CANDIDATES:
+        try:
+            if candidate.exists():
+                return json.loads(candidate.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+    return None
+
+
+def _current_workspace_hint(context: Mapping[str, Any] | None) -> str:
+    if not context:
+        return ""
+    parts: list[str] = []
+    event_count = context.get("event_count")
+    campaign_count = context.get("campaign_count")
+    graph_nodes = context.get("graph_nodes")
+    graph_edges = context.get("graph_edges")
+    if isinstance(event_count, int):
+        parts.append(f"{event_count} events")
+    if isinstance(campaign_count, int):
+        parts.append(f"{campaign_count} campaigns")
+    if isinstance(graph_nodes, int) and isinstance(graph_edges, int):
+        parts.append(f"graph {graph_nodes} nodes / {graph_edges} edges")
+    return f"Current workspace has {', '.join(parts)}." if parts else ""
+
+
+def _system_answer(context: Mapping[str, Any] | None, screen_hint: str | None) -> str:
+    workspace = _current_workspace_hint(context)
+    hint = f" {screen_hint}" if screen_hint else ""
+    return (
+        "Sentinel-KE works as one operating loop: connectors or legacy exports feed the canonical event ledger, "
+        "the graph layer links services, endpoints, IPs, accounts, devices, suppliers, and campaigns, "
+        "the GNN prioritizes which entities deserve attention, the explanation layer exposes reasons and trust checks, "
+        "and the defense and reporting layers turn that into action and auditable output. "
+        f"{workspace}{hint}"
+    ).strip()
+
+
+def _readiness_answer(db: Session) -> str:
+    cyber_run = _latest_training_run_by_type(db, "risk_gnn")
+    corruption_run = _latest_training_run_by_type(db, "corruption_risk")
+    paysim = _load_paysim_artifact()
+    parts: list[str] = []
+    if cyber_run:
+        parts.append(
+            f"Cyber is the strongest live lane: latest run AUC {float(cyber_run.auc or 0.0):.4f}, "
+            f"precision {float(cyber_run.precision or 0.0):.4f}, recall {float(cyber_run.recall or 0.0):.4f}, "
+            f"F1 {float(cyber_run.f1 or 0.0):.4f}."
+        )
+    if paysim:
+        metrics = dict(paysim.get("metrics") or {})
+        auc = metrics.get("auc")
+        pr_auc = metrics.get("pr_auc")
+        if isinstance(auc, (int, float)) and isinstance(pr_auc, (int, float)):
+            parts.append(
+                f"Fraud benchmark evidence is present: fresh PaySim artifact AUC {float(auc):.4f}, PR-AUC {float(pr_auc):.4f}."
+            )
+    if corruption_run:
+        parts.append(
+            f"Corruption intelligence is live: latest window AUC {float(corruption_run.auc or 0.0):.4f} with fairness "
+            f"{'passed' if not bool(getattr(corruption_run, 'fairness_blocked', False)) else 'blocked'}."
+        )
+    parts.append(
+        "Judge-safe framing is: cyber is the lead live lane, PaySim is a separate fraud benchmark lane, and corruption is investigative risk intelligence rather than legal proof."
+    )
+    return " ".join(parts)
+
+
+def _deployment_answer(context: Mapping[str, Any] | None, screen_hint: str | None) -> str:
+    backend_status = str((context or {}).get("backend_status") or "").strip()
+    hint = f" {screen_hint}" if screen_hint else ""
+    return (
+        "Deployment is designed for sovereign operation: agencies can run hub-and-edge mode, keep sensitive data local, and sync only the required risk signals outward. "
+        "Legacy systems do not need to be replaced; they can bridge data through the connector API and export bridge. "
+        "The honest caveat is that stable public judge-verifiable hosting is a deployment hardening task separate from the core analytics workflow. "
+        f"Current UI backend state: {backend_status or 'not supplied.'}{hint}"
+    )
+
+
+def _connectors_answer(question: str) -> str:
+    connectors = list_connectors()
+    q = question.lower()
+    preferred: list[str] = []
+    keyword_map = {
+        "vpn": "vpn_gateway_session_v1",
+        "sim": "telco_sim_swap_v1",
+        "swap": "telco_sim_swap_v1",
+        "bank": "core_banking_tx_v1",
+        "fraud": "core_banking_tx_v1",
+        "waf": "waf_api_attack_v1",
+        "ddos": "suricata_eve_v1",
+        "suricata": "suricata_eve_v1",
+        "mail": "m365_bec_mail_v1",
+    }
+    for token, key in keyword_map.items():
+        if token in q and key not in preferred:
+            preferred.append(key)
+    known = {item["key"]: item for item in connectors}
+    chosen = [known[key] for key in preferred if key in known]
+    if not chosen:
+        chosen = connectors[:5]
+    examples = ", ".join(item["key"] for item in chosen[:5])
+    return (
+        "Legacy and partner systems should stream into Sentinel-KE through the connector seam: "
+        "GET /v1/integrations/connectors, then POST /v1/integrations/{connector_key}/event or /batch. "
+        "The practical bridge path is file export or SIEM relay to connector API to canonical event ledger to graph, GNN, and response. "
+        f"Relevant connector examples right now: {examples}."
+    )
+
+
+def _claims_answer() -> str:
+    return (
+        "Judge-safe claims are: cyber is live and strongly evidenced, PaySim is a fresh separate fraud benchmark, "
+        "corruption is a real risk-ranking lane with caveats, containment is bounded and auditable, and agencies can integrate through connectors and legacy export bridges. "
+        "Do not say the GNN alone detects everything, do not treat corruption as legal proof, and do not present benchmark fraud evidence as live sovereign partner telemetry."
+    )
+
+
+def _containment_answer(
+    *,
+    entity_key: str | None,
+    containment: ContainmentAction | None,
+    trust_summary: Mapping[str, Any] | None,
+) -> str:
+    if containment:
+        base = (
+            f"Latest containment on {entity_key or containment.target}: {containment.action_type} "
+            f"targeting {containment.target} is {containment.status}."
+        )
+    else:
+        base = (
+            f"No executed containment action is recorded yet for {entity_key}."
+            if entity_key
+            else "No executed containment action is currently tied to the selected context."
+        )
+    readiness = str(dict((trust_summary or {}).get("operator_brief") or {}).get("containment_readiness") or "").strip()
+    ladder = (
+        " The correct escalation ladder is observe, then challenge or rate-limit, then isolate a specific asset or account path, "
+        "then upstream block or scrub only when evidence and impact justify it."
+    )
+    return f"{base} {readiness}{ladder}".strip()
+
+
 def _presentation_answer(
     *,
     entity_key: str | None,
@@ -392,7 +561,7 @@ def answer_local_analyst_query(
         except Exception:
             trust_summary = None
 
-    if intent in {"presentation", "platform", "data_realism"} or not entity_key:
+    if intent in {"presentation", "platform", "data_realism", "readiness"} or not entity_key:
         try:
             platform_summary = build_platform_trust_summary(db=db)
         except Exception:
@@ -445,6 +614,46 @@ def answer_local_analyst_query(
             "sources": ["ai_prediction", "trust_summary", "platform_trust_summary"],
         }
 
+    if intent == "system":
+        return {
+            "answer": _system_answer(context, screen_hint),
+            "model": settings.ai_copilot_model,
+            "intent": intent,
+            "sources": ["ui_context", "workflow_rules", "connector_registry"],
+        }
+
+    if intent == "readiness":
+        return {
+            "answer": _readiness_answer(db),
+            "model": settings.ai_copilot_model,
+            "intent": intent,
+            "sources": ["gnn_training_run", "paysim_benchmark_artifact", "platform_trust_summary"],
+        }
+
+    if intent == "deployment":
+        return {
+            "answer": _deployment_answer(context, screen_hint),
+            "model": settings.ai_copilot_model,
+            "intent": intent,
+            "sources": ["ui_context", "deployment_policy", "connector_registry"],
+        }
+
+    if intent == "connectors":
+        return {
+            "answer": _connectors_answer(question),
+            "model": settings.ai_copilot_model,
+            "intent": intent,
+            "sources": ["connector_registry", "integration_api"],
+        }
+
+    if intent == "claims":
+        return {
+            "answer": _claims_answer(),
+            "model": settings.ai_copilot_model,
+            "intent": intent,
+            "sources": ["judge_safe_claims", "benchmark_evidence", "platform_trust_summary"],
+        }
+
     if intent == "platform":
         return {
             "answer": _platform_answer(platform_summary=platform_summary, screen_hint=screen_hint),
@@ -485,18 +694,13 @@ def answer_local_analyst_query(
                     f"Observed techniques: {_format_list(technique_ids[:6])}."
                 )
         elif intent == "containment":
-            if containment:
-                answer = (
-                    f"Latest containment status for {entity_key}: {containment.action_type} "
-                    f"on target {containment.target} is {containment.status}."
-                )
-            else:
-                answer = (
-                    f"Recommended actions for {entity_key}: {_format_list(control_list[:5])}. "
-                    f"No executed containment action is recorded yet."
-                )
-            if operator_brief.get("containment_readiness"):
-                answer = f"{answer} {operator_brief['containment_readiness']}"
+            answer = _containment_answer(
+                entity_key=entity_key,
+                containment=containment,
+                trust_summary=trust_summary,
+            )
+            if control_list:
+                answer = f"{answer} Recommended actions: {_format_list(control_list[:5])}."
         elif intent == "evidence":
             answer = (
                 f"{entity_key} scored {float(prediction.score or 0.0):.2f} with reasons {_format_list(top_reasons)}. "
