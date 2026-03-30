@@ -664,54 +664,83 @@
 }
 
 .workflow-guide-panel {
-  padding: 18px 20px;
+  padding: 12px 14px;
 }
 
 .workflow-guide-panel .detail-grid {
-  gap: 18px;
+  gap: 12px;
 }
 
 .workflow-guide-strip {
-  margin-bottom: 16px;
+  margin-bottom: 12px;
   background: linear-gradient(180deg, rgba(13, 18, 32, 0.96), rgba(13, 18, 32, 0.9));
   border-color: rgba(var(--accent-rgb), 0.18);
 }
 
-.workflow-guide-strip-head {
+.workflow-guide-compact-row {
   display: flex;
   justify-content: space-between;
-  gap: 12px;
-  align-items: flex-start;
-  margin-bottom: 14px;
+  gap: 14px;
+  align-items: center;
 }
 
-.workflow-guide-strip-head h3 {
+.workflow-guide-compact-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.workflow-guide-compact-copy h3 {
   margin: 0;
+  font-size: 1rem;
+}
+
+.workflow-guide-compact-purpose {
+  margin: 0;
+  color: var(--ink-muted);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.workflow-guide-compact-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.workflow-guide-next-label {
+  margin: 0;
+  white-space: nowrap;
 }
 
 .workflow-guide-strip-grid {
-  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 0.95fr);
+  margin-top: 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .workflow-guide-block {
-  padding: 12px 14px;
-  border-radius: 14px;
+  padding: 10px 12px;
+  border-radius: 12px;
   border: 1px solid rgba(239, 232, 210, 0.08);
   background: rgba(var(--surface-rgb), 0.55);
 }
 
 .workflow-guide-chip-row {
-  margin-bottom: 12px;
+  margin-bottom: 0;
 }
 
-.workflow-guide-next {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
+.workflow-guide-details {
   margin-top: 10px;
-  padding-top: 10px;
   border-top: 1px solid rgba(239, 232, 210, 0.08);
+  padding-top: 10px;
+}
+
+.workflow-guide-details > summary {
+  font-size: 0.82rem;
+  color: var(--ink-muted);
 }
 
 .workflow-guide-block p {
@@ -2968,8 +2997,14 @@
     grid-template-columns: 1fr;
   }
 
-  .workflow-guide-strip-head {
+  .workflow-guide-compact-row {
     flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .workflow-guide-compact-actions {
+    width: 100%;
+    justify-content: flex-start;
   }
 }
 
