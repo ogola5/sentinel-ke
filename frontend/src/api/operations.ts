@@ -233,6 +233,7 @@ export async function fetchOperationsSnapshot(): Promise<OperationsSnapshot> {
       tenderId: asString(item.tender_id, "n/a"),
       vendorId: asString(item.vendor_id, "n/a"),
       agency: asString(item.agency, "unknown"),
+      amount: asNumber(item.amount, 0),
       severity: asString(item.severity, "low"),
       score: asNumber(item.score, 0),
     })),

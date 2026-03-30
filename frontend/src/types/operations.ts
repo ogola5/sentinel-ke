@@ -54,6 +54,7 @@ export type OpsProcurementAnomaly = {
   tenderId: string;
   vendorId: string;
   agency: string;
+  amount: number;
   severity: string;
   score: number;
 };

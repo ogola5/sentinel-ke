@@ -55,6 +55,22 @@ export default function CorruptionIntel({ data, onRunLeakage, leakageActionLabel
     : [];
 
   const totalSuspectedKsh = ls?.suspectedAmountTotal ?? 0;
+  const flaggedProcurementAmount = data.procurementAnomalies.reduce(
+    (sum, item) => sum + item.amount,
+    0,
+  );
+  const hasLeakageHeadline =
+    Boolean(ls) &&
+    (
+      (ls?.totalAlerts ?? 0) > 0 ||
+      totalSuspectedKsh > 0 ||
+      Object.keys(ls?.byDetector ?? {}).length > 0
+    );
+  const heroLabel = hasLeakageHeadline ? "Integrity pressure" : "Procurement review queue";
+  const heroValue = hasLeakageHeadline ? totalSuspectedKsh : flaggedProcurementAmount;
+  const heroCopy = hasLeakageHeadline
+    ? `${ls?.windowDays ?? 30}-day suspected leakage exposure across procurement, payment control, and integrity review.`
+    : "Leakage detectors are quiet in this window, but procurement, supplier, and integrity review queues are active and ready for investigator follow-up.";
 
   return (
     <div>
@@ -83,10 +99,10 @@ export default function CorruptionIntel({ data, onRunLeakage, leakageActionLabel
 
       <div className="focus-layout">
         <div className="panel focus-hero focus-hero-warning">
-          <p className="focus-kicker">Integrity pressure</p>
-          <p className="focus-value">KES {totalSuspectedKsh.toLocaleString()}</p>
+          <p className="focus-kicker">{heroLabel}</p>
+          <p className="focus-value">KES {heroValue.toLocaleString()}</p>
           <p className="focus-copy">
-            {ls ? `${ls.windowDays}-day suspected leakage exposure across procurement, payment control, and integrity review.` : "Integrity pressure is still building for this window."} Use this screen to show how tenders, supplier networks, controls, and review outcomes form one chain instead of disconnected alerts.
+            {heroCopy} Use this screen to show how tenders, supplier networks, controls, and review outcomes form one chain instead of disconnected alerts.
           </p>
           <div className="focus-stat-grid">
             <div className="focus-stat-card">
