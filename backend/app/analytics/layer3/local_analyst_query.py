@@ -81,9 +81,13 @@ def _detect_intent(question: str) -> str:
         "system": sum(w in q for w in ("whole system", "end to end", "architecture", "how it works", "full workflow", "overall system")),
         "readiness": sum(w in q for w in ("readiness", "kpi", "benchmark", "baseline", "scorecard", "rubric", "evidence", "top 3")),
         "deployment": sum(w in q for w in ("deploy", "deployment", "public url", "render", "vercel", "on-prem", "sovereign", "edge", "cloud")),
+        "competition": sum(w in q for w in ("competitor", "competition", "crowdstrike", "microsoft", "google", "xsiam", "splunk", "darktrace", "different from", "gap are you solving", "what is new")),
+        "onboarding": sum(w in q for w in ("onboard", "onboarding", "agency", "submit data", "data integrity", "provenance", "legacy system", "legacy systems", "batch", "connector api")),
         "connectors": sum(w in q for w in ("connector", "legacy", "csv", "jsonl", "batch", "bridge", "siem", "export", "integrate", "integration")),
         "claims": sum(w in q for w in ("claim", "overclaim", "honest", "safe to say", "not say", "caveat", "wording")),
         "training": sum(w in q for w in ("train", "trained", "training data", "dataset", "data source", "holdout", "evaluated", "evaluation")),
+        "ml_terms": sum(w in q for w in ("false positive", "false negative", "true positive", "true negative", "precision", "recall", "f1", "auc", "pr-auc", "threshold", "weak label", "ground truth", "uncertainty", "confidence", "calibration", "overfit", "leakage")),
+        "judge_qa": sum(w in q for w in ("mule", "mule ring", "sim swap", "simswap", "fraud lane", "corruption lane", "procurement", "cyber lane", "ddos", "malware", "vpn abuse", "how does it work", "how does the system work", "how is it detected", "what does this lane do")),
         "mfa": sum(w in q for w in ("mfa", "otp", "totp", "two-factor", "2fa", "step-up", "authenticator")),
         "gnn": sum(w in q for w in ("gnn", "model", "uncertainty", "confidence", "fused", "score meaning")),
         "graph": sum(w in q for w in ("graph", "path", "hop", "linked", "campaign link", "relationship")),
@@ -401,6 +405,12 @@ def _training_answer(question: str) -> str:
     return str(knowledge["summary"])
 
 
+def _knowledge_answer(topic: str, question: str, screen_hint: str | None = None) -> str:
+    knowledge = get_local_knowledge(topic, question)
+    hint = f" {screen_hint}" if screen_hint else ""
+    return f"{str(knowledge['summary']).strip()}{hint}".strip()
+
+
 def _presentation_answer(
     *,
     entity_key: str | None,
@@ -636,6 +646,24 @@ def answer_local_analyst_query(
             "sources": ["ui_context", "deployment_policy", "connector_registry", *knowledge.get("sources", [])],
         }
 
+    if intent == "competition":
+        knowledge = get_local_knowledge("competition", question)
+        return {
+            "answer": _knowledge_answer("competition", question, screen_hint),
+            "model": settings.ai_copilot_model,
+            "intent": intent,
+            "sources": ["competitive_landscape", *knowledge.get("sources", [])],
+        }
+
+    if intent == "onboarding":
+        knowledge = get_local_knowledge("onboarding", question)
+        return {
+            "answer": _knowledge_answer("onboarding", question, screen_hint),
+            "model": settings.ai_copilot_model,
+            "intent": intent,
+            "sources": ["connector_registry", "integration_api", *knowledge.get("sources", [])],
+        }
+
     if intent == "connectors":
         knowledge = get_local_knowledge("connectors", question)
         return {
@@ -661,6 +689,24 @@ def answer_local_analyst_query(
             "model": settings.ai_copilot_model,
             "intent": intent,
             "sources": ["training_lane_summary", *knowledge.get("sources", [])],
+        }
+
+    if intent == "ml_terms":
+        knowledge = get_local_knowledge("ml_terms", question)
+        return {
+            "answer": _knowledge_answer("ml_terms", question, screen_hint),
+            "model": settings.ai_copilot_model,
+            "intent": intent,
+            "sources": ["benchmark_glossary", *knowledge.get("sources", [])],
+        }
+
+    if intent == "judge_qa":
+        knowledge = get_local_knowledge("judge_qa", question)
+        return {
+            "answer": _knowledge_answer("judge_qa", question, screen_hint),
+            "model": settings.ai_copilot_model,
+            "intent": intent,
+            "sources": ["judge_question_pack", *knowledge.get("sources", [])],
         }
 
     if intent == "platform":

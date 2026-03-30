@@ -125,30 +125,6 @@ export default function GlobalAssistantPanel({
     ],
   );
 
-  const quickPrompts = useMemo(() => {
-    const prompts = [
-      "Explain the whole system end to end.",
-      "How was the cyber lane trained and evaluated?",
-      "What do the graph nodes and edges mean in plain English?",
-      "What can I honestly claim right now?",
-      "What readiness evidence is strongest right now?",
-      "How do legacy systems connect to Sentinel-KE?",
-      `What should I say on the ${screenTitle} screen?`,
-      "What should I click next to keep the workflow strong?",
-      "Summarize the current workflow in plain language.",
-      "How can I show MFA in action?",
-      "How real is the data behind this workflow?",
-    ];
-    if (selectedEntity?.id) {
-      prompts.unshift(`Explain ${selectedEntity.id} in plain English.`);
-      prompts.push(`What does the graph score mean for ${selectedEntity.id}?`);
-    }
-    if (activeScreen === "gnn") {
-      prompts.push("Explain the GNN on this screen in plain language.");
-    }
-    return Array.from(new Set(prompts)).slice(0, 8);
-  }, [activeScreen, screenTitle, selectedEntity]);
-
   const ask = async (text: string) => {
     if (!text.trim()) return;
     setLoading(true);
@@ -262,7 +238,7 @@ export default function GlobalAssistantPanel({
           <div className="topbar-search-row" style={{ width: "100%" }}>
             <input
               className="search"
-              placeholder="Ask what this means, what to click next, what the graph shows, or how the workflow works."
+              placeholder="Ask about cyber, corruption, mule rings, GNN metrics, data sources, onboarding, containment, or competitor differences."
               value={question}
               onChange={(event) => setQuestion(event.target.value)}
               onKeyDown={(event) => {
@@ -274,13 +250,6 @@ export default function GlobalAssistantPanel({
             <button className="chip active" type="button" disabled={loading || !question.trim()} onClick={() => void ask(question)}>
               {loading ? "Thinking…" : "Ask"}
             </button>
-          </div>
-          <div className="chip-row" style={{ marginTop: 10 }}>
-            {quickPrompts.map((prompt) => (
-              <button key={prompt} className="chip ghost" type="button" onClick={() => { setQuestion(prompt); void ask(prompt); }}>
-                {prompt}
-              </button>
-            ))}
           </div>
           {error && (
             <div className="panel-subsection">
@@ -338,9 +307,6 @@ export default function GlobalAssistantPanel({
             <button className="chip active" type="button" disabled={mfaStartBusy || mfaVerifyBusy} onClick={() => void startMfa()}>
               {mfaStartBusy ? <Loader size={13} className="spin" /> : <Lock size={13} />}
               &nbsp;Start MFA Enrollment
-            </button>
-            <button className="chip ghost" type="button" onClick={() => void ask("How can I show MFA in action?")}>
-              Ask assistant
             </button>
           </div>
 
