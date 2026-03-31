@@ -113,6 +113,7 @@ services:
       context: ./frontend
     environment:
       VITE_API_PROXY_TARGET: http://backend:8000
+      VITE_API_KEY: ${FRONTEND_API_KEY}
     ports:
       - "3000:5173"
     command: sh ./scripts/dev-start.sh
