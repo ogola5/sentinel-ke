@@ -3,8 +3,7 @@ import { Loader } from "lucide-react";
 
 import "../App.css";
 
-import LoginScreen from "../screens/auth/LoginScreen";
-import { apiLogout, clearSession, getRefreshToken, loadPrincipal } from "../api/auth";
+import { apiLogout, clearSession, getRefreshToken } from "../api/auth";
 import {
   createCasePacketFromCampaign,
   downloadCasePacketFromCampaign,
@@ -44,13 +43,24 @@ type EvidenceState = {
   items: EvidenceItem[];
 };
 
+const DEFAULT_PRINCIPAL: Principal = {
+  principal_type: "user",
+  user_id: "admin",
+  username: "admin",
+  display_name: "Admin",
+  role: "admin",
+  access_level: "central",
+  section_code: null,
+  scopes: ["read", "write", "execute", "manage_users"],
+  mfa_authenticated: true,
+};
+
 export default function App() {
-  const [principal, setPrincipal] = useState<Principal | null>(() => loadPrincipal());
+  const [principal] = useState<Principal>(DEFAULT_PRINCIPAL);
 
   useEffect(() => {
     const handleAuthExpired = () => {
       clearSession();
-      setPrincipal(null);
     };
 
     window.addEventListener("sentinel:auth-expired", handleAuthExpired);
@@ -63,12 +73,7 @@ export default function App() {
       await apiLogout(refreshToken).catch(() => undefined);
     }
     clearSession();
-    setPrincipal(null);
   };
-
-  if (!principal) {
-    return <LoginScreen onLogin={setPrincipal} />;
-  }
 
   return <AuthenticatedApp principal={principal} onLogout={() => void handleLogout()} />;
 }

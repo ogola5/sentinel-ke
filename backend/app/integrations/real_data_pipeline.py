@@ -1092,7 +1092,6 @@ def ingest_records_via_connectors(
     max_records: Optional[int] = None,
     sleep_every: Optional[int] = None,
     sleep_sec: float = 65.0,
-    retry_on_rate_limit: bool = False,
 ) -> IngestionJobStats:
     svc = IngestionService(db, pseudonym_salt=settings.pseudonym_salt or None)
     total = accepted = duplicates = skipped = errors = 0
@@ -1121,42 +1120,6 @@ def ingest_records_via_connectors(
                 log.info("real_data_ingest_pause sleep_sec=%s processed=%s", sleep_sec, processed_since_sleep)
                 time.sleep(max(0.0, float(sleep_sec)))
                 processed_since_sleep = 0
-        except PermissionError as exc:
-            if retry_on_rate_limit and "Rate limit exceeded" in str(exc):
-                log.warning("real_data_rate_limit_pause connector=%s sleep_sec=%s", record.connector_key, sleep_sec)
-                time.sleep(max(0.0, float(sleep_sec)))
-                try:
-                    event = map_external_event(
-                        connector_key=record.connector_key,
-                        payload=record.payload,
-                        confidence=record.confidence,
-                        classification=classification,
-                    )
-                    result = svc.ingest_event(event=event, source_api_key=source_api_key)
-                    if result.status == "accepted":
-                        accepted += 1
-                    elif result.status == "duplicate":
-                        duplicates += 1
-                    else:
-                        skipped += 1
-                    processed_since_sleep = 0
-                    continue
-                except Exception as retry_exc:
-                    errors += 1
-                    log.exception(
-                        "real_data_ingest_retry_failed connector=%s err=%s payload=%s",
-                        record.connector_key,
-                        retry_exc,
-                        record.payload,
-                    )
-                    continue
-            errors += 1
-            log.exception(
-                "real_data_ingest_failed connector=%s err=%s payload=%s",
-                record.connector_key,
-                exc,
-                record.payload,
-            )
         except Exception as exc:
             errors += 1
             log.exception(
@@ -1190,8 +1153,7 @@ def _run_kev_epss_job(args: argparse.Namespace) -> IngestionJobStats:
         epss_lookup=epss_lookup,
         confidence=args.confidence,
     )
-    db = SessionLocal()
-    try:
+    with SessionLocal() as db:
         return ingest_records_via_connectors(
             db=db,
             records=records,
@@ -1201,8 +1163,6 @@ def _run_kev_epss_job(args: argparse.Namespace) -> IngestionJobStats:
             sleep_every=args.sleep_every if hasattr(args, "sleep_every") else None,
             sleep_sec=args.sleep_sec if hasattr(args, "sleep_sec") else 65.0,
         )
-    finally:
-        db.close()
 
 
 def normalize_paysim_benchmark_row(
@@ -1320,8 +1280,7 @@ def _run_traffic_job(args: argparse.Namespace) -> IngestionJobStats:
             dataset_name=args.dataset_name or "caida_ddos",
         )
 
-    db = SessionLocal()
-    try:
+    with SessionLocal() as db:
         return ingest_records_via_connectors(
             db=db,
             records=records,
@@ -1331,8 +1290,6 @@ def _run_traffic_job(args: argparse.Namespace) -> IngestionJobStats:
             sleep_every=args.sleep_every if hasattr(args, "sleep_every") else None,
             sleep_sec=args.sleep_sec if hasattr(args, "sleep_sec") else 65.0,
         )
-    finally:
-        db.close()
 
 
 def _run_feodo_job(args: argparse.Namespace) -> IngestionJobStats:
@@ -1342,8 +1299,7 @@ def _run_feodo_job(args: argparse.Namespace) -> IngestionJobStats:
         timeout_sec=args.timeout_sec,
     )
     records = build_feodo_records(rows, confidence=args.confidence)
-    db = SessionLocal()
-    try:
+    with SessionLocal() as db:
         return ingest_records_via_connectors(
             db=db,
             records=records,
@@ -1353,8 +1309,6 @@ def _run_feodo_job(args: argparse.Namespace) -> IngestionJobStats:
             sleep_every=args.sleep_every if hasattr(args, "sleep_every") else None,
             sleep_sec=args.sleep_sec if hasattr(args, "sleep_sec") else 65.0,
         )
-    finally:
-        db.close()
 
 
 def _run_urlhaus_job(args: argparse.Namespace) -> IngestionJobStats:
@@ -1365,8 +1319,7 @@ def _run_urlhaus_job(args: argparse.Namespace) -> IngestionJobStats:
         timeout_sec=args.timeout_sec,
     )
     records = build_urlhaus_records(rows, confidence=args.confidence)
-    db = SessionLocal()
-    try:
+    with SessionLocal() as db:
         return ingest_records_via_connectors(
             db=db,
             records=records,
@@ -1375,10 +1328,7 @@ def _run_urlhaus_job(args: argparse.Namespace) -> IngestionJobStats:
             max_records=args.max_records,
             sleep_every=args.sleep_every,
             sleep_sec=args.sleep_sec,
-            retry_on_rate_limit=True,
         )
-    finally:
-        db.close()
 
 
 def _run_threatfox_job(args: argparse.Namespace) -> IngestionJobStats:
