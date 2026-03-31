@@ -223,7 +223,9 @@ export default function AgencyOnboarding({ onNavigate }: AgencyOnboardingProps) 
     }
   };
 
-  const API_BASE = resolveApiBase() || "http://localhost:8000";
+  const API_BASE =
+    resolveApiBase() ||
+    (typeof window !== "undefined" ? `${window.location.origin}/v1` : "/v1");
 
   return (
     <div>
