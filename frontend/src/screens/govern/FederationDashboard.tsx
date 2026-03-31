@@ -1,18 +1,53 @@
-import { useEffect, useState } from "react";
-import { Globe, RefreshCw, Loader, Network, Link2, AlertTriangle } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { Globe, RefreshCw, Loader, Network, Link2, AlertTriangle, Play, Radio } from "lucide-react";
 import ArchitectureFlow from "../../app/ArchitectureFlow";
+import { startDemoScenario } from "../../api/ai";
 import {
   fetchEdgeSyncStatus,
   fetchFederationCorrelations,
   fetchFederationPartners,
   fetchFederationPatterns,
 } from "../../api/federation";
+import type { ScreenId } from "../../app/navigation";
+import { DEMO_SCENARIOS, type DemoScenarioCard, type DemoScenarioId } from "../../demo/scenarios";
 import type {
   FederationCorrelation,
   FederationEdgeSyncStatus,
   FederationPartner,
   FederationPattern,
 } from "../../types/federation";
+
+type FederationDashboardProps = {
+  onNavigate?: (screen: ScreenId) => void;
+};
+
+const FEDERATION_DEMO_IDS: DemoScenarioId[] = [
+  "federated_vpn",
+  "federated_sim_swap",
+  "federated_malware",
+];
+
+const SCREEN_LABELS: Record<ScreenId, string> = {
+  command: "Command",
+  live: "Live Feed",
+  graph: "Threat Graph",
+  investigate: "Investigate",
+  campaigns: "Campaigns",
+  cases: "Cases",
+  defense: "Defense",
+  ops: "Dashboard",
+  reports: "Reports",
+  timeline: "Service Indicators",
+  infra: "Infra Correlation",
+  gnn: "GNN Intelligence",
+  crypto: "Crypto Posture",
+  corruption: "Corruption Intel",
+  federation: "Federation",
+  audit: "Audit",
+  exec: "Crisis Brief",
+  onboard: "Agency Onboarding",
+  users: "User Management",
+};
 
 function riskClass(level: string): string {
   const l = level.toLowerCase();
@@ -102,7 +137,7 @@ function correlationStory(
   };
 }
 
-export default function FederationDashboard() {
+export default function FederationDashboard({ onNavigate }: FederationDashboardProps) {
   const [partners, setPartners] = useState<FederationPartner[]>([]);
   const [patterns, setPatterns] = useState<FederationPattern[]>([]);
   const [correlations, setCorrelations] = useState<FederationCorrelation[]>([]);
@@ -110,6 +145,14 @@ export default function FederationDashboard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedPartner, setSelectedPartner] = useState<string>("");
+  const [busyScenario, setBusyScenario] = useState<DemoScenarioId | null>(null);
+  const [demoStatus, setDemoStatus] = useState<string | null>(null);
+  const [demoTone, setDemoTone] = useState<"info" | "success" | "error">("info");
+
+  const federationScenarios = useMemo(
+    () => DEMO_SCENARIOS.filter((scenario) => FEDERATION_DEMO_IDS.includes(scenario.id)),
+    [],
+  );
 
   const load = async () => {
     setLoading(true);
@@ -142,6 +185,28 @@ export default function FederationDashboard() {
   useEffect(() => {
     void load();
   }, []);
+
+  const runScenario = async (scenario: DemoScenarioCard) => {
+    setBusyScenario(scenario.id);
+    setDemoTone("info");
+    setDemoStatus(null);
+    try {
+      const result = await startDemoScenario(scenario.id);
+      setDemoTone("success");
+      setDemoStatus(`${scenario.label} accepted. Refreshing partner and correlation state now.`);
+      await load();
+      setDemoStatus(
+        `${scenario.label} accepted. ${result.message ?? "Partner telemetry and correlation state refreshed."}`,
+      );
+    } catch (err) {
+      setDemoTone("error");
+      setDemoStatus(
+        `${scenario.label} failed: ${err instanceof Error ? err.message : "scenario_start_failed"}`,
+      );
+    } finally {
+      setBusyScenario(null);
+    }
+  };
 
   const selectedPartnerPatterns = patterns.filter((pt) => pt.partner_id === selectedPartner);
   const activePartners = partners.filter((p) => p.status === "online").length;
@@ -181,6 +246,72 @@ export default function FederationDashboard() {
           { stage: "Warning", title: "Return to local action", detail: "Partners receive warning envelopes and resolve them back to local entities on the edge.", tone: "danger" },
         ]}
       />
+
+      <div className="panel workflow-stage-panel" style={{ marginBottom: 16 }}>
+        <div className="panel-header">
+          <h3>Live federation controls</h3>
+          <span className="muted">Make the shared national signal appear, then open the proof screen</span>
+        </div>
+        <div className="workflow-summary-banner" style={{ marginBottom: 14 }}>
+          <div>
+            <strong>1. Launch a shared signal</strong>
+            <span className="muted">Use VPN, SIM-swap, or malware to make multiple partners light up together.</span>
+          </div>
+          <div>
+            <strong>2. Refresh is automatic</strong>
+            <span className="muted">This screen reloads partners, patterns, and correlations after the replay is accepted.</span>
+          </div>
+          <div>
+            <strong>3. Then pivot</strong>
+            <span className="muted">Open Threat Graph, Investigate, or Live Feed to show the supporting local evidence.</span>
+          </div>
+        </div>
+
+        {demoStatus && (
+          <div className={`scenario-status scenario-status-${demoTone}`} style={{ marginBottom: 14 }}>
+            {demoStatus}
+          </div>
+        )}
+
+        <div className="scenario-launcher-grid">
+          {federationScenarios.map((scenario) => {
+            const running = busyScenario === scenario.id;
+            return (
+              <article key={scenario.id} className="scenario-card">
+                <div className="scenario-card-head">
+                  <div>
+                    <p className="eyebrow" style={{ marginBottom: 6 }}>Federation scenario</p>
+                    <h4>{scenario.label}</h4>
+                    <p className="muted" style={{ marginTop: 6 }}>{scenario.summary}</p>
+                  </div>
+                  <div className="scenario-card-icon">
+                    <Radio size={18} />
+                  </div>
+                </div>
+                <div className="scenario-screen-row">
+                  <span className="scenario-screen-chip">This screen: shared match</span>
+                  <span className="scenario-screen-chip">Then {SCREEN_LABELS[scenario.followUpScreen]}</span>
+                </div>
+                <div className="scenario-detail-block">
+                  <strong>What to point at</strong>
+                  <p className="muted">{scenario.expectedOutput}</p>
+                </div>
+                <div className="scenario-action-row">
+                  <button type="button" className="ghost" onClick={() => void runScenario(scenario)} disabled={busyScenario != null}>
+                    {running ? <Loader size={13} className="spin" /> : <Play size={13} />}
+                    &nbsp;Simulate now
+                  </button>
+                  {onNavigate && (
+                    <button type="button" className="ghost" onClick={() => onNavigate(scenario.followUpScreen)}>
+                      Open {SCREEN_LABELS[scenario.followUpScreen]}
+                    </button>
+                  )}
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      </div>
 
       {error && (
         <div className="panel" style={{ marginBottom: 16, borderColor: "rgba(255,69,58,.28)", background: "rgba(255,69,58,.08)" }}>

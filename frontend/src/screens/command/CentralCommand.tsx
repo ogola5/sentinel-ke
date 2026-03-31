@@ -4,7 +4,9 @@ import {
   Globe,
   Loader,
   Network,
+  Play,
   RefreshCw,
+  Radio,
   Shield,
   TrendingUp,
   Users,
@@ -12,6 +14,7 @@ import {
 
 import ArchitectureFlow from "../../app/ArchitectureFlow";
 import ScenarioLauncher from "../../components/ScenarioLauncher";
+import { startDemoScenario } from "../../api/ai";
 import { fetchFederationCorrelations, fetchFederationPartners } from "../../api/federation";
 import { apiListUsers } from "../../api/auth";
 import { fetchDriftReports, fetchPlatformTrustSummary, runDriftCheck } from "../../api/ai";
@@ -28,6 +31,7 @@ import type { BackupAttestationRecord, RestoreDrillRecord } from "../../types/de
 import type { ThreatSummary } from "../../types/domain";
 import type { OperationsSnapshot } from "../../types/operations";
 import { formatRiskScore, isHighRisk } from "../../utils/risk";
+import { DEMO_SCENARIOS, type DemoScenarioCard, type DemoScenarioId } from "../../demo/scenarios";
 
 interface Props {
   operationsData: OperationsSnapshot;
@@ -43,6 +47,34 @@ interface Props {
 }
 
 type CommandView = "brief" | "network" | "readiness";
+
+const FEDERATION_DEMO_IDS: DemoScenarioId[] = [
+  "federated_vpn",
+  "federated_sim_swap",
+  "federated_malware",
+];
+
+const SCREEN_LABELS: Record<string, string> = {
+  federation: "Federation",
+  graph: "Threat Graph",
+  investigate: "Investigate",
+  live: "Live Feed",
+};
+
+function correlationNarrative(correlation: FederationCorrelation): string {
+  const families = new Set((correlation.fraud_families ?? []).map((value) => value.toLowerCase()));
+  const flags = new Set((correlation.all_risk_flags ?? []).map((value) => value.toLowerCase()));
+  if (families.has("vpn_reuse") || flags.has("shared_access_infrastructure")) {
+    return "The same masked access infrastructure is appearing across multiple partners.";
+  }
+  if (families.has("sim_swap") || flags.has("sim_swap_velocity") || flags.has("shared_actor_hash")) {
+    return "The same SIM-swap actor fingerprint is showing up across telco and banking edges.";
+  }
+  if (families.has("malware_c2") || flags.has("shared_malware_ioc") || flags.has("c2_domain")) {
+    return "The same malware infrastructure is being seen across banks and national cyber response.";
+  }
+  return "A shared high-risk entity is being surfaced by more than one partner.";
+}
 
 const ALL_AGENCIES = Object.keys(KENYA_AGENCIES);
 
@@ -92,14 +124,33 @@ export default function CentralCommand({
   const [resilienceStatus, setResilienceStatus] = useState<string | null>(null);
   const [driftStatus, setDriftStatus] = useState<string | null>(null);
   const [opsBusy, setOpsBusy] = useState(false);
+  const [networkBusyScenario, setNetworkBusyScenario] = useState<DemoScenarioId | null>(null);
+  const [networkStatus, setNetworkStatus] = useState<string | null>(null);
+  const [networkStatusTone, setNetworkStatusTone] = useState<"info" | "success" | "error">("info");
   const [loading, setLoading] = useState(true);
 
-  const load = async () => {
-    setLoading(true);
-    const [partnerRows, correlationRows, userRows, trust, driftRows, backupRows, restoreRows] = await Promise.all([
+  const refreshNetworkState = async () => {
+    const [partnerRows, correlationRows, userRows] = await Promise.all([
       fetchFederationPartners(),
       fetchFederationCorrelations(20),
       apiListUsers().then((r) => r.items).catch(() => [] as AuthUser[]),
+    ]);
+    setPartners(partnerRows);
+    setCorrelations(correlationRows);
+    setUsers(userRows);
+    return { partnerRows, correlationRows };
+  };
+
+  const load = async () => {
+    setLoading(true);
+    const [
+      { partnerRows, correlationRows },
+      trust,
+      driftRows,
+      backupRows,
+      restoreRows,
+    ] = await Promise.all([
+      refreshNetworkState(),
       fetchPlatformTrustSummary(),
       fetchDriftReports(6),
       fetchBackupAttestations(6),
@@ -107,7 +158,6 @@ export default function CentralCommand({
     ]);
     setPartners(partnerRows);
     setCorrelations(correlationRows);
-    setUsers(userRows);
     setTrustSummary(trust);
     setDriftReports(driftRows);
     setBackupAttestations(backupRows);
@@ -128,11 +178,6 @@ export default function CentralCommand({
     operationsData.predictions.filter((item) => isHighRisk(item.score)).length;
   const nationalThreat = threatLevel(criticalQueueCount, highQueueCount);
 
-  const onlinePartnerIds = new Set(
-    partners
-      .filter((item) => item.status === "online")
-      .map((item) => item.partner_id.toUpperCase()),
-  );
   const agencyUserCounts = ALL_AGENCIES.map((code) => ({
     code,
     label: code,
@@ -170,7 +215,7 @@ export default function CentralCommand({
   const federationSignedRequired = hasPlatformHealth && healthPlatformStatus.federation_signed_requests_required === true;
   const leadCorrelation = correlations[0] ?? null;
   const topThreatLead = topThreats[0] ?? null;
-  const activePartners = onlinePartnerIds.size;
+  const activePartners = partners.filter((item) => item.status === "online").length;
   const attentionPartners = partners.filter((item) => item.status !== "online").length;
   const priorityQueues = [
     {
@@ -212,6 +257,13 @@ export default function CentralCommand({
   const campaignCountDisplay = !snapshotReady && isSyncing ? "…" : String(activeCampaignCount);
   const liveEventCount = activeEventCount > 0 ? activeEventCount : operationsData.metrics.events;
   const eventCountDisplay = !snapshotReady && isSyncing && liveEventCount === 0 ? "…" : String(liveEventCount);
+  const leadPartnerNames = leadCorrelation
+    ? leadCorrelation.partner_ids.map((partnerId) => partners.find((item) => item.partner_id === partnerId)?.partner_name ?? partnerId).join(", ")
+    : "";
+  const federationScenarios = useMemo(
+    () => DEMO_SCENARIOS.filter((scenario) => FEDERATION_DEMO_IDS.includes(scenario.id)),
+    [],
+  );
   const handleBackupAttestation = async () => {
     if (!backupAssetId.trim() || !backupId.trim()) return;
     setOpsBusy(true);
@@ -274,6 +326,36 @@ export default function CentralCommand({
       setDriftStatus(err instanceof Error ? err.message : "drift_run_failed");
     } finally {
       setOpsBusy(false);
+    }
+  };
+
+  const handleFederationScenario = async (scenario: DemoScenarioCard) => {
+    setNetworkBusyScenario(scenario.id);
+    setNetworkStatus(null);
+    setNetworkStatusTone("info");
+    try {
+      const response = await startDemoScenario(scenario.id);
+      setNetworkStatusTone("success");
+      setNetworkStatus(
+        `${scenario.label} accepted. Refreshing partner coverage and shared warning state now.`,
+      );
+      for (let attempt = 0; attempt < 8; attempt += 1) {
+        const { partnerRows, correlationRows } = await refreshNetworkState();
+        if (partnerRows.length > 0 || correlationRows.length > 0) {
+          break;
+        }
+        await new Promise((resolve) => window.setTimeout(resolve, 800));
+      }
+      setNetworkStatus(
+        `${scenario.label} accepted. ${response.message ?? "Partner freshness and shared warning patterns refreshed."}`,
+      );
+    } catch (err) {
+      setNetworkStatusTone("error");
+      setNetworkStatus(
+        `${scenario.label} failed: ${err instanceof Error ? err.message : "scenario_start_failed"}`,
+      );
+    } finally {
+      setNetworkBusyScenario(null);
     }
   };
 
@@ -510,9 +592,9 @@ export default function CentralCommand({
           <div className="focus-layout">
             <div className="panel focus-hero focus-hero-accent">
               <p className="focus-kicker">Agency coverage</p>
-              <p className="focus-value">{activePartners}/{ALL_AGENCIES.length}</p>
+              <p className="focus-value">{activePartners} live partners</p>
               <p className="focus-copy">
-                Agencies with healthy partner presence at the hub. Use this view to show who is online, where freshness is weak, and where federation is already producing shared warning value.
+                Use this view to show which partner edges are online, which ones are stale, and where the hub is already seeing shared national warning patterns.
               </p>
               <div className="focus-stat-grid">
                 <div className="focus-stat-card">
@@ -532,29 +614,43 @@ export default function CentralCommand({
                   <div className="focus-stat-value">{sectionUsers}</div>
                 </div>
               </div>
-              <div className="agency-presence-grid" style={{ marginTop: 18 }}>
-                {ALL_AGENCIES.map((code) => {
-                  const partner = partners.find((item) => item.partner_id.toUpperCase() === code);
-                  const online = onlinePartnerIds.has(code);
-                  const color = agencyColor(code);
-                  return (
-                    <div key={code} className={`agency-presence-card ${online ? "online" : "offline"}`}>
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                        <span style={{ fontFamily: "JetBrains Mono, monospace", fontWeight: 700, color: online ? color : "var(--ink-muted)" }}>
-                          {code}
-                        </span>
-                        <span className={`status-dot ${online ? "live" : "offline"}`} />
+              {partners.length === 0 ? (
+                <div className="state-box" style={{ marginTop: 18 }}>
+                  <Network size={22} />
+                  <p>No partner edges are registered yet. Use the federation demo controls below to bring them online.</p>
+                </div>
+              ) : (
+                <div className="agency-presence-grid" style={{ marginTop: 18 }}>
+                  {partners.map((partner) => {
+                    const online = partner.status === "online";
+                    const color = agencyColor(
+                      partner.sector === "government" ? "KRA" : partner.sector === "bank" ? "CBK" : null,
+                    );
+                    return (
+                      <div key={partner.partner_id} className={`agency-presence-card ${online ? "online" : "offline"}`}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+                          <span style={{ fontFamily: "JetBrains Mono, monospace", fontWeight: 700, color: online ? color : "var(--ink-muted)" }}>
+                            {partner.partner_id}
+                          </span>
+                          <span className={`status-dot ${online ? "live" : "offline"}`} />
+                        </div>
+                        <div style={{ fontSize: "0.74rem", opacity: 0.82, marginTop: 6 }}>{partner.partner_name}</div>
+                        <div className="muted" style={{ marginTop: 6 }}>
+                          {partner.status.replace("_", " ")} · {partner.sector}
+                        </div>
+                        <div className="muted" style={{ marginTop: 4 }}>
+                          {partner.last_seen_at
+                            ? `Seen ${new Date(partner.last_seen_at).toLocaleString("en-KE")}`
+                            : "No partner heartbeat yet"}
+                        </div>
+                        <div className="muted" style={{ marginTop: 4 }}>
+                          {partner.total_patterns} patterns · {partner.run_count ?? 0} runs
+                        </div>
                       </div>
-                      <div style={{ fontSize: "0.72rem", opacity: 0.7, marginTop: 4 }}>{agencyName(code)}</div>
-                      <div className="muted" style={{ marginTop: 6 }}>
-                        {partner
-                          ? `${partner.status.replace("_", " ")}${partner.last_seen_at ? ` · ${new Date(partner.last_seen_at).toLocaleDateString("en-KE")}` : ""}`
-                          : "Not registered"}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
 
             <div className="panel priority-stack">
@@ -568,10 +664,15 @@ export default function CentralCommand({
                     <div>
                       <h4 className="priority-card-title">{leadCorrelation.partner_count}-partner match</h4>
                       <p className="priority-card-copy">
-                        Hash {leadCorrelation.entity_key_hash.slice(0, 16)}… is shared by {leadCorrelation.partner_ids.join(", ")} at {leadCorrelation.max_confidence.toFixed(2)} max confidence.
+                        {correlationNarrative(leadCorrelation)} Shared across {leadPartnerNames} with {leadCorrelation.max_confidence.toFixed(2)} max confidence.
                       </p>
                     </div>
                     <span className={`risk-badge ${leadCorrelation.risk_level.toLowerCase()}`}>{leadCorrelation.risk_level}</span>
+                  </div>
+                  <div className="priority-card-actions">
+                    <button className="ghost" type="button" onClick={() => onNavigate("federation")}>
+                      Open Federation
+                    </button>
                   </div>
                 </div>
               ) : (
@@ -601,6 +702,75 @@ export default function CentralCommand({
                   ))}
                 </div>
               </div>
+            </div>
+          </div>
+
+          <div className="panel workflow-stage-panel" style={{ marginBottom: 16 }}>
+            <div className="panel-header">
+              <h3>Interactive federation demo</h3>
+              <span className="muted">Bring partner activity online from Command, then open the supporting screen</span>
+            </div>
+            <div className="workflow-summary-banner" style={{ marginBottom: 14 }}>
+              <div>
+                <strong>Step 1</strong>
+                <span className="muted">Pick a shared signal. This seeds partner telemetry and shared-warning correlation at the hub.</span>
+              </div>
+              <div>
+                <strong>Step 2</strong>
+                <span className="muted">Watch the agency coverage cards and the correlation count update here first.</span>
+              </div>
+              <div>
+                <strong>Step 3</strong>
+                <span className="muted">Then open Federation or the follow-up screen to show the local evidence behind the shared pattern.</span>
+              </div>
+            </div>
+
+            {networkStatus && (
+              <div className={`scenario-status scenario-status-${networkStatusTone}`} style={{ marginBottom: 14 }}>
+                {networkStatus}
+              </div>
+            )}
+
+            <div className="scenario-launcher-grid">
+              {federationScenarios.map((scenario) => (
+                <article key={scenario.id} className="scenario-card">
+                  <div className="scenario-card-head">
+                    <div>
+                      <p className="eyebrow" style={{ marginBottom: 6 }}>Command trigger</p>
+                      <h4>{scenario.label}</h4>
+                      <p className="muted" style={{ marginTop: 6 }}>{scenario.summary}</p>
+                    </div>
+                    <div className="scenario-card-icon">
+                      <Radio size={18} />
+                    </div>
+                  </div>
+                  <div className="scenario-screen-row">
+                    <span className="scenario-screen-chip">Updates Agency Network</span>
+                    <span className="scenario-screen-chip">Then {SCREEN_LABELS[scenario.followUpScreen]}</span>
+                  </div>
+                  <div className="scenario-detail-block">
+                    <strong>Command should show</strong>
+                    <p className="muted">{scenario.meaning}</p>
+                  </div>
+                  <div className="scenario-action-row">
+                    <button
+                      type="button"
+                      className="ghost"
+                      onClick={() => void handleFederationScenario(scenario)}
+                      disabled={networkBusyScenario != null}
+                    >
+                      {networkBusyScenario === scenario.id ? <Loader size={13} className="spin" /> : <Play size={13} />}
+                      &nbsp;Simulate now
+                    </button>
+                    <button type="button" className="ghost" onClick={() => onNavigate("federation")}>
+                      Open Federation
+                    </button>
+                    <button type="button" className="ghost" onClick={() => onNavigate(scenario.followUpScreen)}>
+                      Open {SCREEN_LABELS[scenario.followUpScreen]}
+                    </button>
+                  </div>
+                </article>
+              ))}
             </div>
           </div>
 

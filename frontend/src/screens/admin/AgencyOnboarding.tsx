@@ -2,11 +2,14 @@ import { useEffect, useState } from "react";
 import {
   Zap, CheckCircle, Loader, Copy, RefreshCw,
   Link2, Radio, Shield, Users, Globe, Info, AlertTriangle,
-  ChevronDown, ChevronUp, Terminal,
+  ChevronDown, ChevronUp, Terminal, Play,
 } from "lucide-react";
 import { apiCreateUser, apiListUsers } from "../../api/auth";
+import { startDemoScenario } from "../../api/ai";
 import { resolveApiBase } from "../../api/endpoints";
 import { registerFederationPartner, type PartnerRegistrationResult } from "../../api/federation";
+import type { ScreenId } from "../../app/navigation";
+import { DEMO_SCENARIOS, type DemoScenarioCard, type DemoScenarioId } from "../../demo/scenarios";
 import { KENYA_AGENCIES, agencyColor } from "../../types/auth";
 import type { AuthUser } from "../../types/auth";
 
@@ -24,6 +27,23 @@ const DEFAULT_TEST_PASSWORD = "Sentinel@Test2025!";
 
 // ── Connection method tabs ────────────────────────────────────────────────────
 type ConnTab = "ingest" | "federation" | "edge" | "scoping";
+
+type AgencyOnboardingProps = {
+  onNavigate?: (screen: ScreenId) => void;
+};
+
+const FEDERATION_DEMO_PARTNERS = [
+  { partner_id: "safaricom-ke", partner_name: "Safaricom PLC", partner_type: "telco" },
+  { partner_id: "kcb-bank-ke", partner_name: "KCB Bank Kenya", partner_type: "bank" },
+  { partner_id: "equity-bank-ke", partner_name: "Equity Bank Kenya", partner_type: "bank" },
+  { partner_id: "ke-cirt", partner_name: "KE-CIRT / National Response", partner_type: "government" },
+] as const;
+
+const FEDERATION_DEMO_IDS: DemoScenarioId[] = [
+  "federated_vpn",
+  "federated_sim_swap",
+  "federated_malware",
+];
 
 function copyText(text: string) {
   void navigator.clipboard.writeText(text);
@@ -58,7 +78,7 @@ interface AgencyRowState {
   password: string;
 }
 
-export default function AgencyOnboarding() {
+export default function AgencyOnboarding({ onNavigate }: AgencyOnboardingProps) {
   const [rows, setRows] = useState<AgencyRowState[]>(
     AGENCY_SPECS.map((s) => ({
       code: s.code, exists: false, user: null,
@@ -74,6 +94,12 @@ export default function AgencyOnboarding() {
   const [registering, setRegistering]   = useState(false);
   const [regResult, setRegResult]       = useState<PartnerRegistrationResult | null>(null);
   const [regError, setRegError]         = useState("");
+  const [demoPartnerBusy, setDemoPartnerBusy] = useState(false);
+  const [demoPartnerStatus, setDemoPartnerStatus] = useState<string | null>(null);
+  const [demoScenarioBusy, setDemoScenarioBusy] = useState<DemoScenarioId | null>(null);
+  const [demoScenarioStatus, setDemoScenarioStatus] = useState<string | null>(null);
+  const [demoScenarioTone, setDemoScenarioTone] = useState<"info" | "success" | "error">("info");
+  const federationScenarios = DEMO_SCENARIOS.filter((scenario) => FEDERATION_DEMO_IDS.includes(scenario.id));
 
   const load = async () => {
     setLoading(true);
@@ -153,6 +179,50 @@ export default function AgencyOnboarding() {
     }
   };
 
+  const handleRegisterDemoPartners = async () => {
+    setDemoPartnerBusy(true);
+    setDemoPartnerStatus(null);
+    const outcomes: string[] = [];
+    try {
+      for (const partner of FEDERATION_DEMO_PARTNERS) {
+        try {
+          await registerFederationPartner(partner);
+          outcomes.push(`${partner.partner_name} registered`);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          if (message.toLowerCase().includes("already registered")) {
+            outcomes.push(`${partner.partner_name} already present`);
+            continue;
+          }
+          throw err;
+        }
+      }
+      setDemoPartnerStatus(outcomes.join(" · "));
+    } catch (err) {
+      setDemoPartnerStatus(err instanceof Error ? err.message : "demo_partner_registration_failed");
+    } finally {
+      setDemoPartnerBusy(false);
+    }
+  };
+
+  const handleDemoScenario = async (scenario: DemoScenarioCard) => {
+    setDemoScenarioBusy(scenario.id);
+    setDemoScenarioStatus(null);
+    setDemoScenarioTone("info");
+    try {
+      const result = await startDemoScenario(scenario.id);
+      setDemoScenarioTone("success");
+      setDemoScenarioStatus(`${scenario.label} accepted. ${result.message ?? "Shared partner activity refreshed."}`);
+    } catch (err) {
+      setDemoScenarioTone("error");
+      setDemoScenarioStatus(
+        `${scenario.label} failed: ${err instanceof Error ? err.message : "scenario_start_failed"}`,
+      );
+    } finally {
+      setDemoScenarioBusy(null);
+    }
+  };
+
   const API_BASE = resolveApiBase() || "http://localhost:8000";
 
   return (
@@ -169,6 +239,93 @@ export default function AgencyOnboarding() {
         <button className="btn-ghost" onClick={() => void load()} disabled={loading}>
           {loading ? <Loader size={13} /> : <RefreshCw size={13} />} &nbsp;Refresh
         </button>
+      </div>
+
+      <div className="panel workflow-stage-panel" style={{ marginBottom: 16 }}>
+        <div className="panel-header">
+          <h3>Demo onboarding and federation controls</h3>
+          <span className="muted">Bring partners online, then simulate a shared national signal</span>
+        </div>
+        <div className="workflow-summary-banner" style={{ marginBottom: 14 }}>
+          <div>
+            <strong>1. Register demo partners</strong>
+            <span className="muted">Creates the bank, telco, and national-response partner roster used by the federation scenarios.</span>
+          </div>
+          <div>
+            <strong>2. Simulate a shared signal</strong>
+            <span className="muted">Use VPN, SIM-swap, or malware to make partner activity appear across the hub.</span>
+          </div>
+          <div>
+            <strong>3. Show the result</strong>
+            <span className="muted">Open Command Agency Network or Federation to show online partners and shared warning matches.</span>
+          </div>
+        </div>
+
+        <div className="scenario-action-row" style={{ marginBottom: 14, flexWrap: "wrap" }}>
+          <button type="button" className="btn-accent" onClick={() => void handleRegisterDemoPartners()} disabled={demoPartnerBusy}>
+            {demoPartnerBusy ? <Loader size={13} className="spin" /> : <Radio size={13} />}
+            &nbsp;Register demo federation partners
+          </button>
+          {onNavigate && (
+            <>
+              <button type="button" className="ghost" onClick={() => onNavigate("command")}>
+                Open Command
+              </button>
+              <button type="button" className="ghost" onClick={() => onNavigate("federation")}>
+                Open Federation
+              </button>
+            </>
+          )}
+        </div>
+
+        {demoPartnerStatus && (
+          <div className="scenario-status scenario-status-info" style={{ marginBottom: 14 }}>
+            {demoPartnerStatus}
+          </div>
+        )}
+
+        {demoScenarioStatus && (
+          <div className={`scenario-status scenario-status-${demoScenarioTone}`} style={{ marginBottom: 14 }}>
+            {demoScenarioStatus}
+          </div>
+        )}
+
+        <div className="scenario-launcher-grid">
+          {federationScenarios.map((scenario) => (
+            <article key={scenario.id} className="scenario-card">
+              <div className="scenario-card-head">
+                <div>
+                  <p className="eyebrow" style={{ marginBottom: 6 }}>Federation demo</p>
+                  <h4>{scenario.label}</h4>
+                  <p className="muted" style={{ marginTop: 6 }}>{scenario.summary}</p>
+                </div>
+                <div className="scenario-card-icon">
+                  <Globe size={18} />
+                </div>
+              </div>
+              <div className="scenario-detail-block">
+                <strong>Expected result</strong>
+                <p className="muted">{scenario.expectedOutput}</p>
+              </div>
+              <div className="scenario-action-row">
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={() => void handleDemoScenario(scenario)}
+                  disabled={demoScenarioBusy != null}
+                >
+                  {demoScenarioBusy === scenario.id ? <Loader size={13} className="spin" /> : <Play size={13} />}
+                  &nbsp;Simulate now
+                </button>
+                {onNavigate && (
+                  <button type="button" className="ghost" onClick={() => onNavigate("federation")}>
+                    Open Federation
+                  </button>
+                )}
+              </div>
+            </article>
+          ))}
+        </div>
       </div>
 
       {/* ════════════════════════════════════════════════

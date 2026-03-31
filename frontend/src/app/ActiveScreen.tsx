@@ -156,7 +156,7 @@ export default function ActiveScreen({
           onNavigate={(screen) => onNavigate(screen as ScreenId)}
         />
       )}
-      {activeScreen === "onboard" && manageUsers && <AgencyOnboarding />}
+      {activeScreen === "onboard" && manageUsers && <AgencyOnboarding onNavigate={onNavigate} />}
       {activeScreen === "users" && manageUsers && <UserManagement />}
 
       {activeScreen === "live" && (
@@ -269,7 +269,7 @@ export default function ActiveScreen({
       {activeScreen === "corruption" && (
         <CorruptionIntel data={operationsData} onRunLeakage={onRunLeakage} leakageActionLabel={leakageActionLabel} />
       )}
-      {activeScreen === "federation" && central && <FederationDashboard />}
+      {activeScreen === "federation" && central && <FederationDashboard onNavigate={onNavigate} />}
       {activeScreen === "federation" && !central && (
         <div className="panel">
           <div className="state-box">

@@ -73,6 +73,34 @@ test("federation screen loads from the system drawer", async ({ page }) => {
   await page.screenshot({ path: `${OUTPUT_DIR}/03-federation.png`, fullPage: true });
 });
 
+test("command agency network can trigger a shared federation scenario", async ({ page }) => {
+  await login(page);
+
+  await page.getByRole("button", { name: /agency network/i }).click();
+  await expect(page.getByRole("heading", { name: /interactive federation demo/i })).toBeVisible();
+
+  const vpnCard = page.locator(".scenario-card").filter({ hasText: /shared vpn exit across partners/i }).first();
+  await expect(vpnCard).toBeVisible();
+  await vpnCard.getByRole("button", { name: /simulate now/i }).click();
+
+  await expect(page.getByText(/shared vpn exit across partners accepted/i)).toBeVisible({ timeout: 20000 });
+  await expect(page.getByText(/equity-bank-ke, kcb-bank-ke, safaricom-ke/i)).toBeVisible({ timeout: 20000 });
+  await page.screenshot({ path: `${OUTPUT_DIR}/03b-command-network-federation.png`, fullPage: true });
+});
+
+test("agency onboarding exposes demo federation controls", async ({ page }) => {
+  await login(page);
+  await openSystemNav(page);
+
+  await page.getByRole("button", { name: /agency onboarding/i }).click();
+  await expect(page.getByRole("heading", { name: /agency onboarding/i })).toBeVisible();
+  await expect(page.getByRole("button", { name: /register demo federation partners/i })).toBeVisible();
+
+  await page.getByRole("button", { name: /register demo federation partners/i }).click();
+  await expect(page.getByText(/registered|already present/i)).toBeVisible({ timeout: 20000 });
+  await page.screenshot({ path: `${OUTPUT_DIR}/03c-agency-onboarding-demo-controls.png`, fullPage: true });
+});
+
 test("reports builder loads with export controls", async ({ page }) => {
   await login(page);
 
