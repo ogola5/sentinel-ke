@@ -155,6 +155,13 @@ export default function CentralCommand({
       : trustSummary?.overall_status === "fail"
         ? "var(--risk-critical)"
         : "var(--warning)";
+  const trustCheckCounts = (trustSummary?.checks ?? []).reduce(
+    (acc, check) => {
+      acc[check.status] += 1;
+      return acc;
+    },
+    { pass: 0, warn: 0, fail: 0 },
+  );
   const cyberGovernance = trustSummary?.model_governance?.find((item) => item.prediction_type === "risk_gnn") ?? null;
   const corruptionGovernance = trustSummary?.model_governance?.find((item) => item.prediction_type === "corruption_risk") ?? null;
   const hasPlatformHealth = Object.keys(healthPlatformStatus).length > 0;
@@ -277,7 +284,7 @@ export default function CentralCommand({
           <p className="eyebrow">C1</p>
           <h2>National Command Centre</h2>
           <p className="subtle">
-            National posture from agency signals, federation matches, and operational readiness.
+            National posture across cyber operations, public-sector integrity, sovereign federation, and operational readiness.
           </p>
         </div>
         <div className="screen-header-actions">
@@ -370,6 +377,45 @@ export default function CentralCommand({
                   </div>
                 </div>
               ))}
+            </div>
+          </div>
+
+          <div className="panel">
+            <div className="panel-header">
+              <h3>National value at a glance</h3>
+              <span className="muted">Why this matters beyond a single SOC</span>
+            </div>
+            <div className="story-rail story-rail-three">
+              <div className="story-card">
+                <p className="story-card-label">Cross-sector impact</p>
+                <h4>{campaignCountDisplay} cyber campaigns · {operationsData.integrityAlerts.length} integrity alerts</h4>
+                <p>One operating model spans public services, fraud-linked abuse patterns, and procurement review instead of isolated tools.</p>
+              </div>
+              <div className="story-card">
+                <p className="story-card-label">Sovereign control</p>
+                <h4>{federationSignedRequired ? "Signed federation enforced" : "Federation signing needs work"}</h4>
+                <p>{schemaContractOk ? "Schema controls are clean at the hub." : `${schemaMissingCount} schema gaps still need remediation.`} Agencies can share governed warning data without forcing raw-data centralization.</p>
+              </div>
+              <div className="story-card">
+                <p className="story-card-label">Deployment velocity</p>
+                <h4>{partners.length} partner links · {sectionUsers} agency users</h4>
+                <p>Connector-first onboarding means agencies plug existing systems into the workflow instead of rewriting their infrastructure.</p>
+              </div>
+              <div className="story-card">
+                <p className="story-card-label">Public trust</p>
+                <h4>{trustCheckCounts.pass} pass · {trustCheckCounts.warn} warn · {trustCheckCounts.fail} fail</h4>
+                <p>Evidence paths, human review, fairness gates, and explicit caveats are visible in the workflow instead of hidden behind a score.</p>
+              </div>
+              <div className="story-card">
+                <p className="story-card-label">Operator leverage</p>
+                <h4>{eventCountDisplay} events → {operationsData.metrics.anomalies} anomalies → {highRiskPredictions.length} review entities</h4>
+                <p>The platform compresses noisy volume into bounded queues and concrete actions, which is where the operational ROI starts.</p>
+              </div>
+              <div className="story-card">
+                <p className="story-card-label">Future-shaping direction</p>
+                <h4>{healthGnnLoaded ? "Graph AI live" : "Graph AI offline"} · {trustSummary?.action_readiness.active_webhooks ?? 0} active controls</h4>
+                <p>The same graph, GNN, evidence, and containment model can serve cyber defense, fraud response, and public-integrity operations.</p>
+              </div>
             </div>
           </div>
 

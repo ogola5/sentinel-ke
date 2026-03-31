@@ -1090,6 +1090,10 @@
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
+.story-rail.story-rail-three {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
 .visibility-card,
 .story-card {
   padding: 14px 14px 12px;
