@@ -12,6 +12,12 @@ if not DATABASE_URL:
 engine = create_engine(
     DATABASE_URL,
     pool_pre_ping=True,
+    pool_size=10,
+    max_overflow=20,
+    pool_timeout=30,
+    pool_recycle=300,
+    pool_reset_on_return="rollback",
+    connect_args={"options": "-c statement_timeout=30000"},
 )
 
 SessionLocal = sessionmaker(
@@ -24,5 +30,8 @@ def get_db() -> Session:
     db = SessionLocal()
     try:
         yield db
+    except Exception:
+        db.rollback()
+        raise
     finally:
         db.close()
