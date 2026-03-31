@@ -6,7 +6,10 @@ export type DemoScenarioId =
   | "vpn"
   | "sim_swap"
   | "ddos_vpn"
-  | "ddos_vpn_fraud";
+  | "ddos_vpn_fraud"
+  | "federated_vpn"
+  | "federated_sim_swap"
+  | "federated_malware";
 
 export type DemoScenarioCard = {
   id: DemoScenarioId;
@@ -79,6 +82,36 @@ export const DEMO_SCENARIOS: DemoScenarioCard[] = [
     expectedOutput: "Command shows broad pressure, multiple queues become active, and Reports can turn the current state into an evidence-backed brief.",
     meaning: "This proves the platform can hold multiple queues, not just one isolated attack story.",
     modelNote: "Use this to warm the environment. It is broader but less crisp than the single-scenario flows.",
+  },
+  {
+    id: "federated_vpn",
+    label: "Shared VPN exit across partners",
+    summary: "Replays the same VPN-style access infrastructure across KCB, Equity, and M-Pesa so the federation layer can show a shared national warning pattern.",
+    openScreen: "federation",
+    followUpScreen: "graph",
+    expectedOutput: "Federation shows one shared correlation across three partners, and Threat Graph shows the same access infrastructure touching more than one service path.",
+    meaning: "This proves Sentinel-KE can surface cross-agency infrastructure reuse without requiring any one agency to surrender raw data to the hub.",
+    modelNote: "Use this when you want to show sovereign, privacy-preserving correlation rather than a single-bank alert stream.",
+  },
+  {
+    id: "federated_sim_swap",
+    label: "Shared SIM-swap actor",
+    summary: "Replays one actor moving from telco SIM swap to bank access and wallet cashout so the platform shows a shared fraud chain across agencies.",
+    openScreen: "federation",
+    followUpScreen: "investigate",
+    expectedOutput: "Federation shows the same actor hash crossing Safaricom, Equity, and KCB, and Investigate explains why the linked phone or device was elevated.",
+    meaning: "This proves the system can connect telco, banking, and wallet warnings into one explainable fraud narrative rather than leaving each institution with a partial view.",
+    modelNote: "Use this to show cross-agency fraud reasoning. It is stronger than a single SIM-swap replay because the story spans multiple partner edges.",
+  },
+  {
+    id: "federated_malware",
+    label: "Shared malware IOC",
+    summary: "Replays the same malware / C2 infrastructure across KCB, Equity, and KE-CIRT so the hub can show national correlation from privacy-preserving edge signals.",
+    openScreen: "federation",
+    followUpScreen: "live",
+    expectedOutput: "Federation shows a shared malware correlation, and Live Feed shows DFIR finding events tied to the same IOC infrastructure across multiple services.",
+    meaning: "This proves Sentinel-KE can turn partner-local IOC sightings into a single national warning surface without centralizing raw endpoint data.",
+    modelNote: "Use this when judges ask how cyber intelligence can spill over from one institution to another in a sovereign way.",
   },
 ];
 

@@ -52,7 +52,19 @@ def _seed_corruption() -> dict:
 
 class DemoBootstrapRequest(BaseModel):
     domain: Literal["cyber", "corruption", "all"] = "all"
-    scenario: Literal["ddos", "malware", "vpn", "sim_swap", "fraud", "ddos_vpn", "ddos_vpn_fraud", "all"] = "ddos_vpn_fraud"
+    scenario: Literal[
+        "ddos",
+        "malware",
+        "vpn",
+        "sim_swap",
+        "fraud",
+        "ddos_vpn",
+        "ddos_vpn_fraud",
+        "federated_vpn",
+        "federated_sim_swap",
+        "federated_malware",
+        "all",
+    ] = "ddos_vpn_fraud"
     epochs: int = 40
     cyber_runs: int = 10
     corruption_runs: int = 10
@@ -214,6 +226,9 @@ def bootstrap_demo_environment(
       - fraud
       - ddos_vpn
       - ddos_vpn_fraud
+      - federated_vpn
+      - federated_sim_swap
+      - federated_malware
 
     Corruption domain:
       1. Seeds corruption graph snapshots

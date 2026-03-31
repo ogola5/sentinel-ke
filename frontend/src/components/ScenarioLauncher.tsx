@@ -20,9 +20,9 @@ type ScenarioLauncherProps = {
 
 const PRIMARY_SCENARIO_IDS: DemoScenarioId[] = [
   "ddos",
-  "malware",
-  "vpn",
-  "sim_swap",
+  "federated_vpn",
+  "federated_sim_swap",
+  "federated_malware",
   "ddos_vpn_fraud",
 ];
 
@@ -50,9 +50,9 @@ const SCREEN_LABELS: Record<ScreenId, string> = {
 
 function scenarioIcon(scenarioId: DemoScenarioId) {
   if (scenarioId === "ddos") return AlertTriangle;
-  if (scenarioId === "malware") return Bug;
-  if (scenarioId === "vpn") return Radar;
-  if (scenarioId === "sim_swap") return Smartphone;
+  if (scenarioId === "malware" || scenarioId === "federated_malware") return Bug;
+  if (scenarioId === "vpn" || scenarioId === "federated_vpn") return Radar;
+  if (scenarioId === "sim_swap" || scenarioId === "federated_sim_swap") return Smartphone;
   return ShieldAlert;
 }
 
@@ -125,7 +125,7 @@ export default function ScenarioLauncher({ onNavigate }: ScenarioLauncherProps) 
         </div>
         <div>
           <strong>Best use</strong>
-          <span className="muted">DDoS is the clearest end-to-end flow; malware and SIM swap remain bounded scenario lanes.</span>
+          <span className="muted">DDoS proves the operational loop. The federation scenarios prove why this matters nationally across banks, telco, and public response.</span>
         </div>
       </div>
 

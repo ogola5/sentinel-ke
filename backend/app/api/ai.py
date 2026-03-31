@@ -51,10 +51,14 @@ SCENARIO_ALIASES: dict[str, str] = {
 
 SCENARIO_LABELS: dict[str, str] = {
     "ddos": "Kenyan DDoS pressure",
+    "malware": "Shared malware / IOC pressure",
     "vpn": "VPN-style login reuse",
     "fraud": "SIM-swap / mobile-money fraud",
     "ddos_vpn": "DDoS + VPN blended pressure",
     "ddos_vpn_fraud": "Combined DDoS + VPN + SIM-swap pressure",
+    "federated_vpn": "Shared VPN exit across partners",
+    "federated_sim_swap": "Cross-agency SIM-swap actor",
+    "federated_malware": "Shared malware IOC across partners",
     "all": "Combined DDoS + VPN + SIM-swap pressure",
 }
 
@@ -129,6 +133,13 @@ def _scenario_sql_condition(scenario: str) -> str:
             event_type = 'LOGIN_EVENT'
             AND COALESCE(payload_json->>'provider', '') = 'demo-vpn'
         """,
+        "malware": """
+            event_type = 'DFIR_FINDING_EVENT'
+            AND (
+                COALESCE(anchors_json->>'ip', '') = '50.16.16.211'
+                OR COALESCE(anchors_json->>'domain', '') = 'update-checkin-control.net'
+            )
+        """,
         "fraud": """
             event_type = 'SIM_SWAP_EVENT'
             OR (
@@ -149,6 +160,38 @@ def _scenario_sql_condition(scenario: str) -> str:
                 event_type = 'LOGIN_EVENT'
                 AND COALESCE(payload_json->>'provider', '') = 'demo-vpn'
             )
+        """,
+        "federated_vpn": """
+            event_type = 'LOGIN_EVENT'
+            AND COALESCE(payload_json->>'provider', '') = 'demo-vpn'
+            AND COALESCE(anchors_json->>'service_id', '') IN ('kcb-bank-ke', 'equity-bank-ke', 'safaricom-mpesa')
+        """,
+        "federated_sim_swap": """
+            (
+                event_type = 'SIM_SWAP_EVENT'
+                AND COALESCE(anchors_json->>'phone_h', '') = '254700123456'
+            )
+            OR (
+                event_type = 'LOGIN_EVENT'
+                AND COALESCE(anchors_json->>'service_id', '') = 'equity-bank-ke'
+                AND COALESCE(anchors_json->>'device_id', '') = 'simswap-cross-01'
+            )
+            OR (
+                event_type = 'TRANSACTION_EVENT'
+                AND COALESCE(anchors_json->>'service_id', '') IN ('equity-bank-ke', 'safaricom-mpesa')
+                AND (
+                    COALESCE(anchors_json->>'account_h', '') IN ('EQ-ACC-8821', 'MPESA-WALLET-77')
+                    OR COALESCE(anchors_json->>'agent_id', '') = 'mpesa-agent-11'
+                )
+            )
+        """,
+        "federated_malware": """
+            event_type = 'DFIR_FINDING_EVENT'
+            AND (
+                COALESCE(anchors_json->>'ip', '') = '50.16.16.211'
+                OR COALESCE(anchors_json->>'domain', '') = 'update-checkin-control.net'
+            )
+            AND COALESCE(anchors_json->>'service_id', '') IN ('kcb-bank-ke', 'equity-bank-ke', 'ke-cirt-hub')
         """,
         "ddos_vpn_fraud": """
             event_type = 'DDOS_SIGNAL_EVENT'
@@ -190,12 +233,15 @@ def _scenario_sql_condition(scenario: str) -> str:
     if scenario not in conditions:
         raise HTTPException(
             status_code=400,
-            detail="invalid_scenario: use ddos, vpn, sim_swap, fraud, ddos_vpn, ddos_vpn_fraud, or all",
+            detail=(
+                "invalid_scenario: use ddos, malware, vpn, sim_swap, fraud, ddos_vpn, "
+                "ddos_vpn_fraud, federated_vpn, federated_sim_swap, federated_malware, or all"
+            ),
         )
     return conditions[scenario]
 
 
-def _scenario_component_scores(metrics: dict[str, float]) -> tuple[float, float, float]:
+def _scenario_component_scores(metrics: dict[str, float]) -> tuple[float, float, float, float]:
     ddos_score = min(
         100.0,
         metrics["ddos_count"] * 1.6
@@ -218,17 +264,31 @@ def _scenario_component_scores(metrics: dict[str, float]) -> tuple[float, float,
         + metrics["distinct_accounts"] * 7.0
         + metrics["distinct_devices"] * 4.0,
     )
-    return ddos_score, vpn_score, fraud_score
+    malware_score = min(
+        100.0,
+        metrics["dfir_count"] * 16.0
+        + metrics["distinct_ips"] * 9.0
+        + metrics["distinct_devices"] * 6.0,
+    )
+    return ddos_score, vpn_score, fraud_score, malware_score
 
 
 def _scenario_signal_score(scenario: str, metrics: dict[str, float]) -> float:
-    ddos_score, vpn_score, fraud_score = _scenario_component_scores(metrics)
+    ddos_score, vpn_score, fraud_score, malware_score = _scenario_component_scores(metrics)
     if scenario == "ddos":
         return ddos_score
+    if scenario == "malware":
+        return malware_score
     if scenario == "vpn":
         return vpn_score
     if scenario == "fraud":
         return fraud_score
+    if scenario == "federated_vpn":
+        return min(100.0, vpn_score * 0.75 + metrics["distinct_services"] * 8.0)
+    if scenario == "federated_sim_swap":
+        return min(100.0, fraud_score * 0.7 + metrics["distinct_services"] * 9.0)
+    if scenario == "federated_malware":
+        return min(100.0, malware_score * 0.78 + metrics["distinct_services"] * 8.0)
     if scenario == "ddos_vpn":
         return min(100.0, ddos_score * 0.58 + vpn_score * 0.42)
     return min(100.0, ddos_score * 0.36 + vpn_score * 0.24 + fraud_score * 0.40)
@@ -260,9 +320,11 @@ def _scenario_forecast_history(
             SUM(CASE WHEN event_type = 'LOGIN_EVENT' THEN 1 ELSE 0 END) AS login_count,
             SUM(CASE WHEN event_type = 'SIM_SWAP_EVENT' THEN 1 ELSE 0 END) AS sim_swap_count,
             SUM(CASE WHEN event_type = 'TRANSACTION_EVENT' THEN 1 ELSE 0 END) AS transaction_count,
+            SUM(CASE WHEN event_type = 'DFIR_FINDING_EVENT' THEN 1 ELSE 0 END) AS dfir_count,
             COUNT(DISTINCT NULLIF(anchors_json->>'ip', '')) AS distinct_ips,
             COUNT(DISTINCT NULLIF(anchors_json->>'device_id', '')) AS distinct_devices,
             COUNT(DISTINCT NULLIF(anchors_json->>'account_h', '')) AS distinct_accounts,
+            COUNT(DISTINCT NULLIF(anchors_json->>'service_id', '')) AS distinct_services,
             AVG(CASE WHEN event_type = 'DDOS_SIGNAL_EVENT' THEN NULLIF(payload_json->>'req_rate', '')::double precision END) AS avg_req_rate,
             AVG(CASE WHEN event_type = 'DDOS_SIGNAL_EVENT' THEN NULLIF(payload_json->>'avg_latency_ms', '')::double precision END) AS avg_latency_ms,
             AVG(CASE WHEN event_type = 'DDOS_SIGNAL_EVENT' THEN NULLIF(payload_json->>'error_rate', '')::double precision END) AS avg_error_rate
@@ -300,9 +362,11 @@ def _scenario_forecast_history(
             "login_count": float(row.get("login_count") or 0.0),
             "sim_swap_count": float(row.get("sim_swap_count") or 0.0),
             "transaction_count": float(row.get("transaction_count") or 0.0),
+            "dfir_count": float(row.get("dfir_count") or 0.0),
             "distinct_ips": float(row.get("distinct_ips") or 0.0),
             "distinct_devices": float(row.get("distinct_devices") or 0.0),
             "distinct_accounts": float(row.get("distinct_accounts") or 0.0),
+            "distinct_services": float(row.get("distinct_services") or 0.0),
             "avg_req_rate": float(row.get("avg_req_rate") or 0.0),
             "avg_latency_ms": float(row.get("avg_latency_ms") or 0.0),
             "avg_error_rate": float(row.get("avg_error_rate") or 0.0),
@@ -320,9 +384,11 @@ def _scenario_forecast_history(
                 "login_count": int(metrics["login_count"]),
                 "sim_swap_count": int(metrics["sim_swap_count"]),
                 "transaction_count": int(metrics["transaction_count"]),
+                "dfir_count": int(metrics["dfir_count"]),
                 "distinct_ips": int(metrics["distinct_ips"]),
                 "distinct_devices": int(metrics["distinct_devices"]),
                 "distinct_accounts": int(metrics["distinct_accounts"]),
+                "distinct_services": int(metrics["distinct_services"]),
             }
         )
     return history, {
@@ -2525,7 +2591,13 @@ def ai_risk_forecast(
 
 @router.get("/forecast/scenario")
 def ai_scenario_forecast(
-    scenario: str = Query(..., description="ddos, vpn, sim_swap, fraud, ddos_vpn, ddos_vpn_fraud, or all"),
+    scenario: str = Query(
+        ...,
+        description=(
+            "ddos, malware, vpn, sim_swap, fraud, ddos_vpn, ddos_vpn_fraud, "
+            "federated_vpn, federated_sim_swap, federated_malware, or all"
+        ),
+    ),
     lookback_hours: int = Query(default=48, ge=6, le=168, description="History window in hours"),
     horizon_hours: int = Query(default=24, ge=1, le=72, description="Forecast horizon in hours"),
     alpha: float = Query(default=0.3, ge=0.05, le=0.95, description="Level smoothing factor"),
@@ -2538,7 +2610,10 @@ def ai_scenario_forecast(
     if not label:
         raise HTTPException(
             status_code=400,
-            detail="invalid_scenario: use ddos, vpn, sim_swap, fraud, ddos_vpn, ddos_vpn_fraud, or all",
+            detail=(
+                "invalid_scenario: use ddos, malware, vpn, sim_swap, fraud, ddos_vpn, "
+                "ddos_vpn_fraud, federated_vpn, federated_sim_swap, federated_malware, or all"
+            ),
         )
 
     history, source_summary = _scenario_forecast_history(

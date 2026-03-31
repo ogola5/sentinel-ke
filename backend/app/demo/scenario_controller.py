@@ -28,17 +28,31 @@ def _normalize_scenario_name(scenario_name: str) -> str:
     return "fraud" if raw == "sim_swap" else raw
 
 
+VALID_SCENARIOS = [
+    "ddos",
+    "malware",
+    "vpn",
+    "sim_swap",
+    "fraud",
+    "ddos_vpn",
+    "ddos_vpn_fraud",
+    "federated_vpn",
+    "federated_sim_swap",
+    "federated_malware",
+    "all",
+]
+
+
 @router.post("/start/{scenario_name}")
 async def start_scenario(
     scenario_name: str,
     background_tasks: BackgroundTasks,
 ):
-    """Triggers a specific data scenario (ddos, malware, vpn, fraud)."""
+    """Triggers a specific data scenario through the canonical ingest path."""
     if not _demo_enabled():
         raise HTTPException(status_code=403, detail="demo_endpoints_disabled")
-    valid = ["ddos", "malware", "vpn", "sim_swap", "fraud", "ddos_vpn", "ddos_vpn_fraud", "all"]
-    if scenario_name not in valid:
-        raise HTTPException(status_code=400, detail=f"Invalid scenario. Use: {valid}")
+    if scenario_name not in VALID_SCENARIOS:
+        raise HTTPException(status_code=400, detail=f"Invalid scenario. Use: {VALID_SCENARIOS}")
 
     normalized = _normalize_scenario_name(scenario_name)
     background_tasks.add_task(run_demo, scenario=normalized, seed=True)
@@ -67,9 +81,8 @@ async def trigger_replay(
     """Replays the selected scenario through the canonical ingest path."""
     if not _demo_enabled():
         raise HTTPException(status_code=403, detail="demo_endpoints_disabled")
-    valid = ["ddos", "malware", "vpn", "sim_swap", "fraud", "ddos_vpn", "ddos_vpn_fraud", "all"]
-    if scenario_name not in valid:
-        raise HTTPException(status_code=400, detail=f"Invalid scenario. Use: {valid}")
+    if scenario_name not in VALID_SCENARIOS:
+        raise HTTPException(status_code=400, detail=f"Invalid scenario. Use: {VALID_SCENARIOS}")
     normalized = _normalize_scenario_name(scenario_name)
     background_tasks.add_task(run_demo, scenario=normalized, seed=False)
     return {
