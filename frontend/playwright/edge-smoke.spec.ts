@@ -38,8 +38,8 @@ test("edge node command to federation presentation path works", async ({ page })
   await page.screenshot({ path: `${OUTPUT_DIR}/12-edge-gnn.png`, fullPage: true });
 
   await page.locator("aside").getByRole("button", { name: /s3 investigate/i }).click();
-  await expect(page.getByRole("heading", { name: /entity investigation/i })).toBeVisible();
-  await page.getByPlaceholder("ip:…, account_h:…, service_id:…").fill(EDGE_ENTITY);
+  await expect(page.getByRole("heading", { name: /cyber threat analysis|fraud-chain analysis|integrity risk analysis/i })).toBeVisible();
+  await page.getByPlaceholder("ip:50.16.16.211, service_id:ecitizen, account_h:…, domain:…").fill(EDGE_ENTITY);
   await page.getByRole("main").getByRole("button", { name: /^investigate$/i }).click();
   await expect(page.getByText(`Entity: ${EDGE_ENTITY}`)).toBeVisible();
   await page.screenshot({ path: `${OUTPUT_DIR}/13-edge-investigate.png`, fullPage: true });

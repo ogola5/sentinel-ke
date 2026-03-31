@@ -427,8 +427,8 @@ export default function DefenseCenter({ principal }: { principal: Principal }) {
             )}
             {selectedAction?.delivery_mode === "webhook" && matchingHooks.length === 0 && (
               <div className="defense-state-banner" style={{ marginTop: 12 }}>
-                <strong>No matching webhook is registered for this action</strong>
-                <p>The action can still be staged, but last-mile dispatch is not proven until a matching active webhook exists for this section and action type.</p>
+                <strong>No active control endpoint is registered for this action</strong>
+                <p>The action can still be recorded in Sentinel-KE, but partner-side delivery remains pending until a matching active webhook exists for this section and action type.</p>
               </div>
             )}
             <div className="defense-compose-actions">
@@ -437,7 +437,7 @@ export default function DefenseCenter({ principal }: { principal: Principal }) {
                 disabled={!selectedRun || !targetInput.trim()}
                 onClick={() => setConfirm({ open: true, runId: selectedRun, actionType: actionTypeInput, target: targetInput.trim() })}
               >
-                <ShieldAlert size={13} /> &nbsp;Execute
+                <ShieldAlert size={13} /> &nbsp;{selectedAction?.delivery_mode === "webhook" && matchingHooks.length === 0 ? "Record action" : "Execute"}
               </button>
             </div>
           </div>

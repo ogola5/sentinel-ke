@@ -78,7 +78,7 @@ export default function LoginScreen({ onLogin }: Props) {
     fraud: {
       title: "Fraud and financial risk",
       summary: "Track SIM swap chains, mule movement, mobile-money abuse, and high-risk transaction narratives in one loop.",
-      bullets: ["Scenario simulation and short-horizon forecasting", "Analyst feedback improves future training", "Shared workflow across cyber and fraud teams"],
+      bullets: ["Operational replay and short-horizon forecasting", "Analyst feedback improves future training", "Shared workflow across cyber and fraud teams"],
       icon: <Workflow size={18} />,
     },
     federation: {

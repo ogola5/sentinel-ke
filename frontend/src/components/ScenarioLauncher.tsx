@@ -110,13 +110,13 @@ export default function ScenarioLauncher({ onNavigate }: ScenarioLauncherProps) 
   return (
     <div className="panel workflow-stage-panel scenario-launcher-panel">
       <div className="panel-header">
-        <h3>Scenario launcher</h3>
-        <span className="muted">Run scenarios from the workspace instead of the terminal</span>
+        <h3>Operational signal launcher</h3>
+        <span className="muted">Trigger operational scenarios from the workspace instead of the terminal</span>
       </div>
 
       <div className="workflow-summary-banner" style={{ marginBottom: 14 }}>
         <div>
-          <strong>Launch now</strong>
+          <strong>Activate now</strong>
           <span className="muted">Triggers the backend replay path and opens the strongest first screen.</span>
         </div>
         <div>
@@ -178,7 +178,7 @@ export default function ScenarioLauncher({ onNavigate }: ScenarioLauncherProps) 
               <div className="scenario-action-row">
                 <button type="button" className="ghost" onClick={() => void runScenario(scenario)} disabled={disabled}>
                   {launching ? <Loader size={13} className="spin" /> : <Play size={13} />}
-                  &nbsp;Launch now
+                  &nbsp;Activate now
                 </button>
                 <button type="button" className="btn-train-cyber" onClick={() => void bootstrapScenario(scenario)} disabled={disabled}>
                   {bootstrapping ? <Loader size={13} className="spin" /> : <Database size={13} />}

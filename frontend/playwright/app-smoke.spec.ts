@@ -77,26 +77,26 @@ test("command agency network can trigger a shared federation scenario", async ({
   await login(page);
 
   await page.getByRole("button", { name: /agency network/i }).click();
-  await expect(page.getByRole("heading", { name: /interactive federation demo/i })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /interactive federation controls/i })).toBeVisible();
 
   const vpnCard = page.locator(".scenario-card").filter({ hasText: /shared vpn exit across partners/i }).first();
   await expect(vpnCard).toBeVisible();
-  await vpnCard.getByRole("button", { name: /simulate now/i }).click();
+  await vpnCard.getByRole("button", { name: /activate now/i }).click();
 
   await expect(page.getByText(/shared vpn exit across partners accepted/i)).toBeVisible({ timeout: 20000 });
   await expect(page.getByText(/equity-bank-ke, kcb-bank-ke, safaricom-ke/i)).toBeVisible({ timeout: 20000 });
   await page.screenshot({ path: `${OUTPUT_DIR}/03b-command-network-federation.png`, fullPage: true });
 });
 
-test("agency onboarding exposes demo federation controls", async ({ page }) => {
+test("agency onboarding exposes federation controls", async ({ page }) => {
   await login(page);
   await openSystemNav(page);
 
   await page.getByRole("button", { name: /agency onboarding/i }).click();
   await expect(page.getByRole("heading", { name: /agency onboarding/i })).toBeVisible();
-  await expect(page.getByRole("button", { name: /register demo federation partners/i })).toBeVisible();
+  await expect(page.getByRole("button", { name: /register federation partners/i })).toBeVisible();
 
-  await page.getByRole("button", { name: /register demo federation partners/i }).click();
+  await page.getByRole("button", { name: /register federation partners/i }).click();
   await expect(page.getByText(/registered|already present/i)).toBeVisible({ timeout: 20000 });
   await page.screenshot({ path: `${OUTPUT_DIR}/03c-agency-onboarding-demo-controls.png`, fullPage: true });
 });
@@ -135,6 +135,21 @@ test("live feed opens and shows event detail workflow", async ({ page }) => {
   await firstQueueEvent.click();
   await expect(page.getByText("Event hash", { exact: true })).toBeVisible();
   await page.screenshot({ path: `${OUTPUT_DIR}/06-live-feed-detail.png`, fullPage: true });
+});
+
+test("investigate screen shows analysis provenance and graph context", async ({ page }) => {
+  await login(page);
+
+  await page.locator("aside").getByRole("button", { name: /^s3 investigate$/i }).click();
+  await expect(page.getByRole("heading", { name: /cyber threat analysis|fraud-chain analysis|integrity risk analysis/i })).toBeVisible();
+  await page.getByPlaceholder("ip:50.16.16.211, service_id:ecitizen, account_h:…, domain:…").fill("ip:50.16.16.211");
+  await page.getByRole("main").getByRole("button", { name: /^investigate$/i }).click();
+
+  await expect(page.getByText(/ai detection rationale/i)).toBeVisible({ timeout: 20000 });
+  await expect(page.getByText(/analysis sources/i)).toBeVisible();
+  await expect(page.getByText(/graph, telemetry, and campaign context/i)).toBeVisible();
+  await expect(page.getByText(/inference provenance/i)).toBeVisible();
+  await page.screenshot({ path: `${OUTPUT_DIR}/06b-investigate-analysis.png`, fullPage: true });
 });
 
 test("campaigns and threat graph render from the analyst workflow", async ({ page }) => {

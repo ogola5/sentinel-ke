@@ -707,7 +707,7 @@ export default function CentralCommand({
 
           <div className="panel workflow-stage-panel" style={{ marginBottom: 16 }}>
             <div className="panel-header">
-              <h3>Interactive federation demo</h3>
+              <h3>Interactive federation controls</h3>
               <span className="muted">Bring partner activity online from Command, then open the supporting screen</span>
             </div>
             <div className="workflow-summary-banner" style={{ marginBottom: 14 }}>
@@ -760,7 +760,7 @@ export default function CentralCommand({
                       disabled={networkBusyScenario != null}
                     >
                       {networkBusyScenario === scenario.id ? <Loader size={13} className="spin" /> : <Play size={13} />}
-                      &nbsp;Simulate now
+                      &nbsp;Activate now
                     </button>
                     <button type="button" className="ghost" onClick={() => onNavigate("federation")}>
                       Open Federation

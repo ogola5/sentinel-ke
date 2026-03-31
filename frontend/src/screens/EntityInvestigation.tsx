@@ -176,9 +176,122 @@ function containmentReadinessMessage(
   }
   const matching = webhooks.filter((item) => item.is_active && item.action_type === actionType);
   if (matching.length === 0) {
-    return `No active ${actionType} webhook is registered right now. The action can be recorded, but no partner-side delivery will fire until a webhook is configured.`;
+    return `No active ${actionType} control endpoint is registered right now. The action can still be recorded, but partner-side delivery remains pending until a webhook is configured.`;
   }
   return `${matching.length} active ${actionType} webhook${matching.length === 1 ? "" : "s"} can currently receive this action.`;
+}
+
+const REASON_CODE_EXPLANATIONS: Record<string, string> = {
+  ABOVE_ENTITY_THRESHOLD: "This entity crossed the calibrated alert threshold for its type in the current scoring window.",
+  CAMPAIGN_LINKED: "The graph links this entity to an active campaign or risky cluster rather than a one-off event.",
+  EVENT_VOLUME_HIGH: "The score is supported by repeated observations or dense telemetry, not a single isolated hit.",
+  GNN_RISK_ELEVATED: "The GNN found elevated risk in the surrounding graph neighborhood and linked entity structure.",
+  RISK_INDICATOR_ONLY_NOT_FINAL_PROOF: "This is an investigative signal for analyst prioritisation, not standalone proof.",
+  VPN_INFRA_REUSE: "The entity overlaps with VPN or masking-infrastructure reuse patterns seen elsewhere in the graph.",
+  THREAT_INTEL_HIT: "Threat-intelligence or IOC evidence currently references this entity.",
+  MALWARE_INDICATOR: "The entity matches malware-associated telemetry or curated indicator evidence.",
+  HIGH_FRACTION_FLAGGED: "A large share of linked nodes in this graph component were also flagged as risky.",
+  HAS_CRITICAL_ENTITY_SIGNAL: "A critical signal exists within the same connected graph component.",
+  DISCOVERED_FROM_GRAPH_COMPONENT: "The entity was surfaced through graph expansion from another risky node.",
+  SIM_SWAP_FRAUD_CHAIN: "This entity is part of a SIM-swap-to-fraud progression rather than a single isolated event.",
+  ACCOUNT_TAKEOVER_SIGNAL: "The observed pattern is consistent with account-takeover pressure.",
+  PHISHING_ATO_CHAIN: "The graph links phishing activity to likely downstream account takeover.",
+  CREDENTIAL_HARVEST_THEN_FRAUD: "The telemetry suggests credential collection followed by fraud progression.",
+  RECON_BEFORE_DDOS: "The entity appears in reconnaissance activity that preceded service-pressure signals.",
+  STAGED_ATTACK_PROGRESSION: "The sequence looks staged across multiple phases rather than accidental overlap.",
+  VULN_EXPLOIT_DATA_ACCESS: "The signal suggests vulnerability exploitation with downstream data-access risk.",
+  POST_EXPLOITATION_SIGNAL: "The entity appears in post-compromise activity rather than initial probing only.",
+  CREDENTIAL_STUFFING_PRECEDES_SIM_SWAP: "The signal chain suggests login pressure before SIM-swap activity.",
+  WAF_BYPASS_RISK: "Traffic patterns suggest attempts to get around existing WAF controls.",
+  WAF_UNDER_PRESSURE: "The service is under enough web-attack pressure to justify containment review.",
+  WEB_ATTACK_VOLUME_HIGH: "The service is seeing sustained hostile web activity rather than a routine background scan.",
+  BEC_SIGNAL_SURGE: "Business-email-compromise indicators rose sharply in the current window.",
+};
+
+function formatTimestamp(value?: string | null): string {
+  if (!value) return "—";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value;
+  return parsed.toLocaleString("en-KE", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function humanizeCode(value: string): string {
+  return value
+    .toLowerCase()
+    .split("_")
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ")
+    .replace(/\bGnn\b/g, "GNN")
+    .replace(/\bAi\b/g, "AI")
+    .replace(/\bIoc\b/g, "IOC")
+    .replace(/\bDns\b/g, "DNS")
+    .replace(/\bDdos\b/g, "DDoS")
+    .replace(/\bVpn\b/g, "VPN")
+    .replace(/\bAto\b/g, "ATO");
+}
+
+function reasonCodeDetail(code: string): string {
+  return REASON_CODE_EXPLANATIONS[code] ?? `${humanizeCode(code)} contributed to the current risk assessment.`;
+}
+
+function decisionSourceLabel(source?: string | null): string {
+  if (source === "gnn") return "GNN inference";
+  if (source === "heuristic") return "Heuristic fallback";
+  if (source === "blocked") return "Inference blocked by governance guard";
+  return source ? humanizeCode(source) : "Unknown inference source";
+}
+
+function killChainLabel(stage?: string | null): string {
+  if (!stage) return "Unspecified";
+  return humanizeCode(stage);
+}
+
+function confidenceDescriptor(value?: number | null): string {
+  const confidence = Number(value ?? 0);
+  if (confidence >= 0.9) return "High-confidence inference";
+  if (confidence >= 0.75) return "Solid confidence";
+  if (confidence >= 0.55) return "Moderate confidence";
+  return "Low-confidence inference";
+}
+
+function uncertaintyDescriptor(value?: number | null): string {
+  const uncertainty = Number(value ?? 0);
+  if (uncertainty <= 0.15) return "Low uncertainty";
+  if (uncertainty <= 0.35) return "Moderate uncertainty";
+  return "High uncertainty";
+}
+
+function investigationProfile(entityKey: string | null, predictionType?: string | null): {
+  title: string;
+  noun: string;
+  subtitle: string;
+} {
+  if (predictionType === "corruption_risk") {
+    return {
+      title: "Integrity Risk Analysis",
+      noun: "integrity risk",
+      subtitle: "Read procurement, payment, and graph-linked review pressure before escalation.",
+    };
+  }
+  const family = entityKey ? entityFamily(entityKey) : "";
+  if (["account_h", "phone_h", "agent_id", "person_h"].includes(family)) {
+    return {
+      title: "Fraud-Chain Analysis",
+      noun: "fraud-chain risk",
+      subtitle: "Read transaction progression, linked accounts, and control readiness before intervention.",
+    };
+  }
+  return {
+    title: "Cyber Threat Analysis",
+    noun: "cyber risk",
+    subtitle: "Read telemetry, graph evidence, ATT&CK context, and bounded control readiness together.",
+  };
 }
 
 export default function EntityInvestigation({ initialEntityKey, analystId, principal }: InvestigationProps) {
@@ -214,6 +327,10 @@ export default function EntityInvestigation({ initialEntityKey, analystId, princ
   const containmentSectionCode = useMemo(
     () => suggestedContainmentSection(entityKey, principal),
     [entityKey, principal],
+  );
+  const analysisProfile = useMemo(
+    () => investigationProfile(entityKey, prediction?.prediction_type),
+    [entityKey, prediction?.prediction_type],
   );
 
   useEffect(() => {
@@ -431,6 +548,7 @@ export default function EntityInvestigation({ initialEntityKey, analystId, princ
     const reasons = (explanation?.reason_codes ?? prediction.reason_codes ?? []).slice(0, 3);
     const evidenceCount = explanation?.evidence_hashes?.length ?? 0;
     const toolCount = toolAttribution?.summary?.tool_count ?? toolAttribution?.tools?.length ?? 0;
+    const techniqueCount = toolAttribution?.techniques?.length ?? 0;
     const brief = trustSummary?.operator_brief;
     const operatorDecision = brief?.operator_decision;
     const graphMeaning = brief?.graph_meaning;
@@ -438,20 +556,19 @@ export default function EntityInvestigation({ initialEntityKey, analystId, princ
     const containmentReadiness = brief?.containment_readiness;
 
     return [
-      `${entityKey} is currently ${riskSeverityLabel(prediction.score).toLowerCase()} risk at ${formatRiskScore(prediction.score)} / 100.`,
+      brief?.headline ?? `${entityKey} is currently assessed as ${riskSeverityLabel(prediction.score).toLowerCase()} ${analysisProfile.noun} at ${formatRiskScore(prediction.score)} / 100.`,
       operatorDecision ?? null,
-      prediction.kill_chain_stage ? `The current kill-chain stage is ${prediction.kill_chain_stage}.` : null,
-      reasons.length > 0 ? `Main reasons: ${reasons.join(", ").toLowerCase().replaceAll("_", " ")}.` : null,
+      prediction.kill_chain_stage ? `Kill-chain stage: ${killChainLabel(prediction.kill_chain_stage)}.` : null,
+      reasons.length > 0 ? `Model drivers: ${reasons.map(humanizeCode).join(", ")}.` : null,
       graphMeaning ?? null,
-      evidenceCount > 0 ? `${evidenceCount} supporting evidence record(s) are attached to the explanation.` : null,
-      toolCount > 0 ? `${toolCount} likely attacker tool mapping(s) are currently attached.` : null,
+      evidenceCount > 0 ? `${evidenceCount} supporting evidence hash(es) and ${explanation?.evidence_paths?.length ?? 0} graph path(s) are attached to the explanation.` : null,
+      toolCount > 0 || techniqueCount > 0 ? `${toolCount} inferred tool mapping(s) and ${techniqueCount} ATT&CK technique hit(s) are attached.` : null,
       dataRealism ?? null,
       containmentReadiness ?? null,
-      "This risk score is an investigative signal for analyst prioritisation. Legal enforcement requires forensic corroboration.",
+      "This score is an investigative signal for analyst prioritisation. Formal escalation still requires corroborating evidence and operator judgement.",
     ].filter(Boolean).join(" ");
-  }, [entityKey, explanation, prediction, toolAttribution, trustSummary]);
+  }, [analysisProfile.noun, entityKey, explanation, prediction, toolAttribution, trustSummary]);
 
-  const predictionScore = clampRiskPercent(prediction?.score);
   const pathScoreValue = clampRiskPercent(pathScore?.path_score);
   const fusedScoreValue = clampRiskPercent(fusion?.fused_score);
   const uncertaintyValue = Math.max(0, Math.min(100, (prediction?.uncertainty ?? 0) * 100));
@@ -474,32 +591,72 @@ export default function EntityInvestigation({ initialEntityKey, analystId, princ
   const actionHookCount = activeWebhooks.filter((item) => item.action_type === actionType).length;
   const selectedAction = actionCatalog.find((item) => item.key === actionType) ?? actionCatalog[0] ?? DEFAULT_DEFENSE_ACTIONS[0];
   const primaryReasons = (explanation?.reason_codes ?? prediction?.reason_codes ?? []).slice(0, 4);
+  const reasonInsights = primaryReasons.map((code) => ({
+    code,
+    label: humanizeCode(code),
+    detail: reasonCodeDetail(code),
+  }));
   const recommendedControls = explanation?.recommended_controls ?? [];
   const leadingNextActions = trustBrief?.next_actions.slice(0, 2) ?? [];
   const leadingWhyItMatters = trustBrief?.why_it_matters.slice(0, 2) ?? [];
   const parentEntityKey = preferredParentEntityKey(entityKey);
+  const techniqueCount = trustSummary?.evidence_summary?.technique_count ?? toolAttribution?.techniques?.length ?? 0;
+  const toolCount = trustSummary?.evidence_summary?.tool_count ?? toolAttribution?.tools?.length ?? 0;
+  const topTechnique = toolAttribution?.summary?.top_tactic ? humanizeCode(toolAttribution.summary.top_tactic) : null;
+  const confidenceSummary = confidenceDescriptor(prediction?.confidence);
+  const uncertaintySummary = uncertaintyDescriptor(prediction?.uncertainty);
+  const governance = trustSummary?.governance;
+  const provenance = governance?.provenance ?? {};
+  const realRatio = typeof provenance.real_ratio === "number" ? provenance.real_ratio : null;
+  const avgRealSignalRatio = typeof provenance.avg_real_signal_ratio === "number" ? provenance.avg_real_signal_ratio : null;
+  const analysisSources = [
+    {
+      title: "Prediction record",
+      detail: `${decisionSourceLabel(prediction?.decision_source)} from model ${prediction?.model_version ?? "—"} in window ${formatTimestamp(prediction?.window_end ?? prediction?.created_at)}.`,
+    },
+    {
+      title: "Explanation artifact",
+      detail: explanation
+        ? `${(explanation.reason_codes ?? []).length} reason code(s), ${explanation.evidence_hashes?.length ?? 0} evidence hash(es), method ${humanizeCode(explanation.explanation_method ?? "model_explanation")}.`
+        : "No explanation artifact is attached yet; the screen is currently relying on the raw prediction record.",
+    },
+    {
+      title: "Graph context",
+      detail: pathScore
+        ? `Path score ${formatRiskScore(pathScore.path_score)} / 100 across ${pathScore.hop_count ?? 0} hop(s), with ${liveGraph?.neighbours?.length ?? 0} live neighbour(s) visible.`
+        : `${liveGraph?.neighbours?.length ?? 0} live neighbour(s) are visible, but the scored graph-path artifact is not attached yet.`,
+    },
+    {
+      title: "Campaign and tradecraft",
+      detail: `${trustSummary?.linked_campaigns?.length ?? 0} linked campaign(s), ${techniqueCount} ATT&CK technique hit(s), and ${toolCount} inferred tool mapping(s) currently enrich this entity.`,
+    },
+    {
+      title: "Governance state",
+      detail: `Real-data gate ${governance?.real_data_gate_passed ? "passed" : "warning"}, fairness ${String(governance?.fairness_status ?? "unknown")}, drift ${String(governance?.drift_status ?? "unknown")}.`,
+    },
+  ];
 
   return (
     <section className="screen">
       <div className="screen-header">
         <div>
           <p className="eyebrow">S3</p>
-          <h2>Entity Investigation</h2>
+          <h2>{analysisProfile.title}</h2>
           <p className="subtle">
-            Trace one entity from model score to analyst decision and controlled action.
+            {analysisProfile.subtitle}
           </p>
         </div>
       </div>
 
       <ArchitectureFlow
-        label="Decision flow"
-        title="How one entity moves through the platform"
-        summary="Use this page to explain a single entity clearly, record analyst judgment, then act or export."
+        label="Analytic flow"
+        title="How one entity moves from model output to operator action"
+        summary="Use this page to explain the signal, inspect graph and telemetry evidence, then record judgement or route a bounded control."
         steps={[
-          { stage: "Entity", title: "Choose one real key", detail: "Search a concrete IP, service, account, or procurement entity.", tone: "info" },
-          { stage: "Evidence", title: "Read paths and reasons", detail: "Check score, graph paths, and backend trust signals together.", tone: "accent" },
-          { stage: "Decision", title: "Apply analyst judgment", detail: "Mark malicious, benign, or uncertain before escalation.", tone: "warning" },
-          { stage: "Action", title: "Contain or export", detail: "Use bounded response and verify delivery or report output.", tone: "danger" },
+          { stage: "Entity", title: "Choose one scored key", detail: "Search a concrete IP, service, account, domain, or procurement node that the platform can actually score.", tone: "info" },
+          { stage: "Analysis", title: "Read model and graph context", detail: "Review reason codes, graph evidence, tradecraft, and governance posture together.", tone: "accent" },
+          { stage: "Judgement", title: "Record analyst adjudication", detail: "Mark malicious, benign, or uncertain before external escalation.", tone: "warning" },
+          { stage: "Response", title: "Route bounded control", detail: "Record or execute containment, then verify delivery state and report output.", tone: "danger" },
         ]}
       />
 
@@ -511,7 +668,7 @@ export default function EntityInvestigation({ initialEntityKey, analystId, princ
               ref={inputRef}
               className="search"
               style={{ paddingLeft: 34 }}
-              placeholder="ip:…, account_h:…, service_id:…"
+              placeholder="ip:50.16.16.211, service_id:ecitizen, account_h:…, domain:…"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               onKeyDown={(event) => {
@@ -616,13 +773,13 @@ export default function EntityInvestigation({ initialEntityKey, analystId, princ
         <>
           <div className="focus-layout">
             <div className={`panel focus-hero ${prediction.score >= 85 ? "focus-hero-danger" : prediction.score >= 60 ? "focus-hero-warning" : "focus-hero-accent"}`}>
-              <p className="focus-kicker">Entity briefing</p>
+              <p className="focus-kicker">{analysisProfile.title}</p>
               <p className="focus-value">{formatRiskScore(prediction.score)} / 100</p>
               <p className="focus-copy">{summaryText}</p>
               <div className="focus-stat-grid">
                 <div className="focus-stat-card">
-                  <div className="focus-stat-label">Risk</div>
-                  <div className="focus-stat-value">{formatRiskScore(predictionScore)}</div>
+                  <div className="focus-stat-label">Confidence</div>
+                  <div className="focus-stat-value">{prediction.confidence != null ? `${Math.round(prediction.confidence * 100)}%` : "—"}</div>
                 </div>
                 <div className="focus-stat-card">
                   <div className="focus-stat-label">Uncertainty</div>
@@ -639,22 +796,23 @@ export default function EntityInvestigation({ initialEntityKey, analystId, princ
               </div>
               <div className="chip-row" style={{ marginTop: 16 }}>
                 <span className="chip">Entity: {prediction.entity_key}</span>
-                <span className="chip">Prediction: {prediction.prediction_type}</span>
-                <span className="chip">Stage: {prediction.kill_chain_stage ?? "—"}</span>
+                <span className="chip">Inference: {decisionSourceLabel(prediction.decision_source)}</span>
+                <span className="chip">Kill chain: {killChainLabel(prediction.kill_chain_stage)}</span>
+                <span className="chip">Window: {formatTimestamp(prediction.window_end ?? prediction.created_at)}</span>
                 <span className="chip">Model: {prediction.model_version ?? "—"}</span>
               </div>
             </div>
 
             <div className="panel priority-stack">
               <div className="panel-header">
-                <h3>Primary decision</h3>
+                <h3>Operator action board</h3>
                 <span className="muted">{actionHookCount} matching active hooks</span>
               </div>
 
               <div className="priority-card">
                 <div className="priority-card-head">
                   <div>
-                    <h4 className="priority-card-title">Recommended posture</h4>
+                    <h4 className="priority-card-title">Threat posture</h4>
                     <p className="priority-card-copy">{trustBrief?.operator_decision ?? "Review the evidence chain before acting."}</p>
                   </div>
                   <span className={`risk-badge ${riskSeverityLabel(prediction.score).toLowerCase()}`}>
@@ -682,7 +840,54 @@ export default function EntityInvestigation({ initialEntityKey, analystId, princ
               <div className="priority-card">
                 <div className="priority-card-head">
                   <div>
-                    <h4 className="priority-card-title">Analyst review</h4>
+                    <h4 className="priority-card-title">Inference provenance</h4>
+                    <p className="priority-card-copy">
+                      This assessment is derived from the prediction record, explanation artifact, graph context, and current governance state.
+                    </p>
+                  </div>
+                  <Sparkles size={16} color="var(--accent)" />
+                </div>
+                <div className="list" style={{ marginTop: 12 }}>
+                  <div className="list-item">
+                    <strong>Decision source</strong>
+                    <p className="muted" style={{ marginTop: 4 }}>
+                      {decisionSourceLabel(prediction.decision_source)} · {confidenceSummary} · {uncertaintySummary}
+                    </p>
+                  </div>
+                  <div className="list-item">
+                    <strong>Collection window</strong>
+                    <p className="muted" style={{ marginTop: 4 }}>
+                      Window end {formatTimestamp(prediction.window_end ?? prediction.created_at)} · kill chain {killChainLabel(prediction.kill_chain_stage)}
+                    </p>
+                  </div>
+                  <div className="list-item">
+                    <strong>Top model signal</strong>
+                    <p className="muted" style={{ marginTop: 4 }}>
+                      {humanizeCode(explanation?.top_feature ?? prediction.top_feature ?? "signal_not_attached")}
+                    </p>
+                  </div>
+                  <div className="list-item">
+                    <strong>Governance state</strong>
+                    <p className="muted" style={{ marginTop: 4 }}>
+                      Real-data gate {governance?.real_data_gate_passed ? "passed" : "warning"} · fairness {String(governance?.fairness_status ?? "unknown")} · drift {String(governance?.drift_status ?? "unknown")}
+                    </p>
+                  </div>
+                  {(realRatio != null || avgRealSignalRatio != null) && (
+                    <div className="list-item">
+                      <strong>Data realism</strong>
+                      <p className="muted" style={{ marginTop: 4 }}>
+                        {realRatio != null ? `Real-signal ratio ${Math.round(realRatio * 100)}%` : "Real-signal ratio unavailable"}
+                        {avgRealSignalRatio != null ? ` · average per-node real coverage ${Math.round(avgRealSignalRatio * 100)}%` : ""}
+                      </p>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="priority-card">
+                <div className="priority-card-head">
+                  <div>
+                    <h4 className="priority-card-title">Analyst adjudication</h4>
                     <p className="priority-card-copy">
                       {trustSummary?.feedback?.latest_label != null
                         ? `Latest review ${trustSummary.feedback.latest_label} · ${trustSummary.feedback.latest_status ?? "recorded"}`
@@ -715,7 +920,7 @@ export default function EntityInvestigation({ initialEntityKey, analystId, princ
               <div className="priority-card">
                 <div className="priority-card-head">
                   <div>
-                    <h4 className="priority-card-title">Containment path</h4>
+                    <h4 className="priority-card-title">Control-plane readiness</h4>
                     <p className="priority-card-copy">{trustBrief?.containment_readiness ?? containmentGuidance}</p>
                   </div>
                   <ShieldAlert size={16} color="var(--warning)" />
@@ -741,7 +946,7 @@ export default function EntityInvestigation({ initialEntityKey, analystId, princ
                 </div>
                 <div className="priority-card-actions">
                   <button className="btn-accent" type="button" disabled={actionBusy || !actionTarget.trim()} onClick={() => void triggerContainment()}>
-                    {actionBusy ? <RefreshCw size={13} className="spin" /> : "Execute"}
+                    {actionBusy ? <RefreshCw size={13} className="spin" /> : selectedAction?.delivery_mode === "webhook" && actionHookCount === 0 ? "Record action" : "Execute"}
                   </button>
                   <span className="chip">Receipts: {relatedDeliveries.length}</span>
                 </div>
@@ -760,64 +965,116 @@ export default function EntityInvestigation({ initialEntityKey, analystId, princ
           <div className="grid-two">
             <div className="panel">
               <div className="panel-header">
-                <h3><Sparkles size={14} /> Why it was flagged</h3>
-                <span className="muted">{primaryReasons.length} lead reasons</span>
+                <h3><Sparkles size={14} /> AI detection rationale</h3>
+                <span className="muted">{trustSummary?.evidence_summary?.reason_count ?? primaryReasons.length} model drivers</span>
               </div>
-              <div className="chip-row" style={{ marginBottom: 12 }}>
-                {primaryReasons.map((reason) => (
-                  <span key={reason} className="chip">{reason.replaceAll("_", " ").toLowerCase()}</span>
-                ))}
-              </div>
-              <div className="list">
-                {trustBrief?.what_system_saw?.map((item) => (
-                  <div key={item} className="list-item">
-                    <p style={{ margin: 0 }}>{item}</p>
-                  </div>
-                ))}
-                {recommendedControls.length > 0 ? (
-                  recommendedControls.map((control) => (
-                    <div key={control} className="list-item">
-                      <strong>Recommended control</strong>
-                      <p className="muted" style={{ marginTop: 4 }}>{control}</p>
+              <div className="panel-subsection">
+                <h4>Analysis sources</h4>
+                <div className="list">
+                  {analysisSources.map((item) => (
+                    <div key={item.title} className="list-item">
+                      <strong>{item.title}</strong>
+                      <p className="muted" style={{ marginTop: 4 }}>{item.detail}</p>
                     </div>
-                  ))
-                ) : (
-                  <div className="list-item">
-                    <strong>No recommended controls returned</strong>
-                    <p className="muted" style={{ marginTop: 4 }}>
-                      Use the Defense workspace for manual response execution once an incident run exists.
-                    </p>
+                  ))}
+                </div>
+              </div>
+              <div className="panel-subsection">
+                <h4>Why the model escalated this entity</h4>
+                {reasonInsights.length > 0 ? (
+                  <div className="list">
+                    {reasonInsights.map((item) => (
+                      <div key={item.code} className="list-item">
+                        <strong>{item.label}</strong>
+                        <p className="muted" style={{ marginTop: 4 }}>{item.detail}</p>
+                      </div>
+                    ))}
                   </div>
+                ) : (
+                  <p className="muted">No human-readable reason codes are attached yet for this entity.</p>
                 )}
+              </div>
+              <div className="panel-subsection">
+                <h4>Telemetry and model observations</h4>
+                <div className="list">
+                  {trustBrief?.what_system_saw?.map((item) => (
+                    <div key={item} className="list-item">
+                      <p style={{ margin: 0 }}>{item}</p>
+                    </div>
+                  ))}
+                  {recommendedControls.length > 0 ? (
+                    recommendedControls.map((control) => (
+                      <div key={control} className="list-item">
+                        <strong>Model-recommended control</strong>
+                        <p className="muted" style={{ marginTop: 4 }}>{control}</p>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="list-item">
+                      <strong>No model-recommended control returned</strong>
+                      <p className="muted" style={{ marginTop: 4 }}>
+                        Use the Defense workspace for manual response execution once an incident run exists.
+                      </p>
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
 
             <div className="panel">
               <div className="panel-header">
-                <h3><GitBranch size={14} /> Evidence chain</h3>
+                <h3><GitBranch size={14} /> Graph, telemetry, and campaign context</h3>
                 <span className="muted">{trustSummary?.evidence_summary?.linked_campaign_count ?? 0} linked campaigns</span>
               </div>
-              <div className="story-rail">
+              <div className="story-rail story-rail-four">
                 <div className="story-card">
-                  <p className="story-card-label">Graph meaning</p>
+                  <p className="story-card-label">Graph route</p>
                   <h4>{pathScore?.hop_count ?? 0} hops</h4>
                   <p>{trustBrief?.graph_meaning ?? "The graph score measures how strongly this entity is linked to risky neighbours and shared events."}</p>
                 </div>
                 <div className="story-card">
-                  <p className="story-card-label">Evidence volume</p>
+                  <p className="story-card-label">Evidence depth</p>
                   <h4>{trustSummary?.evidence_summary?.evidence_hash_count ?? explanation?.evidence_hashes?.length ?? 0} hashes</h4>
                   <p>{trustSummary?.evidence_summary?.counterfactual_available ? "Counterfactual evidence is available." : "Counterfactual evidence is not attached yet."}</p>
                 </div>
                 <div className="story-card">
-                  <p className="story-card-label">Live graph</p>
-                  <h4>{liveGraph?.neighbours?.length ?? 0} neighbours</h4>
+                  <p className="story-card-label">Tradecraft</p>
+                  <h4>{techniqueCount} techniques</h4>
                   <p>
-                    {liveGraph?.neighbours?.length
-                      ? "Neo4j has live linked entities for this case."
-                      : "No live Neo4j neighbours are currently attached to this entity."}
+                    {topTechnique
+                      ? `Top mapped tactic: ${topTechnique}. ${toolCount} tool inference(s) are attached.`
+                      : toolCount > 0
+                        ? `${toolCount} tool inference(s) are attached, but no lead tactic was returned.`
+                        : "No ATT&CK tactic or tool mapping is attached yet."}
+                  </p>
+                </div>
+                <div className="story-card">
+                  <p className="story-card-label">Campaign overlap</p>
+                  <h4>{trustSummary?.linked_campaigns?.length ?? 0} campaigns</h4>
+                  <p>
+                    {trustSummary?.linked_campaigns?.length
+                      ? "This entity overlaps with active campaign indicators in the current review window."
+                      : "No active campaign overlap is attached to this entity right now."}
                   </p>
                 </div>
               </div>
+              {(toolAttribution?.techniques?.length || toolAttribution?.tools?.length) ? (
+                <div className="panel-subsection">
+                  <h4>ATT&CK and tool mapping</h4>
+                  <div className="chip-row">
+                    {toolAttribution?.techniques?.slice(0, 6).map((item) => (
+                      <span key={`${item.technique_id}-${item.tactic ?? ""}`} className="chip">
+                        {item.technique_id}{item.tactic ? ` · ${humanizeCode(item.tactic)}` : ""}
+                      </span>
+                    ))}
+                    {toolAttribution?.tools?.slice(0, 3).map((item) => (
+                      <span key={`${item.software_id}-${item.name}`} className="chip">
+                        {item.name}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
               <div className="panel-subsection">
                 <h4>Evidence paths</h4>
                 {explanation?.evidence_paths?.length ? (
@@ -888,7 +1145,7 @@ export default function EntityInvestigation({ initialEntityKey, analystId, princ
           {trustChecks.length > 0 && (
             <details className="panel panel-details">
               <summary>
-                <span>Trust checks</span>
+                <span>Model trust and governance checks</span>
                 <span className="muted">Open detailed trust signals</span>
               </summary>
               <div className="list">
@@ -913,13 +1170,13 @@ export default function EntityInvestigation({ initialEntityKey, analystId, princ
           )}
 
           <div className="grid-two">
-            <details className="panel panel-details">
-              <summary>
-                <span><Wrench size={14} /> Tool and technique attribution</span>
-                <span className="muted">
+          <details className="panel panel-details">
+            <summary>
+              <span><Wrench size={14} /> Detailed ATT&CK and tool attribution</span>
+              <span className="muted">
                   {toolAttribution?.summary?.tool_count ?? toolAttribution?.tools?.length ?? 0} tools
-                </span>
-              </summary>
+              </span>
+            </summary>
               <div className="panel-subsection">
                 <h4>Tools</h4>
                 {toolAttribution?.tools?.length ? (
@@ -962,10 +1219,10 @@ export default function EntityInvestigation({ initialEntityKey, analystId, princ
             </details>
 
             <details className="panel panel-details">
-              <summary>
-                <span><FileText size={14} /> Reports and downloads</span>
-                <span className="muted">Open export actions</span>
-              </summary>
+            <summary>
+              <span><FileText size={14} /> Case packet and downloads</span>
+              <span className="muted">Open export actions</span>
+            </summary>
               <div className="list">
                 <div className="list-item">
                   <strong>Entity investigation report</strong>
@@ -1114,11 +1371,11 @@ export default function EntityInvestigation({ initialEntityKey, analystId, princ
             </div>
             <div className="chip-row" style={{ marginTop: 10 }}>
               {[
-                "Explain this in plain English",
-                "What does the graph score mean here?",
-                "Is this low risk or urgent?",
-                "How should I explain this entity clearly?",
-                "How real is the data behind this score?",
+                "Why did the GNN elevate this node?",
+                "What graph evidence matters most here?",
+                "Is this GNN inference or heuristic fallback?",
+                "How should I brief this cyber entity clearly?",
+                "How strong is the governance posture behind this score?",
               ].map((prompt) => (
                 <button key={prompt} className="chip ghost" type="button" onClick={() => setCopilotQuestion(prompt)}>
                   {prompt}

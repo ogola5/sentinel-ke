@@ -234,7 +234,7 @@ export default function AgencyOnboarding({ onNavigate }: AgencyOnboardingProps) 
             <Zap size={20} color="var(--accent)" />
             Agency Onboarding
           </h2>
-          <p className="subtle">Accounts, integration paths, demo data, and test workflow.</p>
+          <p className="subtle">Accounts, integration paths, source data, and test workflow.</p>
         </div>
         <button className="btn-ghost" onClick={() => void load()} disabled={loading}>
           {loading ? <Loader size={13} /> : <RefreshCw size={13} />} &nbsp;Refresh
@@ -243,16 +243,16 @@ export default function AgencyOnboarding({ onNavigate }: AgencyOnboardingProps) 
 
       <div className="panel workflow-stage-panel" style={{ marginBottom: 16 }}>
         <div className="panel-header">
-          <h3>Demo onboarding and federation controls</h3>
-          <span className="muted">Bring partners online, then simulate a shared national signal</span>
+          <h3>Federation onboarding and activation</h3>
+          <span className="muted">Bring partners online, then activate a shared national signal</span>
         </div>
         <div className="workflow-summary-banner" style={{ marginBottom: 14 }}>
           <div>
-            <strong>1. Register demo partners</strong>
+            <strong>1. Register federation partners</strong>
             <span className="muted">Creates the bank, telco, and national-response partner roster used by the federation scenarios.</span>
           </div>
           <div>
-            <strong>2. Simulate a shared signal</strong>
+            <strong>2. Activate a shared signal</strong>
             <span className="muted">Use VPN, SIM-swap, or malware to make partner activity appear across the hub.</span>
           </div>
           <div>
@@ -264,7 +264,7 @@ export default function AgencyOnboarding({ onNavigate }: AgencyOnboardingProps) 
         <div className="scenario-action-row" style={{ marginBottom: 14, flexWrap: "wrap" }}>
           <button type="button" className="btn-accent" onClick={() => void handleRegisterDemoPartners()} disabled={demoPartnerBusy}>
             {demoPartnerBusy ? <Loader size={13} className="spin" /> : <Radio size={13} />}
-            &nbsp;Register demo federation partners
+            &nbsp;Register federation partners
           </button>
           {onNavigate && (
             <>
@@ -295,7 +295,7 @@ export default function AgencyOnboarding({ onNavigate }: AgencyOnboardingProps) 
             <article key={scenario.id} className="scenario-card">
               <div className="scenario-card-head">
                 <div>
-                  <p className="eyebrow" style={{ marginBottom: 6 }}>Federation demo</p>
+                  <p className="eyebrow" style={{ marginBottom: 6 }}>Federation flow</p>
                   <h4>{scenario.label}</h4>
                   <p className="muted" style={{ marginTop: 6 }}>{scenario.summary}</p>
                 </div>
@@ -315,7 +315,7 @@ export default function AgencyOnboarding({ onNavigate }: AgencyOnboardingProps) 
                   disabled={demoScenarioBusy != null}
                 >
                   {demoScenarioBusy === scenario.id ? <Loader size={13} className="spin" /> : <Play size={13} />}
-                  &nbsp;Simulate now
+                  &nbsp;Activate now
                 </button>
                 {onNavigate && (
                   <button type="button" className="ghost" onClick={() => onNavigate("federation")}>

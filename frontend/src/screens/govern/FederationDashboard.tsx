@@ -250,11 +250,11 @@ export default function FederationDashboard({ onNavigate }: FederationDashboardP
       <div className="panel workflow-stage-panel" style={{ marginBottom: 16 }}>
         <div className="panel-header">
           <h3>Live federation controls</h3>
-          <span className="muted">Make the shared national signal appear, then open the proof screen</span>
+          <span className="muted">Activate a shared national signal, then open the proof screen</span>
         </div>
         <div className="workflow-summary-banner" style={{ marginBottom: 14 }}>
           <div>
-            <strong>1. Launch a shared signal</strong>
+            <strong>1. Activate a shared signal</strong>
             <span className="muted">Use VPN, SIM-swap, or malware to make multiple partners light up together.</span>
           </div>
           <div>
@@ -299,7 +299,7 @@ export default function FederationDashboard({ onNavigate }: FederationDashboardP
                 <div className="scenario-action-row">
                   <button type="button" className="ghost" onClick={() => void runScenario(scenario)} disabled={busyScenario != null}>
                     {running ? <Loader size={13} className="spin" /> : <Play size={13} />}
-                    &nbsp;Simulate now
+                    &nbsp;Activate now
                   </button>
                   {onNavigate && (
                     <button type="button" className="ghost" onClick={() => onNavigate(scenario.followUpScreen)}>
