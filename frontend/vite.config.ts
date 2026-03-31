@@ -32,6 +32,10 @@ const manualChunks = (id: string) => {
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "")
   const proxyTarget = env.VITE_API_PROXY_TARGET || "http://localhost:8000"
+  const allowedHosts = (env.VITE_ALLOWED_HOSTS || ".ts.net,localhost,127.0.0.1")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean)
 
   return {
     plugins: [react()],
@@ -43,6 +47,7 @@ export default defineConfig(({ mode }) => {
       },
     },
     server: {
+      allowedHosts,
       proxy: {
         "/v1": {
           target: proxyTarget,
