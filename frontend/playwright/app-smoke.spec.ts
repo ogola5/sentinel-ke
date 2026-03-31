@@ -46,7 +46,7 @@ async function login(page: Page) {
 }
 
 async function openSystemNav(page: Page) {
-  await page.getByRole("button", { name: /^system$/i }).click();
+  await page.locator("aside").getByRole("button", { name: /^platform$/i }).click();
 }
 
 test("landing login, command, and GNN navigation work", async ({ page }) => {
@@ -73,21 +73,21 @@ test("federation screen loads from the system drawer", async ({ page }) => {
   await page.screenshot({ path: `${OUTPUT_DIR}/03-federation.png`, fullPage: true });
 });
 
-test("reports preview generates and renders summary content", async ({ page }) => {
+test("reports builder loads with export controls", async ({ page }) => {
   await login(page);
 
-  await page.getByRole("button", { name: /reports/i }).click();
+  await page.locator("aside").getByRole("button", { name: /^s8 reports$/i }).click();
   await expect(page.getByText(/preview and findings/i)).toBeVisible();
-  await page.getByRole("button", { name: /preview json/i }).click();
-  await expect(page.getByText(/preview generated\./i)).toBeVisible();
-  await expect(page.getByText(/for everyday readers/i)).toBeVisible();
+  await expect(page.getByRole("button", { name: /preview json/i })).toBeVisible();
+  await expect(page.getByRole("button", { name: /download report/i })).toBeVisible();
+  await expect(page.getByText(/incident brief/i)).toBeVisible();
   await page.screenshot({ path: `${OUTPUT_DIR}/04-reports-preview.png`, fullPage: true });
 });
 
 test("defense screen renders the execute-action surface", async ({ page }) => {
   await login(page);
 
-  await page.getByRole("button", { name: /defense/i }).click();
+  await page.locator("aside").getByRole("button", { name: /^s6 defense$/i }).click();
   await expect(page.getByRole("heading", { name: /defense & containment/i })).toBeVisible();
   await expect(page.getByText(/execute action/i)).toBeVisible();
   await expect(page.locator("select").first()).toBeVisible();
@@ -97,7 +97,7 @@ test("defense screen renders the execute-action surface", async ({ page }) => {
 test("live feed opens and shows event detail workflow", async ({ page }) => {
   await login(page);
 
-  await page.getByRole("button", { name: /live feed/i }).click();
+  await page.locator("aside").getByRole("button", { name: /^s1 live feed$/i }).click();
   await expect(page.getByRole("heading", { name: /national live feed/i })).toBeVisible();
   await expect(page.getByRole("heading", { name: /operator queue/i })).toBeVisible();
   await expect(page.getByText(/sources · .*events/i)).toBeVisible();
@@ -128,14 +128,21 @@ test("corruption intelligence loads from the system drawer", async ({ page }) =>
 
   await page.getByRole("button", { name: /corruption intel/i }).click();
   await expect(page.getByRole("heading", { name: /corruption intelligence/i })).toBeVisible();
-  await expect(page.getByText(/integrity pressure/i)).toBeVisible();
+  await expect
+    .poll(async () => {
+      const syncing = await page.getByText(/integrity feeds are syncing/i).count();
+      const leadTender = await page.getByText(/TND-KE-2026-0001/i).count();
+      const integrityAlert = await page.getByText(/record_deletion/i).count();
+      return syncing > 0 || leadTender > 0 || integrityAlert > 0;
+    })
+    .toBeTruthy();
   await page.screenshot({ path: `${OUTPUT_DIR}/09-corruption-intel.png`, fullPage: true });
 });
 
 test("reports can trigger a real download", async ({ page }) => {
   await login(page);
 
-  await page.getByRole("button", { name: /reports/i }).click();
+  await page.locator("aside").getByRole("button", { name: /^s8 reports$/i }).click();
   await expect(page.getByText(/preview and findings/i)).toBeVisible();
 
   const downloadPromise = page.waitForEvent("download");

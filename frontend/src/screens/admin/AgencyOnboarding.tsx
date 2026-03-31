@@ -305,6 +305,28 @@ export default function AgencyOnboarding() {
 
         {expandedSection === "connect" && (
           <>
+            <div className="workflow-summary-banner" style={{ margin: "14px 0 16px" }}>
+              <div>
+                <strong>Direct ingest</strong>
+                <span className="muted">Use this when the agency can send canonical events to the hub. The hub receives the event stream and does the graph, scoring, and workflow centrally.</span>
+              </div>
+              <div>
+                <strong>Federation</strong>
+                <span className="muted">Use this when raw data must stay inside the agency. The local edge scores entities and sends only hashed high-risk patterns to the hub.</span>
+              </div>
+              <div>
+                <strong>Best data source</strong>
+                <span className="muted">Connect to event streams, APIs, SIEM exports, webhooks, or scheduled JSON/CSV drops first. Read-only database access is the fallback, not the default.</span>
+              </div>
+            </div>
+
+            <div className="info-note" style={{ marginBottom: 16 }}>
+              <Info size={13} style={{ flexShrink: 0 }} />
+              <span>
+                Think in terms of <span className="mono-inline">events over time</span>, not entire databases. Send auth, transaction, SIM swap, WAF, malware, service health, and audit events incrementally with their <span className="mono-inline">occurred_at</span> time. Sentinel-KE is strongest when agencies stream or batch new events continuously instead of dumping whole tables.
+              </span>
+            </div>
+
             {/* Agency selector */}
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", margin: "14px 0 16px" }}>
               {AGENCY_SPECS.map((s) => (
@@ -342,7 +364,7 @@ export default function AgencyOnboarding() {
               {connTab === "ingest" && (
                 <div>
                   <p style={{ fontSize: "0.83rem", marginBottom: 14, opacity: 0.75, lineHeight: 1.6 }}>
-                    Simplest path: {sel.name} sends canonical events straight to the ingest API.
+                    Simplest path: {sel.name} sends canonical events straight to the ingest API. This is best when the agency already has a SIEM, webhook, event bus, or scheduled export job and is comfortable letting the hub process the raw operational events.
                   </p>
                   <CodeBlock
                     label="Send a security event"
@@ -391,13 +413,19 @@ export default function AgencyOnboarding() {
                       Put <span className="mono-inline">section_code: "{sel.code}"</span> inside the payload so the event remains attributable to {sel.name}.
                     </span>
                   </div>
+                  <div className="info-note" style={{ marginTop: 10 }}>
+                    <Radio size={13} style={{ flexShrink: 0 }} />
+                    <span>
+                      Preferred upstream sources: SIEM auth logs, core banking transaction feeds, telco SIM-swap feeds, WAF / DDoS logs, EDR / DFIR alerts, service health monitors, and audit exports. Use direct database reads only when the agency cannot expose an event stream or export job safely.
+                    </span>
+                  </div>
                 </div>
               )}
 
               {connTab === "federation" && (
                 <div>
                   <p style={{ fontSize: "0.83rem", marginBottom: 14, opacity: 0.75, lineHeight: 1.6 }}>
-                    Federation shares privacy-preserving pattern hashes with the hub for cross-agency correlation.
+                    Federation shares privacy-preserving pattern hashes with the hub for cross-agency correlation. Use this when the agency wants to keep raw customer, account, host, or transaction data local and only expose high-risk scored patterns.
                   </p>
 
                   {/* ── Live register button ── */}
@@ -483,13 +511,19 @@ curl -X POST ${API_BASE}/v1/federation/patterns \\
                       The hub correlates on <span className="mono-inline">entity_key_hash</span>, not on raw identifiers.
                     </span>
                   </div>
+                  <div className="info-note" style={{ marginTop: 10 }}>
+                    <Shield size={13} style={{ flexShrink: 0 }} />
+                    <span>
+                      In federation mode the agency usually installs a local Sentinel-KE edge or a thin forwarding worker. That local node reads the agency data, scores it locally, hashes the entity keys, and pushes only high-risk pattern summaries to the hub.
+                    </span>
+                  </div>
                 </div>
               )}
 
               {connTab === "edge" && (
                 <div>
                   <p style={{ fontSize: "0.83rem", marginBottom: 14, opacity: 0.75, lineHeight: 1.6 }}>
-                    Use the edge agent when an agency wants a local node that forwards normalised events to the hub.
+                    Use the edge agent when an agency needs a local install. This is the right model when data residency, local scoring, or sensitive transaction handling means the full raw stream should stay inside the agency.
                   </p>
                   <CodeBlock
                     label="docker-compose.yml (add to agency's stack)"
@@ -523,14 +557,40 @@ X-API-Key: <INGEST_API_KEY>
                       script that calls <span className="mono-inline">POST /v1/ingest/event</span>.
                     </span>
                   </div>
+                  <div className="info-note" style={{ marginTop: 10 }}>
+                    <Terminal size={13} style={{ flexShrink: 0 }} />
+                    <span>
+                      You do not normally install Sentinel-KE by attaching directly to every agency database. Prefer a feed from the agency&apos;s source systems: auth logs, transactions, SIM management, WAF, SIEM, DFIR, or scheduled exports. Only use read-only database extraction when there is no safer event interface.
+                    </span>
+                  </div>
                 </div>
               )}
 
               {connTab === "scoping" && (
                 <div>
                   <p style={{ fontSize: "0.83rem", marginBottom: 14, opacity: 0.75, lineHeight: 1.6 }}>
-                    Section users stay inside one agency. Central users see the full national view.
+                    Section users stay inside one agency. Central users see the full national view. The important design question is not just who can log in, but which data model is being used: direct ingest or federation.
                   </p>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 14 }}>
+                    <div className="scope-card">
+                      <div className="scope-card-title" style={{ color: "var(--info)" }}>Direct ingest to hub</div>
+                      <ul style={{ fontSize: "0.78rem", lineHeight: 1.9, margin: "8px 0 0", paddingLeft: 18 }}>
+                        <li>Hub receives canonical raw events</li>
+                        <li>Best for command visibility and faster rollout</li>
+                        <li>Works well for time-series event streams</li>
+                        <li>Examples: transactions, logins, WAF, service health, DFIR</li>
+                      </ul>
+                    </div>
+                    <div className="scope-card">
+                      <div className="scope-card-title" style={{ color: "var(--accent)" }}>Federation / edge mode</div>
+                      <ul style={{ fontSize: "0.78rem", lineHeight: 1.9, margin: "8px 0 0", paddingLeft: 18 }}>
+                        <li>Agency keeps raw sensitive data locally</li>
+                        <li>Hub receives hashes, scores, and warning metadata</li>
+                        <li>Best for sovereign multi-agency correlation</li>
+                        <li>Examples: phone, account, host, supplier, entity matches</li>
+                      </ul>
+                    </div>
+                  </div>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 14 }}>
                     <div className="scope-card">
                       <div className="scope-card-title" style={{ color: "var(--info)" }}>Section Access (Agency)</div>

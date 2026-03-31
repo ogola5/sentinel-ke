@@ -1,5 +1,5 @@
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid } from "recharts";
-import { Building2, AlertTriangle, TrendingUp, Shield } from "lucide-react";
+import { Building2, AlertTriangle, TrendingUp, Shield, Loader2 } from "lucide-react";
 import ArchitectureFlow from "../../app/ArchitectureFlow";
 import type { OperationsSnapshot } from "../../types/operations";
 
@@ -32,6 +32,13 @@ export default function CorruptionIntel({ data, onRunLeakage, leakageActionLabel
   const topProcurement = data.procurementAnomalies[0] ?? null;
   const topGuardrail = data.guardrailDecisions[0] ?? null;
   const topIntegrity = data.integrityAlerts[0] ?? null;
+  const waitingForFeeds =
+    data.procurementAnomalies.length === 0 &&
+    data.guardrailDecisions.length === 0 &&
+    data.integrityAlerts.length === 0 &&
+    data.leakageAlerts.length === 0 &&
+    !data.availability.integrityFeedsOk &&
+    !data.availability.leakageFeedsOk;
   const uniqueVendors = new Set([
     ...data.procurementAnomalies.map((item) => item.vendorId),
     ...data.guardrailDecisions.map((item) => item.vendorId),
@@ -96,6 +103,18 @@ export default function CorruptionIntel({ data, onRunLeakage, leakageActionLabel
           { stage: "Outcome", title: "Escalate for review", detail: "Push audit, legal, or anti-corruption follow-up with evidence attached.", tone: "danger" },
         ]}
       />
+
+      {waitingForFeeds ? (
+        <div className="panel state-box" style={{ marginTop: 16 }}>
+          <Loader2 size={18} className="spin" />
+          <div>
+            <strong>Integrity feeds are syncing.</strong>
+            <p className="muted" style={{ marginTop: 6 }}>
+              Sentinel-KE is still loading procurement, guardrail, and integrity review records for this workspace. If you open this screen immediately after sign-in, give it a moment or tap <span className="mono-inline">Resync</span> before presenting it.
+            </p>
+          </div>
+        </div>
+      ) : null}
 
       <div className="focus-layout">
         <div className="panel focus-hero focus-hero-warning">
