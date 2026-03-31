@@ -32,7 +32,7 @@ const manualChunks = (id: string) => {
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "")
   const proxyTarget = env.VITE_API_PROXY_TARGET || "http://localhost:8000"
-  const allowedHosts = (env.VITE_ALLOWED_HOSTS || ".ts.net,localhost,127.0.0.1")
+  const allowedHosts = (env.VITE_ALLOWED_HOSTS || ".ts.net,.sentinel-ke.co.ke,sentinel-ke.co.ke,localhost,127.0.0.1")
     .split(",")
     .map((value) => value.trim())
     .filter(Boolean)
